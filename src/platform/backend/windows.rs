@@ -126,6 +126,7 @@ const WM_QUIT: u32 = 0x0012;
 const WM_COMMAND: u32 = 0x0111;
 const WM_HSCROLL: u32 = 0x0114;
 const WM_PRINTCLIENT: u32 = 0x0318;
+const WM_CTLCOLORSTATIC: u32 = 0x0138;
 const MF_STRING: u32 = 0x0000;
 const MF_GRAYED: u32 = 0x0001;
 const MF_CHECKED: u32 = 0x0008;
@@ -1164,6 +1165,36 @@ fn icon_bits(rgba: &[u8], w: usize, h: usize) -> (Vec<u8>, Vec<u8>) {
     (bgra, mask)
 }
 
+/// The color (a `COLORREF`) of `hwnd`'s frame just inside the top right
+/// corner of its child `child`, where a checkbox's row shows its
+/// background; `None` without a software frame.
+unsafe fn frame_color_under(hwnd: Hwnd, child: Hwnd) -> Option<u32> {
+    let mut r = Rect {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
+    // In the window's client area (its frame), from the screen.
+    let mut origin = Point { x: 0, y: 0 };
+    unsafe {
+        GetWindowRect(child, &mut r);
+        ClientToScreen(hwnd, &mut origin);
+    }
+    let (x, y) = (r.right - 2 - origin.x, r.top + 1 - origin.y);
+    CTX.with(|c| {
+        let c = c.borrow();
+        let c = c.wins.get(&(hwnd as usize))?;
+        if c.fb.is_empty() || c.gpu || x < 0 || y < 0 || x >= c.fb_w || y >= c.fb_h {
+            return None;
+        }
+        let i = ((y * c.fb_w + x) * 4) as usize;
+        let px = c.fb.get(i..i + 3)?;
+        // BGRA in the frame; COLORREF is 0x00BBGGRR.
+        Some(u32::from(px[0]) << 16 | u32::from(px[1]) << 8 | u32::from(px[2]))
+    })
+}
+
 /// Copy `hwnd`'s frame (the software framebuffer) into `hdc`, for
 /// `WM_PAINT` and for a child control's `WM_PRINTCLIENT`.
 unsafe fn blit_frame(hwnd: Hwnd, hdc: Handle) {
@@ -1541,6 +1572,16 @@ unsafe fn handle_message(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) -> Lresul
                     unsafe { PostMessageW(hwnd, WM_NULL, 0, 0) };
                     0
                 }
+                None => unsafe { DefWindowProcW(hwnd, msg, wp, lp) },
+            }
+        }
+        // A live checkbox's background: the frame's color under it.
+        WM_CTLCOLORSTATIC
+            if crate::platform::native::os_views::takes_frame_background(hwnd, lp as Hwnd) =>
+        {
+            let color = unsafe { frame_color_under(hwnd, lp as Hwnd) };
+            match color {
+                Some(c) => crate::platform::native::os_views::frame_brush(wp as _, c),
                 None => unsafe { DefWindowProcW(hwnd, msg, wp, lp) },
             }
         }

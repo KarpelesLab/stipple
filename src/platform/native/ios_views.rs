@@ -434,7 +434,10 @@ impl ViewBackend for Uikit {
 }
 
 /// The controls that are live here (UIKit has no checkbox or radio button).
-pub(crate) fn live_kind(control: NativeControl) -> bool {
+/// UIKit has no checkbox or radio button to show a label.
+pub(crate) const OWN_LABELS: bool = false;
+
+pub(crate) fn live_kind(control: NativeControl, _dark: bool) -> bool {
     matches!(
         control,
         NativeControl::Button { .. }

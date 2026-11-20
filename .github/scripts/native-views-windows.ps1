@@ -12,9 +12,11 @@
 # type into it for real (SendInput), and check the app's state followed.
 #
 # Then the extras, reported apart (native-views-extras.txt: "ok" or what
-# failed): the wheel over the second list's trackbar scrolls the list
-# without moving the slider, and a horizontal wheel over it moves the
-# slider.
+# failed): the checkbox and the radio buttons are BUTTON child windows
+# showing their own labels, read once by UIA (a CheckBox with Toggle), and a
+# real click on each reaches the app, which sets the check; the wheel over
+# the second list's trackbar scrolls the list without moving the slider,
+# and a horizontal wheel over it moves the slider.
 param(
   [string]$Exe = ".\target\release\examples\nativegallery.exe",
   [string]$Out = "visual_output"
@@ -239,11 +241,58 @@ try {
 
   # --- the extras --------------------------------------------------------
   $extra = @()
+  function Click([int]$x, [int]$y) {
+    [NV]::SetForegroundWindow($hwnd) | Out-Null
+    [NV]::SetCursorPos($x, $y) | Out-Null
+    Start-Sleep -Milliseconds 200
+    [NV]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
+    Start-Sleep -Milliseconds 100
+    [NV]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
+  }
   function Middle([IntPtr]$h) {
     $r = New-Object RECT
     [NV]::GetWindowRect($h, [ref]$r) | Out-Null
     return @([int](($r.Left + $r.Right) / 2), [int](($r.Top + $r.Bottom) / 2), $r)
   }
+  # The checkbox and the radio buttons: BUTTON child windows titled with
+  # their labels (the window's light look: dark ones stay pictures).
+  $check = [NV]::FindWindowExW($hwnd, [IntPtr]::Zero, "Button", "Show hidden files")
+  $large = [NV]::FindWindowExW($hwnd, [IntPtr]::Zero, "Button", "Large")
+  Write-Host "checkbox BUTTON: $check, radio button Large: $large"
+  if ($check -eq [IntPtr]::Zero) { $extra += "no BUTTON child window titled 'Show hidden files'" }
+  if ($large -eq [IntPtr]::Zero) { $extra += "no BUTTON child window titled 'Large'" }
+  $all = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.Condition]::TrueCondition)
+  $boxes = @($all | Where-Object { $_.Current.Name -eq "Show hidden files" })
+  foreach ($e in $boxes) {
+    $toggle = $null
+    $has = $e.TryGetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern, [ref]$toggle)
+    Write-Host ("the checkbox in UIA: {0} '{1}' class={2} toggle={3}" -f $e.Current.LocalizedControlType, $e.Current.Name, $e.Current.ClassName, $has)
+    if ($e.Current.ControlType -ne [System.Windows.Automation.ControlType]::CheckBox -or -not $has) {
+      $extra += "UIA reads the checkbox as $($e.Current.LocalizedControlType) (toggle: $has), not a CheckBox with Toggle"
+    }
+  }
+  if ($boxes.Count -ne 1) { $extra += "UIA has $($boxes.Count) elements named 'Show hidden files', not 1" }
+  if ($check -ne [IntPtr]::Zero) {
+    $m = Middle $check
+    Write-Host "clicking the checkbox at $($m[0]),$($m[1])"
+    Click $m[0] $m[1]
+    if (-not (Wait-Log 'nativegallery: checked false' 10)) { $extra += "a real click on the checkbox didn't reach the app (no 'checked false')" }
+    Start-Sleep -Milliseconds 500
+    $state = [int][NV]::SendMessageW($check, 0x00F0, [IntPtr]::Zero, [IntPtr]::Zero) # BM_GETCHECK
+    Write-Host "the checkbox's check after the click: $state"
+    if ($state -ne 0) { $extra += "the checkbox shows $state, not the app's unchecked" }
+  }
+  if ($large -ne [IntPtr]::Zero) {
+    $m = Middle $large
+    Write-Host "clicking the radio button Large at $($m[0]),$($m[1])"
+    Click $m[0] $m[1]
+    if (-not (Wait-Log 'nativegallery: choice 1' 10)) { $extra += "a real click on the radio button didn't reach the app (no 'choice 1')" }
+    Start-Sleep -Milliseconds 500
+    $state = [int][NV]::SendMessageW($large, 0x00F0, [IntPtr]::Zero, [IntPtr]::Zero)
+    if ($state -ne 1) { $extra += "the radio button Large shows $state, not the app's checked" }
+  }
+  Shot $hwnd "windows-native-toggles.png"
 
   # The wheel over the second list's trackbar (the lowest one).
   if (-not (Wait-Log 'nativegallery: extras shown' 30)) { $extra += "the second list never showed" }

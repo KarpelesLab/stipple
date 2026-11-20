@@ -795,7 +795,8 @@ fallback; the iOS simulator's round trip is CI only. None blocks yet. See
 [secure-storage.md](secure-storage.md).
 
 ⁹³ In a window, buttons, switches, sliders, progress bars and selects (and
-checkboxes and radio buttons on macOS) are the OS's real controls, live
+checkboxes and radio buttons on macOS, and on Windows in the light look,
+showing their own labels) are the OS's real controls, live
 (`UIButton`, `NSSwitch`, a `BUTTON` child window, a `UIButton` with a
 `UIMenu` / `NSPopUpButton` / `COMBOBOX` for a select, which picks through
 the OS's own menu or list), with the OS's effects, input and accessibility;

@@ -558,7 +558,8 @@ the buffer onto the screen, and the declarative UI toolkit itself.
   `examples/nativegallery` shows them, and CI screenshots it per platform.
 - ✅ **Real OS controls** under `Theme::native()`, in a window on iOS, macOS
   and Windows: buttons, switches, sliders and progress bars (and checkboxes and
-  radio buttons on macOS) are live `UIView`s / `NSView`s / child `HWND`s over
+  radio buttons on macOS, and on Windows in the light look as `BS_CHECKBOX` /
+  `BS_RADIOBUTTON` over their rows, showing their labels) are live `UIView`s / `NSView`s / child `HWND`s over
   their laid-out boxes, keyed per element, their state pushed each frame and
   their taps, clicks and moves routed to the elements' handlers; the OS's
   accessibility speaks for them. A `select` is the OS's pop-up button (a

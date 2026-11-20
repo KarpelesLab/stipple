@@ -64,7 +64,7 @@ says what it shows; the app's code doesn't change: `button(..)`,
 | Control | Windows | macOS | iOS |
 |---|---|---|---|
 | `button`, `Button` (Primary, Secondary) | `BUTTON` | `NSButton` | `UIButton` (glass on iOS 26) |
-| `checkbox`, `radio` | picture ¹ | `NSButton` | self-drawn |
+| `checkbox`, `radio` | `BUTTON` ¹ | `NSButton` | self-drawn |
 | `switch` | self-drawn | `NSSwitch` | `UISwitch` |
 | `slider` | `msctls_trackbar32` | `NSSlider` | `UISlider` |
 | `progress_bar` | `msctls_progress32` | `NSProgressIndicator` | `UIProgressView` |
@@ -72,8 +72,10 @@ says what it shows; the app's code doesn't change: `button(..)`,
 | `text_area` | multi-line `EDIT` ² | `NSTextView` ² | `UITextView` ² |
 | `select` | `COMBOBOX` ³ | `NSPopUpButton` ³ | `UIButton` with a `UIMenu` ³ |
 
-¹ A Win32 checkbox or radio button shows (and is named by) a text of its
-own, where Stipple draws the label beside the box. ² Editing the field's
+¹ A `BS_CHECKBOX` / `BS_RADIOBUTTON` over the whole row, showing the
+label as its own text (in the app's text size; Stipple draws neither box
+nor label), its check the app's state. In the dark appearance it stays a
+picture: see [Windows](platforms/windows.md#os-drawn-controls). ² Editing the field's
 state: see [Text fields](#text-fields). ³ The OS's pop-up
 button, its title the chosen option: a tap or click opens the OS's own menu
 or drop-down list (not Stipple's overlay), with the chosen option checked,

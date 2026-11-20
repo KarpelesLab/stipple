@@ -3478,11 +3478,13 @@ jobs:
         shell: powershell
         run: .github\scripts\native-views-windows.ps1
 
-      # The same run's extras (docs/native-theme.md): the wheel over a
-      # trackbar in a list scrolls the list, not the slider, and a
-      # horizontal wheel moves the slider. Non-blocking until it has passed
-      # here a while.
-      - name: Real OS controls, extras (the wheel over a slider)
+      # The same run's extras (docs/native-theme.md): the checkbox and the
+      # radio buttons are live BUTTONs showing their own labels, read once by
+      # UIA as a CheckBox with Toggle, and real clicks on them reach the app,
+      # whose state sets their check; the wheel over a trackbar in a list
+      # scrolls the list, not the slider, and a horizontal wheel moves the
+      # slider. Non-blocking until it has passed here a while.
+      - name: Real OS controls, extras (checkboxes, the wheel over a slider)
         continue-on-error: true
         shell: powershell
         run: |

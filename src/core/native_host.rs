@@ -81,6 +81,10 @@ pub(crate) struct PlanInput {
     /// The element with keyboard focus, and whether its ring shows.
     pub(crate) focused: Option<FocusId>,
     pub(crate) focus_visible: bool,
+    /// The OS's checkbox and radio button show their label themselves
+    /// (Win32's, drawn and named by their own text): a live one spans its
+    /// row, label included, which Stipple then doesn't draw.
+    pub(crate) own_labels: bool,
 }
 
 /// One window's live OS controls.
@@ -227,6 +231,8 @@ struct Owner<'a> {
     node: Option<&'a LayoutNode>,
     /// How deep in the tree it is: its path is the walk's path up to here.
     depth: usize,
+    /// Where it is in the window.
+    rect: Rect,
 }
 
 #[derive(Debug)]
@@ -246,6 +252,10 @@ struct Cand {
     /// Its subtree is being walked (what's in it is its own content, not
     /// over it).
     open: bool,
+    /// It spans its owner, label and all (a Win32 checkbox: see
+    /// [`PlanInput::own_labels`]): it stays open while the owner's subtree
+    /// is walked, and its node is the owner's.
+    span: bool,
 }
 
 /// The clips around a node, in window coordinates.
@@ -303,11 +313,11 @@ fn paints(node: &LayoutNode) -> bool {
                 || node.text_pos.is_some()))
 }
 
-/// The controls that can be live here (not every OS has every control:
-/// `os_views::live_kind`).
-fn live_kind(control: NativeControl) -> bool {
+/// The controls that can be live here, in the dark appearance or not (not
+/// every OS has every control: `os_views::live_kind`).
+fn live_kind(control: NativeControl, dark: bool) -> bool {
     // The tests plan as for a window that shows every kind live.
-    cfg!(test) || crate::platform::native::os_views::live_kind(control)
+    cfg!(test) || crate::platform::native::os_views::live_kind(control, dark)
 }
 
 /// A button's title and its size: its content, when that is one line of
@@ -341,6 +351,33 @@ fn sole_text(node: &LayoutNode) -> Option<(String, f64)> {
     }
 }
 
+/// The one line of text in a labeled control's row `node` (its label),
+/// and its size: what an OS control that shows its own label (Win32's
+/// checkbox) takes as its title. The box itself (the node the OS draws)
+/// doesn't count.
+fn row_text(node: &LayoutNode) -> Option<(String, f64)> {
+    fn walk<'a>(n: &'a LayoutNode, found: &mut Vec<&'a LayoutNode>) {
+        if n.native.is_some() {
+            return;
+        }
+        if let NodeContent::Text { .. } = &n.content {
+            found.push(n);
+        }
+        n.children.iter().for_each(|c| walk(c, found));
+    }
+    let mut found = Vec::new();
+    walk(node, &mut found);
+    match found[..] {
+        [n] => match &n.content {
+            NodeContent::Text {
+                text, style, size, ..
+            } if !text.contains('\n') => Some((style.plain(text, 0..text.len()), *size)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// The size of the first text in `node`.
 fn text_size(node: &LayoutNode) -> Option<f64> {
     match &node.content {
@@ -369,6 +406,7 @@ impl Walk {
             Owner {
                 node: Some(node),
                 depth: self.path.len(),
+                rect,
             }
         } else {
             owner
@@ -377,7 +415,7 @@ impl Walk {
         let deco = node
             .native
             .or_else(|| text::bare_field(node, &self.input))
-            .filter(|d| live_kind(d.control));
+            .filter(|d| live_kind(d.control, d.dark));
         if let Some(deco) = deco {
             opened = Some(self.cands.len());
             let cand = self.candidate(node, deco, m, rect, opacity, clips, owner);
@@ -411,8 +449,16 @@ impl Walk {
             clips.areas.pop();
         }
         clips.hard = outer_hard;
-        if let Some(i) = opened {
+        if let Some(i) = opened
+            && !self.cands[i].span
+        {
             self.cands[i].open = false;
+        }
+        // The end of a row a control spans.
+        for c in &mut self.cands {
+            if c.span && c.open && c.path == self.path {
+                c.open = false;
+            }
         }
         // A scroll bar, over the container's content. An overlay
         // indicator's thumb alone (no track: iOS's, macOS's overlay
@@ -464,6 +510,14 @@ impl Walk {
         ) && node.action.is_none();
         let owner = if part { owner } else { Owner::default() };
         let of_owner = |f: fn(&LayoutNode) -> Option<_>| owner.node.and_then(f);
+        // An OS checkbox that shows its own label spans its row.
+        let span = input.own_labels
+            && owner.node.is_some()
+            && matches!(
+                deco.control,
+                NativeControl::Checkbox { .. } | NativeControl::Radio { .. }
+            );
+        let rect = if span { owner.rect } else { rect };
         let mut ok = !input.suspend && !node.ghost && !node.offstage;
         // Only a plain move, fully opaque.
         ok &= is_translation(m) && opacity >= 1.0;
@@ -502,6 +556,13 @@ impl Walk {
                 (String::new(), 0.0)
             }),
             NativeControl::TextField => (String::new(), text_size(node).unwrap_or(0.0)),
+            // Its label, which it shows.
+            NativeControl::Checkbox { .. } | NativeControl::Radio { .. } if span => {
+                owner.node.and_then(row_text).unwrap_or_else(|| {
+                    ok = false;
+                    (String::new(), 0.0)
+                })
+            }
             _ => (String::new(), 0.0),
         };
         // A text field the OS edits needs the field's state.
@@ -534,7 +595,11 @@ impl Walk {
             Some(_) => path[..owner.depth].to_vec(),
             None => path.clone(),
         };
+        // Spanning its row, it is the row's node (the painter leaves out
+        // the label with it).
+        let path = if span { owner_path.clone() } else { path };
         Cand {
+            span,
             view: NativeView {
                 id,
                 control: deco.control,
@@ -845,6 +910,67 @@ mod tests {
         assert_eq!(host.route(v.id).unwrap().action, tree.action);
         let a11y = crate::core::accessibility_tree(&tree, None);
         assert_eq!(a11y.native_view, Some(v.id));
+    }
+
+    #[test]
+    fn a_checkbox_that_shows_its_own_label_spans_its_row() {
+        let theme = Theme::light();
+        let mut cx = Cx::<u32>::new(&theme);
+        let row = |cx: &mut Cx<u32>, more: bool| {
+            let boxed = Element::boxed(Default::default())
+                .native(deco(NativeControl::Checkbox { checked: true }))
+                .width(20.0)
+                .height(20.0);
+            let mut children = vec![
+                boxed,
+                Element::text("Show hidden files", 14.0, Color::BLACK),
+            ];
+            if more {
+                children.push(Element::text("(and folders)", 12.0, Color::BLACK));
+            }
+            Element::stack(Axis::Horizontal, children)
+                .gap(6.0)
+                .role(crate::core::Role::CheckBox)
+                .on_tap(cx, |s| *s += 1)
+        };
+        let input = PlanInput {
+            own_labels: true,
+            ..on()
+        };
+        let mut tree = lay(crate::widgets::column(vec![row(&mut cx, false)]));
+        let mut host = NativeHost::default();
+        host.plan(&mut tree, input);
+        let v = host.views()[0].clone();
+        let r = &tree.children[0];
+        // The row's box, its label the control's title in its size; the
+        // label drawn after the box doesn't cover it.
+        assert_eq!(v.frame, r.bounds);
+        assert_eq!(v.title, "Show hidden files");
+        assert_eq!(v.font_size, 14.0);
+        assert_eq!(v.label, "Show hidden files");
+        // The row is the control: the painter leaves out box and label.
+        assert_eq!(r.native_live, Some(v.id));
+        assert_eq!(r.native_a11y, Some(v.id));
+        assert_eq!(r.children[0].native_live, None);
+        assert_eq!(host.route(v.id).unwrap().action, r.action);
+        // Something drawn after the row still covers it.
+        let first = lay(row(&mut cx, false));
+        let mut badge = lay(Element::boxed(crate::core::BoxStyle {
+            fill: Some(Color::rgb(255, 0, 0)),
+            radius: 0.0,
+            border: None,
+        })
+        .width(20.0)
+        .height(10.0));
+        crate::core::translate(&mut badge, crate::geometry::Vec2::new(60.0, 5.0));
+        let mut tree =
+            LayoutNode::container(Rect::from_xywh(0.0, 0.0, 400.0, 300.0), vec![first, badge]);
+        host.plan(&mut tree, input);
+        assert!(host.views().is_empty(), "covered");
+        // A row with more than its label: a picture.
+        let mut tree = lay(crate::widgets::column(vec![row(&mut cx, true)]));
+        host.plan(&mut tree, input);
+        assert!(host.views().is_empty());
     }
 
     #[test]

@@ -34,8 +34,9 @@ drawn twice, over black and over white, to recover its alpha.
   the light class is used.
 - The text field draws its own focus, so Stipple's focus ring is left off it.
 
-In a window, buttons, sliders and progress bars are real child windows
-instead (`BUTTON`, `msctls_trackbar32`, `msctls_progress32`; see
+In a window, buttons, checkboxes, radio buttons, sliders and progress bars
+are real child windows instead (`BUTTON`, `msctls_trackbar32`,
+`msctls_progress32`; see
 [Real controls](../native-theme.md#real-controls)), live: made under an
 activation context for Common Controls 6 (the manifest `shell32.dll` carries,
 so they get the visual styles without the app shipping a manifest), placed at
@@ -49,10 +50,20 @@ UI Automation the window's provider places each child window at its node, in
 the app's tree (`IRawElementProviderHwndOverride`): one element, with the
 node's role, name and Invoke, where a client walking the tree (NVDA's object
 navigation, its say-all) reaches it between its neighbors, instead of a
-separate element ahead of the app's tree that the .NET client reads as a pane. Checkboxes and radio buttons stay pictures (a Win32 one shows and is
-named by a text of its own, where Stipple draws the label beside the box).
+separate element ahead of the app's tree that the .NET client reads as a pane.
 
-The wheel over a slider scrolls what it's in (it is passed to the window, with
+A checkbox or radio button is a `BS_CHECKBOX` / `BS_RADIOBUTTON` over its
+whole row, its label its own text (a Win32 one draws, and is named by, a
+text of its own; Stipple then draws neither the box nor the label), in the
+app's text size. Neither checks itself: a click (`BN_CLICKED`) runs the
+row's handler, and the app's state, set with `BM_SETCHECK` each frame,
+says what it shows. The window answers its `WM_CTLCOLORSTATIC` with a brush
+of the frame's color under it. In the dark appearance they stay pictures:
+the visual styles draw a themed checkbox's text black whatever the theme
+(`DarkMode_Explorer` darkens the box but not the text, and the text color
+`WM_CTLCOLORSTATIC` sets is ignored once a control is themed, which is why
+dark Win32 apps such as Notepad++ paint their checkboxes themselves). The
+wheel over a slider scrolls what it's in (it is passed to the window, with
 a move to the pointer first, as a closed select's is) and a horizontal
 wheel moves the slider.
 
@@ -102,8 +113,11 @@ real (a click on the combo box, then one on Small in its drop-down list,
 where UI Automation puts it), checks the half-scrolled rows are live
 with their regions, types into the text field's `EDIT` for real (a click,
 then keys) and checks MSAA names it by its hint. A step of its own (the
-same run's extras) checks that a real wheel over the trackbar in a list
-scrolls the list without moving the slider and a horizontal one moves it.
+same run's extras) checks the checkbox and the radio buttons are `BUTTON`s
+titled with their labels, read once by UI Automation (a CheckBox with
+Toggle), that real clicks on them reach the app and leave them showing the
+app's state, and that a real wheel over the trackbar in a list scrolls the
+list without moving the slider and a horizontal one moves it.
 
 ## Fonts
 

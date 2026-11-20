@@ -2,8 +2,8 @@
 //! [`views`](super::views)).
 //!
 //! Each [`NativeView`] is a child `HWND`: a `BUTTON` (`BS_PUSHBUTTON`, the
-//! primary one `BS_DEFPUSHBUTTON`), a `msctls_trackbar32` or a
-//! `msctls_progress32`, at the control's frame in physical pixels (the
+//! primary one `BS_DEFPUSHBUTTON`; `BS_CHECKBOX`, `BS_RADIOBUTTON`), a
+//! `msctls_trackbar32` or a `msctls_progress32`, at the control's frame in physical pixels (the
 //! frame times the window's DPI scale), in Segoe UI at the app's text size and that DPI,
 //! and `DarkMode_Explorer`-themed in the dark appearance. They are made
 //! under an activation context for Common Controls 6 (the manifest
@@ -14,9 +14,20 @@
 //! (`WM_HSCROLL`) comes to the parent's window procedure ([`command`],
 //! [`scroll`]), which queues an
 //! [`Event::NativeView`](crate::platform::Event::NativeView) and hands the
-//! keyboard focus back to the parent, so keys stay the app's. Checkboxes
-//! and radio buttons stay pictures: a Win32 one would show (and be named
-//! by) a text of its own, where Stipple draws the label beside the box.
+//! keyboard focus back to the parent, so keys stay the app's.
+//!
+//! A checkbox or a radio button shows its label itself, as its own text
+//! (in the app's text size): it spans its row (the planner's
+//! `own_labels`), and Stipple draws neither box nor label. Its checked
+//! state is the app's: it's a `BS_CHECKBOX` / `BS_RADIOBUTTON`, which
+//! doesn't check itself on a click (`BN_CLICKED` runs the row's tap
+//! handler, and the app's state, set with `BM_SETCHECK`, says what it
+//! shows), and the parent answers its `WM_CTLCOLORSTATIC` with the color
+//! the frame has under it ([`frame_brush`]). In the dark appearance they
+//! stay pictures: the visual styles draw a themed checkbox's text black
+//! whatever the theme (`DarkMode_Explorer` darkens the box, not the text,
+//! and `WM_CTLCOLORSTATIC`'s text color is ignored once themed), which is
+//! why Windows' own dark apps paint theirs themselves.
 //!
 //! The wheel over a slider scrolls what it's in (it goes to the parent);
 //! a horizontal wheel (a tilt, a trackpad's sideways scroll) moves the
@@ -133,6 +144,9 @@ unsafe extern "system" {
         face: *const u16,
     ) -> *mut c_void;
     fn CreateRectRgn(left: i32, top: i32, right: i32, bottom: i32) -> *mut c_void;
+    fn CreateSolidBrush(color: u32) -> *mut c_void;
+    fn SetBkMode(hdc: *mut c_void, mode: i32) -> i32;
+    fn SetTextColor(hdc: *mut c_void, color: u32) -> u32;
 }
 
 #[link(name = "uxtheme")]
@@ -160,6 +174,10 @@ const WS_EX_NOPARENTNOTIFY: u32 = 0x0000_0004;
 const GWL_STYLE: i32 = -16;
 const BS_PUSHBUTTON: u32 = 0;
 const BS_DEFPUSHBUTTON: u32 = 1;
+const BS_CHECKBOX: u32 = 2;
+const BS_RADIOBUTTON: u32 = 4;
+const BM_SETCHECK: u32 = 0x00F1;
+const BM_GETCHECK: u32 = 0x00F0;
 const WM_MOUSEWHEEL: u32 = 0x020A;
 const WM_MOUSEHWHEEL: u32 = 0x020E;
 const WM_NCDESTROY: u32 = 0x0082;
@@ -221,6 +239,8 @@ thread_local! {
     static REGIONS: RefCell<HashMap<usize, (i32, i32, i32, i32)>> = RefCell::new(HashMap::new());
     /// Each slider's window procedure before `trackbar_proc`.
     static TRACKBAR_PROCS: RefCell<HashMap<usize, isize>> = RefCell::new(HashMap::new());
+    /// The solid brushes made for checkboxes' backgrounds, by color.
+    static BRUSHES: RefCell<HashMap<u32, usize>> = RefCell::new(HashMap::new());
 }
 
 /// A slider's wheel: up and down scroll what it's in (the parent's, which
@@ -271,6 +291,33 @@ pub(super) unsafe fn wheel_to_parent(h: Hwnd, msg: u32, wp: usize, lp: isize) ->
         SendMessageW(parent, WM_MOUSEMOVE, 0, at);
         SendMessageW(parent, msg, wp, lp)
     }
+}
+
+/// Whether `child` of `parent` is a live checkbox or radio button, whose
+/// background is its `WM_CTLCOLORSTATIC` brush.
+pub(crate) fn takes_frame_background(parent: Hwnd, child: Hwnd) -> bool {
+    find(parent, child).is_some_and(|(_, c, _)| {
+        matches!(
+            c,
+            NativeControl::Checkbox { .. } | NativeControl::Radio { .. }
+        )
+    })
+}
+
+/// `WM_CTLCOLORSTATIC` from such a control: its background, a solid brush
+/// of `color` (a `COLORREF`: the frame's color under it), black text over
+/// it.
+pub(crate) fn frame_brush(hdc: *mut c_void, color: u32) -> isize {
+    unsafe {
+        SetTextColor(hdc, 0);
+        const TRANSPARENT: i32 = 1;
+        SetBkMode(hdc, TRANSPARENT);
+    }
+    BRUSHES.with(|b| {
+        *b.borrow_mut()
+            .entry(color)
+            .or_insert_with(|| unsafe { CreateSolidBrush(color) } as usize)
+    }) as isize
 }
 
 /// Run `f` under the Common Controls 6 activation context, made (and the
@@ -440,7 +487,9 @@ impl Win32 {
             // (`text::update`).
             let text = match v.control {
                 _ if v.menu.is_some() => return,
-                NativeControl::Button { .. } => &v.title,
+                NativeControl::Button { .. }
+                | NativeControl::Checkbox { .. }
+                | NativeControl::Radio { .. } => &v.title,
                 NativeControl::TextField => return,
                 _ => &v.label,
             };
@@ -464,6 +513,8 @@ impl ViewBackend for Win32 {
                     BS_PUSHBUTTON
                 },
             ),
+            NativeControl::Checkbox { .. } => ("BUTTON", BS_CHECKBOX),
+            NativeControl::Radio { .. } => ("BUTTON", BS_RADIOBUTTON),
             NativeControl::Slider { .. } => ("msctls_trackbar32", TBS_NOTICKS | TBS_BOTH),
             NativeControl::Progress { .. } => ("msctls_progress32", 0),
             NativeControl::TextField => {
@@ -507,6 +558,9 @@ impl ViewBackend for Win32 {
                     let prev =
                         SetWindowLongPtrW(h, GWLP_WNDPROC, trackbar_proc as *const c_void as isize);
                     TRACKBAR_PROCS.with(|p| p.borrow_mut().insert(h as usize, prev));
+                }
+                NativeControl::Checkbox { checked: on } | NativeControl::Radio { selected: on } => {
+                    SendMessageW(h, BM_SETCHECK, on as usize, 0);
                 }
                 NativeControl::Progress { value } => {
                     SendMessageW(h, PBM_SETRANGE32, 0, 1000);
@@ -566,6 +620,13 @@ impl ViewBackend for Win32 {
                 (_, NativeControl::Progress { value }) => {
                     SendMessageW(h, PBM_SETPOS, value as usize, 0);
                 }
+                // The app's state, whatever a click did.
+                (
+                    _,
+                    NativeControl::Checkbox { checked: on } | NativeControl::Radio { selected: on },
+                ) if SendMessageW(h, BM_GETCHECK, 0, 0) != on as isize => {
+                    SendMessageW(h, BM_SETCHECK, on as usize, 0);
+                }
                 _ => {}
             }
         }
@@ -578,17 +639,19 @@ impl ViewBackend for Win32 {
     }
 }
 
-/// The controls that are live here: Win32's checkboxes and radio buttons
-/// show a text of their own (see the top of this file).
-pub(crate) fn live_kind(control: NativeControl) -> bool {
-    matches!(
-        control,
-        NativeControl::Button { .. }
-            | NativeControl::Slider { .. }
-            | NativeControl::Progress { .. }
-            | NativeControl::TextField
-    )
+/// The controls that are live here: all but the switch (Win32 has none),
+/// and in the dark appearance the checkbox and the radio button (see the
+/// top of this file).
+pub(crate) fn live_kind(control: NativeControl, dark: bool) -> bool {
+    match control {
+        NativeControl::Checkbox { .. } | NativeControl::Radio { .. } => !dark,
+        NativeControl::Switch { .. } => false,
+        _ => true,
+    }
 }
+
+/// A Win32 checkbox or radio button shows its label as its own text.
+pub(crate) const OWN_LABELS: bool = true;
 
 /// Show exactly `views` in window `parent` (`Window::set_native_views`).
 pub(crate) fn sync(parent: Hwnd, views: &[NativeView]) {

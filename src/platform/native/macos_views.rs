@@ -329,9 +329,13 @@ impl ViewBackend for Appkit {
 }
 
 /// The controls that are live here: all of them.
-pub(crate) fn live_kind(_control: NativeControl) -> bool {
+pub(crate) fn live_kind(_control: NativeControl, _dark: bool) -> bool {
     true
 }
+
+/// AppKit's checkbox is the box alone here (an empty title): Stipple
+/// draws its label.
+pub(crate) const OWN_LABELS: bool = false;
 
 /// Show exactly `views` in window view `view` (`Window::set_native_views`).
 pub(crate) fn sync(view: Id, views: &[NativeView]) {

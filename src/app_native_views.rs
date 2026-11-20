@@ -17,6 +17,7 @@ impl<S: 'static> Pane<S> {
             suspend: self.crossfade.active(),
             focused: self.focused,
             focus_visible: self.focus_visible,
+            own_labels: crate::platform::native::os_views::OWN_LABELS,
         };
         self.native_host.plan(tree, input);
     }

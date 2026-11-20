@@ -95,9 +95,10 @@ pub(crate) mod os_views {
     }
     /// What a window here would show live: no window does, but the
     /// planning (and its tests) runs the same.
-    pub(crate) fn live_kind(_control: super::NativeControl) -> bool {
+    pub(crate) fn live_kind(_control: super::NativeControl, _dark: bool) -> bool {
         true
     }
+    pub(crate) const OWN_LABELS: bool = false;
 }
 
 #[cfg(target_os = "windows")]
