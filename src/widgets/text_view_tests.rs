@@ -204,15 +204,25 @@ fn matches_and_the_selection_are_painted_behind_the_text() {
     let plain = app.render_once();
     // In line 3's text, at the top of its line, above the glyphs: the
     // surface.
-    let x = (1.0 + theme.spacing.sm + 3.0) as u32;
+    // A system font's tall glyphs ("l") can reach the top of the line, so
+    // take, within the match, the column where the found frame is brightest:
+    // background there, not glyph, in every frame alike.
+    let x0 = (1.0 + theme.spacing.sm + 1.0) as u32;
     let y = (1.0 + 3.0 * LH + 2.0) as u32;
-    let surface = plain.pixel(x, y).unwrap();
     update(&mut app, |s| {
         s.view
             .find("line 3", FindOptions::default().case_sensitive(true));
         s.view.find_next();
     });
-    let found = app.render_once().pixel(x, y).unwrap();
+    let frame = app.render_once();
+    let x = (x0..x0 + 30)
+        .max_by_key(|&x| {
+            let p = frame.pixel(x, y).unwrap();
+            p[0] as u32 + p[1] as u32 + p[2] as u32
+        })
+        .unwrap();
+    let surface = plain.pixel(x, y).unwrap();
+    let found = frame.pixel(x, y).unwrap();
     assert_ne!(found, surface);
     // The current match, on the warning color (an amber).
     assert!(found[0] > found[2] + 100, "{found:?}");
