@@ -219,7 +219,7 @@ path Narrator, NVDA and JAWS use):
 with `--patterns` drives every pattern through the interface
 `GetPatternProvider` hands out.
 
-A further step, *UI Automation patterns and events (not required yet)*,
+A further step, *UI Automation patterns and events*,
 runs `uiademo --patterns`, then `.github/scripts/uia-patterns.ps1` against
 `touchdemo`: the field's Value is read and set (the app logs the text) and
 its Text read (the document range, the selection); "Remember" is toggled
@@ -228,8 +228,7 @@ the list's Pane goes to 100% with `SetScrollPercent` (logged) and ScrollItem
 brings "Row 0" back; the strip pages with `Scroll`; and invoking "Row 2"
 raises a toast, which must appear in the tree with a structure-changed
 event. .NET's client has no API for UIA's notification event, so that one
-is left to NVDA. None of it has run on a runner yet (nor under Wine
-locally), so it doesn't fail the job.
+is left to NVDA. It passes on the runner and is required.
 
 **NVDA** (`screen-reader-windows`): `.github/scripts/nvda-windows.ps1`
 downloads a pinned NVDA release from nvaccess.org (checked against its

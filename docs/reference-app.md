@@ -132,7 +132,7 @@ Each step's frame is saved as a PNG (`--out DIR`). Then it opens the real
 window on the same folder for a few seconds (`--hold SECS`): the grid's
 thumbnails load on the workers, the list then shows a picture previewed, and
 timers check it before it quits. `--headless` skips the window. CI runs it
-on X11, Windows and macOS (non-blocking) and keeps the PNGs and a screenshot
+on X11 and macOS (non-blocking) and on Windows (required), and keeps the PNGs and a screenshot
 of the window.
 
 ## What the toolkit gained for it

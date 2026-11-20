@@ -1019,7 +1019,7 @@ CPU elsewhere, and the CPU is always the fallback.
   (the web). A hidden window draws no frames, CPU or GPU, and once all are
   hidden the frame clock stops (docs/gpu.md#occlusion). Run on X11
   (locally under xfwm4 with the CPU, Vulkan and GLES; CI under openbox) and
-  in CI on Windows, non-blocking (`framepacing --hidden`); macOS's
+  in CI on Windows, required (`framepacing --hidden`); macOS's
   compile-checked (its CI step not seen run yet), Android's
   compile-checked. On Wayland without `suspended` (sway 1.11 on a
   workspace switch), a window's frame callback unanswered for 500 ms
@@ -1169,7 +1169,7 @@ CPU elsewhere, and the CPU is always the fallback.
   renderer.
   *`visual-windows` runs the `compare.rs` corpus on D3D11 with
   `STIPPLE_REQUIRE_GPU` and screenshots `widgetsdemo` with
-  `STIPPLE_RENDERER=d3d11` (both non-blocking until they've passed there);
+  `STIPPLE_RENDERER=d3d11` (both required now that they pass there);
   the job's other steps stay on the CPU.*
 
 #### 6e — The web
@@ -1286,7 +1286,7 @@ CPU elsewhere, and the CPU is always the fallback.
   window's scale changed, low memory). `compare.rs` checks a native-themed
   screen GPU against CPU (with uxtheme's controls on Windows WARP, and
   their uploads), and `nativegallery --gpu-check` does on the main thread
-  for AppKit on Metal and on Direct3D 11, both non-blocking for now. On
+  for AppKit on Metal (non-blocking) and on Direct3D 11 (required). On
   WARP both have passed (mean difference under 0.14 of 255, no pixel off by
   more than 64); on Metal, run on an M5 Max, AppKit's controls matched at
   scales 1, 1.5 and 2 (mean 0.18, 0.11 and 0.06). Linux has no OS-drawn
@@ -1785,10 +1785,9 @@ Most input only works on X11 today.
   like pointer events, a `DropState` views read through `Cx::drop_state`
   (over, accepted, position, an eased level) to animate the drop zone, and
   `Element::drag_source` for drags inside the app. CI drops on `dropdemo` with
-  an XDND source on X11, drives the view's dragging methods with a stand-in
-  drag on macOS, and drags a chip in-app on X11. Windows is build-checked: CI
-  tries a real OLE `DoDragDrop` from another process, but it doesn't complete
-  on the runner yet. Wayland is unit-tested only. See
+  an XDND source on X11 and with a real OLE `DoDragDrop` from another
+  process on Windows, drives the view's dragging methods with a stand-in
+  drag on macOS, and drags a chip in-app on X11. Wayland is unit-tested only. See
   [docs/drag-and-drop.md](docs/drag-and-drop.md).
 - ✅ Dragging out of the app: an `Element::drag_source` whose payload is
   `DropData::Files` or `DropData::Text` becomes a drag for other applications
@@ -2757,8 +2756,8 @@ Most input only works on X11 today.
   events; `touchdemo` gets a "Remember" checkbox and a toast on desktops.
   CI: new steps that don't fail their (required) jobs yet: the AT-SPI walk's
   depth checks (scroll panes, ScrollTo, the check box, the announcement;
-  passing locally under Xvfb), `uia-patterns.ps1` and `uiademo --patterns`
-  (Windows), `axprobe --depth` (macOS); NVDA and Orca report whether they
+  passing locally under Xvfb), `axprobe --depth` (macOS); `uia-patterns.ps1`
+  and `uiademo --patterns` (Windows) now pass and are required; NVDA and Orca report whether they
   speak the toast. The Windows, macOS and iOS code is build- and
   clippy-checked only. Left: UIA text attributes, text-selection and
   text-changed events, RangeValue, Grid / Table and `LabeledBy`; macOS title

@@ -422,7 +422,8 @@ build-checked only.
 
 Translucent windows: CI runs `glass` at 0% and 100% background opacity
 under sway, under Xvfb with `xcompmgr` as the compositing manager, and on
-Windows, and checks the background differs (non-blocking for now); it was
+Windows, and checks the background differs (required on Windows,
+non-blocking elsewhere for now); it was
 looked at by hand on macOS, with and without blur. Blur is checked only by
 hand, on macOS.
 

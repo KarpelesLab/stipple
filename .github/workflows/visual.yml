@@ -3265,10 +3265,8 @@ jobs:
       # a row's ScrollItem, property- and structure-changed events, and the
       # toast a tap on "Row 2" raises. First the patterns in-process, each
       # through the interface GetPatternProvider hands out (uiademo
-      # --patterns). Not yet seen passing on a runner, so it doesn't fail
-      # the job.
-      - name: UI Automation patterns and events (not required yet)
-        continue-on-error: true
+      # --patterns).
+      - name: UI Automation patterns and events
         shell: powershell
         run: |
           cargo build --release --example uiademo --example touchdemo
@@ -3304,9 +3302,8 @@ jobs:
 
       # A transparent window (DWM's frame over the client area, the bitmap
       # premultiplied): at 0% background opacity what is behind shows, at
-      # 100% the theme's background. Not yet seen on a runner.
-      - name: A transparent window (non-blocking)
-        continue-on-error: true
+      # 100% the theme's background.
+      - name: A transparent window
         shell: pwsh
         run: |
           cargo build --release --example glass
@@ -3323,8 +3320,7 @@ jobs:
       # The reference app (examples/mediabrowser): its selftest off screen
       # (PNG of each step) and in a real Win32 window; then its window
       # screenshotted, and its tree read through UI Automation from outside.
-      - name: Media browser selftest (non-blocking)
-        continue-on-error: true
+      - name: Media browser selftest
         shell: bash
         run: |
           mkdir -p visual_output
@@ -3334,8 +3330,7 @@ jobs:
           grep -q 'mediabrowser: selftest ok' visual_output/mediabrowser-selftest.log
           grep -q 'mediabrowser: window ok' visual_output/mediabrowser-selftest.log
 
-      - name: Media browser window and UI Automation tree (non-blocking)
-        continue-on-error: true
+      - name: Media browser window and UI Automation tree
         shell: pwsh
         run: |
           .github\scripts\capture-window.ps1 -Exe target\release\examples\mediabrowser.exe `
@@ -3413,13 +3408,13 @@ jobs:
           # checks menudemo's log saw each command exactly once.
           .github\scripts\menu-windows.ps1 .\target\release\examples\menudemo.exe visual_output
 
-      # Not yet passing on the runner: DoDragDrop doesn't complete there (see
-      # the progress lines), so this reports without failing the job while
-      # that is worked out. Windows drops stay build-checked until then.
+      # The drag starts on the script's own window and moves onto the
+      # target, which it keeps on top (a console window can cover it on the
+      # runner); its progress lines tell a loop that never turns from a
+      # target that never answers.
       - name: Drop a file and text through OLE drag and drop
         shell: powershell
         timeout-minutes: 8
-        continue-on-error: true
         run: |
           cargo build --release --example dropdemo
           New-Item -ItemType Directory -Force visual_output | Out-Null
@@ -3519,10 +3514,7 @@ jobs:
       # device. Then the frame times, CPU against D3D11, for the log. The
       # gpu:: tests include an NV12 texture shared from another device, drawn
       # through two plane views without an upload (gpu::d3d::scene::external).
-      # Non-blocking until it has passed on the runner: the D3D11 executor was
-      # written on a Mac and only compile-checked there.
       - name: Compare the Direct3D 11 renderer with the software one
-        continue-on-error: true
         shell: bash
         env:
           STIPPLE_REQUIRE_GPU: "1"
@@ -3534,9 +3526,8 @@ jobs:
       # The native theme on Direct3D 11: the gallery with the controls uxtheme
       # draws, through D3D11 against the CPU at scales 1, 1.5 and 2 (the
       # comparison above also has a native-themed screen; this is the whole
-      # gallery, as a window shows it). Non-blocking until it has passed here.
+      # gallery, as a window shows it).
       - name: Compare the native theme on Direct3D 11 with the software renderer
-        continue-on-error: true
         shell: bash
         env:
           STIPPLE_RENDERER: d3d11
@@ -3554,7 +3545,6 @@ jobs:
       # A real window drawn by Direct3D 11 and presented through its
       # flip-model DXGI swap chain; it must not fall back to the CPU.
       - name: Screenshot an app drawn with Direct3D 11
-        continue-on-error: true
         shell: powershell
         env:
           STIPPLE_RENDERER: d3d11
@@ -3585,9 +3575,8 @@ jobs:
 
       # Occlusion (Phase 6a): minimized (IsIconic, and on Direct3D 11 the swap
       # chain's DXGI_STATUS_OCCLUDED), the animating window presents nothing
-      # for 3 s, then draws again once restored. Not blocking yet.
+      # for 3 s, then draws again once restored.
       - name: A minimized window draws no frames (CPU and Direct3D 11)
-        continue-on-error: true
         shell: bash
         env:
           STIPPLE_DEBUG_WINDOWS: "1"
@@ -3601,7 +3590,6 @@ jobs:
       # Direct3D 11 (WARP here), nothing uploaded each frame; its benchmark
       # there and on the CPU, for the log.
       - name: spritedemo drawn with Direct3D 11 (selftest, bench)
-        continue-on-error: true
         shell: bash
         env:
           STIPPLE_RENDERER: d3d11
