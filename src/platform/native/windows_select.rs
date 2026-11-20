@@ -201,7 +201,7 @@ unsafe extern "system" fn wheel_proc(h: Hwnd, msg: u32, wp: usize, lp: isize) ->
     unsafe {
         match msg {
             WM_MOUSEWHEEL | WM_MOUSEHWHEEL if SendMessageW(h, CB_GETDROPPEDSTATE, 0, 0) == 0 => {
-                SendMessageW(GetParent(h), msg, wp, lp)
+                super::os_views::wheel_to_parent(h, msg, wp, lp)
             }
             WM_NCDESTROY => {
                 PROCS.with(|p| p.borrow_mut().remove(&(h as usize)));

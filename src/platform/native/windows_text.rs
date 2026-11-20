@@ -655,6 +655,11 @@ pub(super) fn poke(hwnd: Hwnd, poke: TextPoke) -> bool {
             TextPoke::Enter => {
                 SendMessageW(hwnd, WM_KEYDOWN, VK_RETURN, 1);
             }
+            // Shift isn't held for a key sent this way.
+            TextPoke::Tab { back: true } => return false,
+            TextPoke::Tab { back: false } => {
+                SendMessageW(hwnd, WM_KEYDOWN, VK_TAB, 1);
+            }
         }
     }
     poll(hwnd);

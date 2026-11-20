@@ -126,8 +126,12 @@ in the shared core (`core::touch`), so every platform behaves the same:
   strips (`widgets::scroll_horizontal`, or any horizontal stack made
   `scrollable`) scroll sideways, and inside a vertical list a vertical drag
   still scrolls the list. With no container along the drag, the widget under
-  the finger keeps it (a slider drags). A finger landing on a fling stops it
-  without tapping.
+  the finger keeps it (a slider drags). A finger landing on a slider in a
+  vertical list is held the same way, as the OS's own lists hold theirs:
+  up or down scrolls the list (the slider doesn't move), sideways drags the
+  slider (even inside a sideways strip), and a tap sets it where it lands;
+  outside a vertical list the slider takes the finger at once. A finger
+  landing on a fling stops it without tapping.
 - **Pulling a widget.** A finger dragged *down* in a vertical container
   that is scrolled to its top, inside a bottom sheet or a
   `pull_to_refresh`, pulls that widget instead (the sheet down, the refresh

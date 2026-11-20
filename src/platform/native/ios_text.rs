@@ -18,7 +18,12 @@
 //! focus, it ending without the app asking (the keyboard's dismiss key)
 //! takes it away. Return (`textFieldShouldReturn:`, or a new line typed in
 //! a text area whose action is Next) goes to the app, which submits the
-//! field or moves on.
+//! field or moves on. So do a hardware keyboard's Tab and Shift-Tab: while
+//! a live field is first responder the app's view (an ancestor of every
+//! field, so in its responder chain) offers them as `UIKeyCommand`s that
+//! take priority over the system's own Tab (`wantsPriorityOverSystemBehavior`:
+//! the focus system's move to the next field, a text view's tab
+//! character), and their action moves the app's focus on.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -218,6 +223,109 @@ extern "C" fn area_may_change(
         return false;
     }
     true
+}
+
+/// Give the app's view class `cls` (being built) `keyCommands` and their
+/// action: Tab and Shift-Tab while a live field is first responder (see
+/// the module's docs).
+///
+/// # Safety
+/// `cls` must be a class pair still being built.
+pub(crate) unsafe fn add_key_commands(cls: Id) {
+    unsafe {
+        class_addMethod(
+            cls,
+            sel("keyCommands"),
+            key_commands as *const c_void,
+            c"@@:".as_ptr(),
+        );
+        class_addMethod(
+            cls,
+            sel("stippleFieldTab:"),
+            field_tab as *const c_void,
+            c"v@:@".as_ptr(),
+        );
+    }
+}
+
+/// `UIKeyModifierShift`.
+const SHIFT: i64 = 1 << 17;
+
+/// The live text control that is first responder, if one is.
+fn first_responder() -> Option<(Id, u64)> {
+    FIELDS.with(|f| {
+        let f = f.try_borrow().ok()?;
+        f.iter().find_map(|(c, field)| {
+            let c = *c as Id;
+            let first: bool = unsafe { msg!(c, "isFirstResponder", () -> bool) };
+            first.then_some((c, field.id))
+        })
+    })
+}
+
+/// The Tab and Shift-Tab key commands (made once, kept).
+fn tab_commands() -> Id {
+    thread_local! {
+        static COMMANDS: Cell<Id> = const { Cell::new(std::ptr::null_mut()) };
+    }
+    COMMANDS.with(|c| {
+        if c.get().is_null() {
+            unsafe {
+                let list: Id = msg!(class("NSMutableArray"), "array", () -> Id);
+                let tab = nsstring("\t");
+                let action = sel("stippleFieldTab:");
+                for flags in [0_i64, SHIFT] {
+                    let k: Id = msg!(class("UIKeyCommand"),
+                        "keyCommandWithInput:modifierFlags:action:",
+                        (tab: Id, flags: i64, action: Sel) -> Id);
+                    if k.is_null() {
+                        continue;
+                    }
+                    let s = sel("setWantsPriorityOverSystemBehavior:");
+                    if msg!(k, "respondsToSelector:", (s: Sel) -> bool) {
+                        let yes = true;
+                        msg!(k, "setWantsPriorityOverSystemBehavior:", (yes: bool) -> ());
+                    }
+                    msg!(list, "addObject:", (k: Id) -> ());
+                }
+                let list: Id = msg!(list, "retain", () -> Id);
+                c.set(list);
+            }
+        }
+        c.get()
+    })
+}
+
+/// `keyCommands` on the app's view: Tab and Shift-Tab while a live field
+/// is first responder, else none (the view's own keys are its
+/// `pressesBegan:`).
+extern "C" fn key_commands(_this: Id, _cmd: Sel) -> Id {
+    if first_responder().is_some() {
+        tab_commands()
+    } else {
+        std::ptr::null_mut()
+    }
+}
+
+/// `stippleFieldTab:`: a hardware keyboard's Tab (or Shift-Tab) in the
+/// live field that is first responder: the app moves its focus on.
+extern "C" fn field_tab(_this: Id, _cmd: Sel, command: Id) {
+    let Some((control, id)) = first_responder() else {
+        return;
+    };
+    let flags: i64 = if command.is_null() {
+        0
+    } else {
+        unsafe { msg!(command, "modifierFlags", () -> i64) }
+    };
+    crate::platform::native::text::trace(|| format!("tab in {id} (flags {flags:#x})"));
+    poll(control);
+    let key = if flags & SHIFT != 0 {
+        NativeKey::BackTab
+    } else {
+        NativeKey::Tab
+    };
+    send(id, NativeViewEvent::Key(key));
 }
 
 /// The UTF-16 offset of `position` in `control`.
@@ -552,6 +660,39 @@ pub(super) fn poke(control: Id, poke: TextPoke) -> bool {
                     length: 0,
                 };
                 msg!(control, "setMarkedText:selectedRange:", (s: Id, r: NsRange) -> ());
+            }
+            TextPoke::Tab { back } => {
+                // The key command UIKit would match for the key, performed
+                // as UIKit performs one: its action, sent along the
+                // responder chain from the first responder.
+                let view = crate::platform::backend::ios::app_view();
+                let commands: Id = msg!(view, "keyCommands", () -> Id);
+                if commands.is_null() {
+                    return false;
+                }
+                let n: usize = msg!(commands, "count", () -> usize);
+                let want = if back { SHIFT } else { 0 };
+                let mut found: Id = std::ptr::null_mut();
+                for i in 0..n {
+                    let k: Id = msg!(commands, "objectAtIndex:", (i: usize) -> Id);
+                    let input = rust_string(msg!(k, "input", () -> Id));
+                    let flags: i64 = msg!(k, "modifierFlags", () -> i64);
+                    let s = sel("wantsPriorityOverSystemBehavior");
+                    let priority = !msg!(k, "respondsToSelector:", (s: Sel) -> bool)
+                        || msg!(k, "wantsPriorityOverSystemBehavior", () -> bool);
+                    if input.as_deref() == Some("\t") && flags == want && priority {
+                        found = k;
+                    }
+                }
+                if found.is_null() {
+                    return false;
+                }
+                let action: Sel = msg!(found, "action", () -> Sel);
+                let app: Id = msg!(class("UIApplication"), "sharedApplication", () -> Id);
+                let nil: Id = std::ptr::null_mut();
+                let sent: bool = msg!(app, "sendAction:to:from:forEvent:",
+                    (action: Sel, nil: Id, found: Id, nil: Id) -> bool);
+                return sent;
             }
             TextPoke::Enter => {
                 let multiline = FIELDS.with(|f| {

@@ -453,13 +453,15 @@ Under `Theme::native()` buttons, switches, sliders and progress bars are real
 controls' frames, above the frame (and its Metal layer), live. Buttons use
 iOS 26's glass configurations (`prominentGlassButtonConfiguration` for the
 primary one, `glassButtonConfiguration`) where UIKit has them, else the filled
-and gray ones. A button's or a switch's touches are the app's view's
-(`userInteractionEnabled` off), so a finger on one is the app's as on any
-element: a tap runs its handler, a drag scrolls the list it is in, a long
-press opens its context menu, an edge swipe goes back; the button shows its
-pressed look (`highlighted`) while the app holds it. A slider keeps its drags
-(its moves come back through a shared target's action), and a switch the app
-sets slides with UIKit's animation. The view's accessibility elements vend the
+and gray ones. A button's, a switch's, a slider's and a select's touches are
+the app's view's (`userInteractionEnabled` off), so a finger on one is the
+app's as on any element: a tap runs its handler, a drag scrolls the list it
+is in, a long press opens its context menu, an edge swipe goes back; the
+button shows its pressed look (`highlighted`) while the app holds it. On a
+slider in a vertical list a drag up or down scrolls the list and a sideways
+one moves the slider (the app's drag handler, which the `UISlider` then
+shows), as the OS's own lists do; a switch the app sets slides with UIKit's
+animation. The view's accessibility elements vend the
 control itself where it stands for a node, so VoiceOver reads the `UISwitch`
 once, with the row's label; a button carries the button trait and every
 control its frame on screen whether or not UIKit's accessibility runtime is
@@ -468,8 +470,11 @@ the app's view, which runs the element's handler.
 
 A `select` is a `UIButton` (the same configuration as the other buttons, glass
 on iOS 26, with the pop-up indicator) whose `UIMenu` is its primary action,
-with `changesSelectionAsPrimaryAction`: a tap opens UIKit's menu from the
-button, the chosen option checked, and a pick runs a `UIAction` whose handler
+with `changesSelectionAsPrimaryAction`: a tap (the app's view's: a drag on
+it scrolls its list) opens UIKit's menu from the button
+(`performPrimaryAction`, iOS 17.4 and later; on earlier versions the select
+keeps its own touches), the chosen option checked, and a pick runs a
+`UIAction` whose handler
 (one shared block, finding the control and option by the action's identifier)
 runs the element's handler for that option; a pick the app refuses is set
 back. VoiceOver reads it once, as the button, with the select's label and the
@@ -501,7 +506,11 @@ and the app's view isn't first responder. What it holds (`text`,
 callbacks, and sent to the app as edits; `textFieldShouldReturn:` is Return
 for the app. The keyboard's dismiss key unfocuses the field. Unlike a
 button's, a text field's touches are its own (a tap places its caret, a drag
-selects). A hardware keyboard's Tab isn't passed on from the field yet.
+selects). A hardware keyboard's Tab and Shift-Tab in a live field move the
+app's focus on: while one is first responder the app's view, in its
+responder chain, offers them as `UIKeyCommand`s with
+`wantsPriorityOverSystemBehavior` (over the system's own Tab, which moves
+between text fields, and a text view's tab character).
 
 CI's `visual-ios` job runs `nativegallery`'s self-test on the simulator
 (`NATIVEGALLERY_SELFTEST`): the controls are `UIButton`s, a `UISwitch`, a
@@ -513,7 +522,17 @@ clipping container and cut by it (and still once the list scrolls), the text
 field is a `UITextField` that takes typing (`insertText:`) and composition
 (`setMarkedText:selectedRange:`) into the app's state, follows the state the
 app sets and submits on Return, and VoiceOver's elements name each control
-once, as the UIKit control (the field by its hint).
+once, as the UIKit control (the field by its hint). After that
+(`nativegallery extra checks`, non-blocking apart) a second list's slider
+and select say their touches are the app's view's, and fingers through the
+backend's touch path drag up from each (the list scrolls, the slider stays,
+no menu opens) and sideways on the slider (it moves, the list doesn't); a
+tap on the select must show a `UIMenu` (a context-menu view in the window
+scene) and not Stipple's list; and the app view's Tab and Shift-Tab key
+commands, performed as UIKit performs one (`sendAction:to:from:forEvent:`
+from the first responder), move the focus out of the field. Real hardware
+keys and real fingers on those aren't driven (the simulator's XCUITest
+types no Tab into the app).
 
 ## Fonts
 

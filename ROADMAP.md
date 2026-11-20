@@ -569,7 +569,12 @@ the buffer onto the screen, and the declarative UI toolkit itself.
   areas; a window region per control on Windows), so a control half
   scrolled out stays live, cut by the OS. A control under something Stipple
   draws, under a transform or fade, or cut by another clip is the OS's
-  picture for that time (`core::native_host`). See `docs/native-theme.md`.
+  picture for that time (`core::native_host`). A drag on a slider in a list
+  scrolls the list up and down and moves the slider sideways (touch on every
+  platform, iOS's live sliders whose touches are now the app's; macOS's
+  wheel and trackpad, Windows' wheel); on iOS a drag on a select scrolls and
+  a tap opens its `UIMenu` (`performPrimaryAction`). See
+  `docs/native-theme.md`.
 - ✅ **Real OS text fields** under `Theme::native()`, in a window on iOS,
   macOS and Windows: `text_field`, `number_input` and `password_field` are
   `UITextField`s / `NSTextField`s / `EDIT`s, `text_area` a `UITextView` /
@@ -583,8 +588,10 @@ the buffer onto the screen, and the declarative UI toolkit itself.
   number). Verified in CI trial runs by `nativegallery`'s self-test on iOS,
   macOS and Windows (typing, composition on iOS and macOS, state set by the
   app, Return, the field read once by VoiceOver / the AX dump / UIA; on
-  Windows also real keys and MSAA's name). Not yet: Tab from a `UITextField`
-  on a hardware keyboard, composition driven by CI on Windows.
+  Windows also real keys and MSAA's name). Tab and Shift-Tab from a live
+  `UITextField` / `UITextView` on a hardware keyboard (key commands with
+  priority; self-tested through UIKit's action dispatch, not real keys).
+  Not yet: composition driven by CI on Windows.
   See `docs/native-theme.md`, *Text fields*.
 - ✅ **High-DPI** on Windows (per-monitor v2), macOS (`backingScaleFactor`), iOS
   (`UIScreen.scale`), X11 (`Xft.dpi`) and Wayland (output scale). X11 and Wayland

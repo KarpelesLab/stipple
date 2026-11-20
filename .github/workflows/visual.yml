@@ -3478,6 +3478,18 @@ jobs:
         shell: powershell
         run: .github\scripts\native-views-windows.ps1
 
+      # The same run's extras (docs/native-theme.md): the wheel over a
+      # trackbar in a list scrolls the list, not the slider, and a
+      # horizontal wheel moves the slider. Non-blocking until it has passed
+      # here a while.
+      - name: Real OS controls, extras (the wheel over a slider)
+        continue-on-error: true
+        shell: powershell
+        run: |
+          $r = Get-Content visual_output\native-views-extras.txt -ErrorAction SilentlyContinue
+          Write-Host "native views extras: $r"
+          if ($r -ne 'ok') { exit 1 }
+
       # A mirrored (right-to-left) UI: bididemo --mirror-check renders it off
       # screen with the system font and checks it is laid out from the right
       # (the same checks the X11 job makes on its screenshot); then a real
@@ -4534,9 +4546,26 @@ jobs:
             grep -q 'selftest:' visual_output/native-views.log && break
             sleep 1
           done
+          # The extras that follow (the next step checks them).
+          for i in $(seq 1 40); do
+            grep -q 'extra checks:' visual_output/native-views.log && break
+            sleep 1
+          done
           kill "$PID" 2>/dev/null || true
           cat visual_output/native-views.log
           grep -q 'nativegallery selftest: passed' visual_output/native-views.log
+
+      # The same run's extras: a mouse wheel posted through the window
+      # server (CGEventPost) over the slider in a list scrolls the list and
+      # leaves the slider (a sideways one is logged), and Tab and Shift-Tab
+      # in the live NSTextField (the field editor's insertTab: and
+      # insertBacktab:) move the focus out of it. Non-blocking until it has
+      # passed here a while.
+      - name: Real OS controls, extras (the wheel over a slider, Tab)
+        continue-on-error: true
+        run: |
+          grep 'extra check' visual_output/native-views.log || true
+          grep -q 'nativegallery extra checks: passed' visual_output/native-views.log
 
       # A mirrored (right-to-left) UI: bididemo --mirror-check renders it off
       # screen with the system font and checks it is laid out from the right
@@ -5407,6 +5436,25 @@ jobs:
           done
           cat "$DATA/tmp/nativegallery.log"
           grep -q 'nativegallery selftest: passed' "$DATA/tmp/nativegallery.log"
+
+      # The same run's extras: the slider and the select in a list take no
+      # touches of their own (the app's view does), a finger dragged up from
+      # either scrolls the list (the slider stays, no menu opens) and one
+      # dragged sideways on the slider moves it, a tap on the select opens
+      # its UIMenu (performPrimaryAction) and not Stipple's list, and Tab
+      # and Shift-Tab, the app view's key commands with priority over the
+      # system's, move the focus out of the UITextField. Non-blocking until
+      # it has passed here a while.
+      - name: Real OS controls, extras (drags on a slider and a select, Tab)
+        continue-on-error: true
+        run: |
+          DATA=$(xcrun simctl get_app_container "$DEV" com.karpeleslab.stipple data)
+          for i in $(seq 1 40); do
+            grep -q 'extra checks:' "$DATA/tmp/nativegallery.log" 2>/dev/null && break
+            sleep 1
+          done
+          grep -E 'extra check|level 2|after a tap|drag list|live UISlider|live UIButton' "$DATA/tmp/nativegallery.log" || true
+          grep -q 'nativegallery extra checks: passed' "$DATA/tmp/nativegallery.log"
 
       # The simulator can't script touches or typing, so touchdemo drives
       # itself (TOUCHDEMO_SELFTEST): it taps its text field, types through the

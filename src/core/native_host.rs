@@ -163,6 +163,17 @@ impl NativeHost {
         self.changed = true;
     }
 
+    /// The live select whose tap handler is `action`: a tap the app's
+    /// view took on it (iOS's, whose touches are the app's) opens its OS
+    /// menu rather than Stipple's list.
+    pub(crate) fn select_tapped(&self, action: ActionId) -> Option<u64> {
+        self.views
+            .iter()
+            .filter(|v| v.menu.is_some())
+            .find(|v| self.routes.get(&v.id).and_then(|r| r.action) == Some(action))
+            .map(|v| v.id)
+    }
+
     /// Whether any control is live.
     pub(crate) fn any_live(&self) -> bool {
         !self.views.is_empty()

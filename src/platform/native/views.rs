@@ -271,6 +271,10 @@ pub struct LiveControl {
     /// The OS class of the container it is in, when it is in a scroll
     /// area's (`StippleClipView`), else empty.
     pub container: String,
+    /// A finger on it is the app's view's, not the control's (iOS's
+    /// buttons, switches, sliders and selects: a drag on one scrolls its
+    /// list).
+    pub app_touches: bool,
 }
 
 /// For self-tests (CI): the live controls the window shows now, read back
@@ -289,6 +293,23 @@ pub fn live_controls() -> Vec<LiveControl> {
 #[doc(hidden)]
 pub fn poke_control(id: u64, value: Option<f64>) -> bool {
     super::os_views::poke(id, value)
+}
+
+/// For self-tests (CI): scroll as a mouse's wheel does at `at` (logical
+/// pixels in the window that shows live controls) by `dx`, `dy` pixels,
+/// through the window server, so the OS delivers it where it lands
+/// (macOS: a `CGEvent` posted at the HID level). Returns whether it was
+/// posted (`false` where there's no way to).
+#[doc(hidden)]
+pub fn post_scroll(at: crate::geometry::Point, dx: f64, dy: f64) -> bool {
+    super::os_views::post_scroll(at, dx, dy)
+}
+
+/// For self-tests (CI): whether a live select's own menu (iOS's `UIMenu`)
+/// shows now; with `dismiss`, close it too.
+#[doc(hidden)]
+pub fn os_menu_shown(dismiss: bool) -> bool {
+    super::os_views::menu_shown(dismiss)
 }
 
 #[cfg(test)]

@@ -57,6 +57,15 @@ sends the control's action, which the app gets as the element's tap (or drag,
 for a slider). The view's accessibility children vend the control itself where
 it stands for a node.
 
+A scroll wheel or trackpad scroll over a live slider is the list's when it
+is mostly vertical (the app scrolls; AppKit doesn't get it, so the slider
+doesn't move) and the slider's when it is sideways (AppKit's alone), a
+trackpad gesture keeping the way its first move went through its momentum;
+everywhere else it goes to the app and on to AppKit, whose controls pass
+it up. `nativegallery`'s self-test posts a mouse wheel through the window
+server (`CGEventPost`) over the slider in a list and checks the list
+scrolled and the slider stayed (the sideways one is only logged).
+
 A `select` is an `NSPopUpButton`: a click pops its menu up over it (the
 chosen item under the pointer), and a pick sends its action, which runs the
 element's handler for that option; a pick the app refuses is set back. Its

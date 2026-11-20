@@ -407,6 +407,113 @@ pub(crate) fn owns(view: Id, at: CgPoint) -> bool {
     any && unsafe { hit(view, at) }.is_some_and(|h| h != view)
 }
 
+/// Where a scroll-wheel or trackpad scroll goes (see [`wheel_route`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WheelRoute {
+    /// To the app (which scrolls what is under it) and on to AppKit, as
+    /// everywhere off a slider: AppKit's controls pass it on.
+    Both,
+    /// To the app only: up or down over a live slider, which would move.
+    App,
+    /// To AppKit only: sideways over a live slider, which moves it.
+    Slider,
+}
+
+thread_local! {
+    /// The trackpad gesture under way, from its first event: `None` while
+    /// none is, else whether it began over a live slider, and once it moved,
+    /// its route (kept through its momentum).
+    static GESTURE: std::cell::Cell<Option<(bool, Option<WheelRoute>)>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Where a scroll event at `at` (in window view `view`'s coordinates)
+/// goes: over a live slider, a mostly vertical scroll scrolls the list
+/// (the app's) and a sideways one moves the slider (AppKit's), as in
+/// AppKit's own lists; a trackpad gesture keeps the route its first moves
+/// gave it, momentum included. `phase` and `momentum` are the event's
+/// (`NSEventPhase`), `dx` and `dy` its deltas.
+pub(crate) fn wheel_route(
+    view: Id,
+    at: CgPoint,
+    phase: u64,
+    momentum: u64,
+    dx: f64,
+    dy: f64,
+) -> WheelRoute {
+    const BEGAN: u64 = 1;
+    const ENDED: u64 = 8;
+    const CANCELLED: u64 = 16;
+    const MAY_BEGIN: u64 = 32;
+    let sideways = |dx: f64, dy: f64| {
+        if dx.abs() > dy.abs() {
+            WheelRoute::Slider
+        } else {
+            WheelRoute::App
+        }
+    };
+    if phase == 0 && momentum == 0 {
+        // A mouse's wheel: each step by itself.
+        GESTURE.with(|g| g.set(None));
+        let route = if over_slider(view, at) {
+            sideways(dx, dy)
+        } else {
+            WheelRoute::Both
+        };
+        super::text::trace(|| format!("wheel {dx},{dy} at {},{}: {route:?}", at.x, at.y));
+        return route;
+    }
+    GESTURE.with(|g| {
+        if phase & (BEGAN | MAY_BEGIN) != 0 && !matches!(g.get(), Some((_, Some(_)))) {
+            g.set(Some((over_slider(view, at), None)));
+        }
+        let route = match g.get() {
+            // A gesture that began before the window had it.
+            None => WheelRoute::Both,
+            Some((_, Some(route))) => route,
+            Some((false, None)) if dx != 0.0 || dy != 0.0 => {
+                g.set(Some((false, Some(WheelRoute::Both))));
+                WheelRoute::Both
+            }
+            Some((true, None)) if dx != 0.0 || dy != 0.0 => {
+                let route = sideways(dx, dy);
+                g.set(Some((true, Some(route))));
+                route
+            }
+            // Not moving yet: the app has it (nothing to scroll).
+            Some((on, None)) => {
+                if on {
+                    WheelRoute::App
+                } else {
+                    WheelRoute::Both
+                }
+            }
+        };
+        // It ended without momentum, or its momentum did.
+        if momentum & (ENDED | CANCELLED) != 0 || (phase & CANCELLED != 0 && momentum == 0) {
+            g.set(None);
+        }
+        super::text::trace(|| format!("wheel {dx},{dy} phase {phase}/{momentum}: {route:?}"));
+        route
+    })
+}
+
+/// Whether `at` (in window view `view`'s coordinates) is over one of its
+/// live sliders.
+fn over_slider(view: Id, at: CgPoint) -> bool {
+    let sliders: Vec<Id> = SETS.with(|s| {
+        s.try_borrow().map_or(Vec::new(), |s| {
+            s.get(&(view as usize)).map_or(Vec::new(), |set| {
+                set.in_order()
+                    .filter(|(v, _)| matches!(v.control, NativeControl::Slider { .. }))
+                    .map(|(_, h)| *h)
+                    .collect()
+            })
+        })
+    });
+    !sliders.is_empty() && unsafe { hit(view, at) }.is_some_and(|h| sliders.contains(&h))
+}
+
 /// The live control (or the view itself) a press at `at` (in `view`'s
 /// coordinates) lands on.
 unsafe fn hit(view: Id, at: CgPoint) -> Option<Id> {
@@ -471,6 +578,7 @@ pub(crate) fn live_controls() -> Vec<super::LiveControl> {
                 visible,
                 hit: visible.width() > 0.0 && visible.height() > 0.0 && lands_on(view, at, h),
                 container,
+                app_touches: false,
             }
         })
         .collect()
@@ -492,6 +600,97 @@ unsafe fn lands_on(view: Id, at: CgPoint, control: Id) -> bool {
         }
         h == control
     }
+}
+
+/// An `NSPopUpButton`'s menu is AppKit's own, opened by its click.
+pub(crate) fn menu_shown(_dismiss: bool) -> bool {
+    false
+}
+
+#[link(name = "CoreGraphics", kind = "framework")]
+unsafe extern "C" {
+    fn CGEventCreateScrollWheelEvent2(
+        source: *const c_void,
+        units: u32,
+        count: u32,
+        wheel1: i32,
+        wheel2: i32,
+        wheel3: i32,
+    ) -> *mut c_void;
+    fn CGEventSetLocation(event: *mut c_void, at: CgPoint);
+    fn CGEventPost(tap: u32, event: *mut c_void);
+    fn CGWarpMouseCursorPosition(at: CgPoint) -> i32;
+    fn CGEventCreateMouseEvent(
+        source: *const c_void,
+        kind: u32,
+        at: CgPoint,
+        button: u32,
+    ) -> *mut c_void;
+    fn CFRelease(obj: *const c_void);
+}
+
+/// Post a mouse wheel's scroll at `at` (logical pixels, top-left, in the
+/// first window that shows live controls) through the window server
+/// (`kCGHIDEventTap`), which sends it to the view it lands on.
+pub(crate) fn post_scroll(at: crate::geometry::Point, dx: f64, dy: f64) -> bool {
+    let Some(view) = SETS.with(|s| s.borrow().keys().next().map(|v| *v as Id)) else {
+        return false;
+    };
+    unsafe {
+        let window: Id = msg!(view, "window", () -> Id);
+        if window.is_null() {
+            return false;
+        }
+        // The view's (flipped) point, in the window, on the screen
+        // (bottom-left), then in the window server's top-left coordinates.
+        let p = CgPoint { x: at.x, y: at.y };
+        let nil: Id = std::ptr::null_mut();
+        let in_window: CgPoint =
+            msg!(view, "convertPoint:toView:", (p: CgPoint, nil: Id) -> CgPoint);
+        let r = CgRect {
+            x: in_window.x,
+            y: in_window.y,
+            width: 0.0,
+            height: 0.0,
+        };
+        let on_screen: CgRect = msg!(window, "convertRectToScreen:", (r: CgRect) -> CgRect);
+        let screens: Id = msg!(class("NSScreen"), "screens", () -> Id);
+        let main: Id = msg!(screens, "firstObject", () -> Id);
+        if main.is_null() {
+            return false;
+        }
+        let frame: CgRect = msg!(main, "frame", () -> CgRect);
+        let global = CgPoint {
+            x: on_screen.x,
+            y: frame.height - on_screen.y,
+        };
+        // kCGScrollEventUnitPixel; wheel 1 is vertical, 2 horizontal.
+        let ev = CGEventCreateScrollWheelEvent2(
+            std::ptr::null(),
+            0,
+            2,
+            dy.round() as i32,
+            dx.round() as i32,
+            0,
+        );
+        if ev.is_null() {
+            return false;
+        }
+        // The window server sends a wheel to the window under the pointer,
+        // and the app scrolls what is under its last move: the pointer
+        // goes there first (a warp moves it without a move event).
+        CGWarpMouseCursorPosition(global);
+        const MOUSE_MOVED: u32 = 5;
+        let moved = CGEventCreateMouseEvent(std::ptr::null(), MOUSE_MOVED, global, 0);
+        if !moved.is_null() {
+            CGEventPost(0, moved);
+            CFRelease(moved);
+        }
+        CGEventSetLocation(ev, global);
+        CGEventPost(0, ev);
+        CFRelease(ev);
+    }
+    true
 }
 
 pub(crate) fn poke_text(id: u64, poke: super::TextPoke) -> bool {

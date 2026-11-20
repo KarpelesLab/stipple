@@ -1383,6 +1383,9 @@ fn register_view_class() -> Class {
             c"B@:".as_ptr(),
         );
         text_input::add_methods(cls);
+        // Tab and Shift-Tab from a live OS text field (under the native
+        // theme) are the app's.
+        crate::platform::native::os_views::add_key_commands(cls as _);
         edit_menu::add_methods(cls);
         a11y::add_methods(cls);
         lifecycle::add_methods(cls);
@@ -1483,6 +1486,9 @@ impl Window for IosWindow {
     }
     fn set_native_views(&self, views: &[crate::platform::native::NativeView]) {
         crate::platform::native::os_views::sync(views);
+    }
+    fn open_native_menu(&self, id: u64) -> bool {
+        crate::platform::native::os_views::open_menu(id)
     }
     fn set_dark(&self, _dark: bool) {
         // The theme changed look: the area around the safe area takes the

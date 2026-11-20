@@ -87,7 +87,10 @@ Stipple's list, as before. On iOS it has the regular buttons' look (iOS
 26's glass) with the pop-up indicator, and the pick is a `UIAction` of its
 `UIMenu`; on macOS the menu pops up over it, the choice under the pointer;
 on Windows the wheel over a closed one scrolls what it's in rather than
-changing the choice.
+changing the choice. On iOS its touches are the app's view's: a drag that
+starts on it scrolls its list, and a tap opens its menu
+(`performPrimaryAction`, iOS 17.4 and later; before that a select keeps its
+own touches, so a drag on one doesn't scroll).
 
 ### How it works
 
@@ -124,11 +127,16 @@ OS's controls over it.
   handler for that option. The state is the app's: the window is handed
   the list again after every event, and a control the user acted on is set
   to it even if it didn't change, so a switch the handler didn't turn on
-  goes back off, and a pick it refused goes back, on the next frame. On iOS a button's and a switch's touches are
-  the app's view's, as a picture's would be: a drag that starts on one
-  scrolls its list, a long press opens its context menu, an edge swipe goes
-  back, and a tap is the element's tap (the button shows UIKit's pressed
-  look while the app holds it, `NativeView::pressed`). The OS controls don't take the keyboard focus
+  goes back off, and a pick it refused goes back, on the next frame. On iOS a button's, a switch's, a
+  slider's and a select's touches are the app's view's, as a picture's
+  would be: a drag that starts on one scrolls its list, a long press opens
+  its context menu, an edge swipe goes back, and a tap is the element's tap
+  (the button shows UIKit's pressed look while the app holds it,
+  `NativeView::pressed`; a tap on a select opens its `UIMenu`,
+  `Window::open_native_menu`). On a slider in a vertical list a drag up or
+  down scrolls the list and a sideways one moves the slider (the app's drag
+  handler, whose value the `UISlider` is then set to), as on a picture (see
+  [pointer-events.md](pointer-events.md)). The OS controls don't take the keyboard focus
   (AppKit's refuse first responder, Win32's give it back): keys, Tab and the
   focus ring stay Stipple's.
 - **Scroll areas.** Each scroll area that holds live controls is a
@@ -192,7 +200,9 @@ the OS's own. The app's code doesn't change: `text_field(cx, &state.name,
   click on its label, `Next` from the field before) makes the control the
   first responder (or gives it the keyboard focus), and the app focusing
   something else takes it back to the app's view. Tab and Shift-Tab in the
-  control move the app's focus on, Return submits (or, with
+  control move the app's focus on (on an iPad's hardware keyboard too: the
+  app's view offers them as `UIKeyCommand`s with priority over the
+  system's Tab while a live field is first responder), Return submits (or, with
   `EnterAction::Next`, moves on; a `text_area` keeps its new lines),
   Escape, and Up and Down in a one-line field (a number steps) go to the
   field as Stipple's would take them. On iOS the keyboard's dismiss key
@@ -260,12 +270,15 @@ long as:
 - it's leaving (an exit animation) or off stage.
 
 The switch is per control and per frame, and the two look the same, so it
-doesn't show. On iOS a live button's and switch's touches are the app's
-view's, so a drag that starts on one scrolls as on a picture; a slider and
-a select keep their touches (a drag that starts on a select doesn't scroll
-its list yet). On macOS a scroll wheel or trackpad scroll over a control goes on to
-the app's view; on Windows a button passes the wheel to its parent, and a
-closed select's is passed on for it.
+doesn't show. On iOS a live button's, switch's, slider's and select's
+touches are the app's view's, so a drag that starts on one scrolls as on a
+picture (on a slider, a sideways drag moves it). On macOS a scroll wheel or
+trackpad scroll over a control goes on to the app's view, and over a
+slider a mostly vertical one is the app's alone (the list scrolls) and a
+sideways one AppKit's (the slider moves), a trackpad gesture keeping the
+way its first move went; on Windows a button passes the wheel to its
+parent, and a closed select's and a slider's are passed on for them (a
+slider's horizontal wheel moves it).
 
 ### Where it doesn't apply
 

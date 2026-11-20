@@ -437,6 +437,10 @@ struct Pane<S> {
     // The latched drag: its id, its and its parent's bounds, the press point, and
     // whether it was laid out right to left.
     dragging: Option<(DragId, Rect, Rect, Point, bool)>,
+    // A finger on a slider in a vertical scroll area: the drag is latched
+    // but its handler waits until the finger's direction says it's the
+    // slider's (sideways) and not the list's (up or down).
+    drag_held: bool,
     // The text element currently being selected by a pointer drag.
     text_selecting: Option<TextPosId>,
     // The selection in read-only text (`Element::selectable`), whether a
@@ -581,6 +585,9 @@ struct Pane<S> {
     // and whether its window hosts them.
     native_host: crate::core::native_host::NativeHost,
     hosts_native: bool,
+    // A tap the app's view took on a live select (its id, and where):
+    // the window opens the select's own menu before the next frame.
+    os_select_tap: Option<(u64, Point)>,
     watch: crate::core::interact::Watch,
     pointer_in: bool,
     press_at: Option<Point>,
@@ -635,6 +642,7 @@ impl<S: 'static> Pane<S> {
             focused: None,
             hovered: None,
             dragging: None,
+            drag_held: false,
             text_selecting: None,
             read_sel: Default::default(),
             read_selecting: false,
@@ -693,6 +701,7 @@ impl<S: 'static> Pane<S> {
             native_fades: Default::default(),
             native_host: Default::default(),
             hosts_native: false,
+            os_select_tap: None,
             watch: Default::default(),
             pointer_in: false,
             press_at: None,
@@ -2644,11 +2653,12 @@ impl<S: 'static> Pane<S> {
                 .tree
                 .as_ref()
                 .and_then(|t| drag_hit_at(press_layer(t, overlays, pos).0, pos))
-                .map(|(id, bounds, parent, rtl)| (id, bounds, parent, pos, rtl));
+                .map(|h| (h.id, h.bounds, h.parent, pos, h.rtl));
         }
         let Some((id, bounds, parent, origin, rtl)) = self.dragging else {
             return false;
         };
+        self.drag_held = false;
         // The draggable's bounds are in its layout space: read the pointer
         // there too, through any transform on the way to it.
         let local = |p: Point| {
@@ -2679,6 +2689,32 @@ impl<S: 'static> Pane<S> {
     /// End the current drag (pointer released).
     fn end_drag(&mut self) {
         self.dragging = None;
+        self.drag_held = false;
+    }
+
+    /// A finger went down at `pos` on a slider inside a vertical scroll
+    /// area: latch the slider without moving it, and leave the direction
+    /// the finger moves to decide. Up or down scrolls the area (as the OS's
+    /// own lists do), sideways drags the slider, and a tap sets it where it
+    /// lands. Returns whether it did.
+    fn hold_slider_at(&mut self, pos: Point) -> bool {
+        if self.dragging.is_some() {
+            return false;
+        }
+        let overlays = self.overlay_active;
+        let Some(hit) = self
+            .tree
+            .as_ref()
+            .and_then(|t| drag_hit_at(press_layer(t, overlays, pos).0, pos))
+        else {
+            return false;
+        };
+        if !hit.slider || !self.touch.leave_sideways_to_widget() {
+            return false;
+        }
+        self.dragging = Some((hit.id, hit.bounds, hit.parent, pos, hit.rtl));
+        self.drag_held = true;
+        true
     }
 
     /// Begin a pointer text interaction at `pos` (logical pixels) pressed at
@@ -3467,6 +3503,7 @@ impl<S: 'static> App<S> {
         if self.panes[idx].text_touch_down(position)
             || self.pane_select_press_at(idx, position)
             || self.pane_text_press_at(idx, position)
+            || self.panes[idx].hold_slider_at(position)
             || self.pane_drag_at_point(idx, position)
         {
             redraw = true;
@@ -3476,8 +3513,9 @@ impl<S: 'static> App<S> {
                 self.panes[idx].press_focus = Some(position);
             }
         }
-        // A finger on a slider drags the slider, not the list around it.
-        if self.panes[idx].dragging.is_some() {
+        // A finger on a slider drags the slider, not the list around it
+        // (in a vertical list, once it moves sideways).
+        if self.panes[idx].dragging.is_some() && !self.panes[idx].drag_held {
             self.panes[idx].touch.yield_to_widget();
         }
         redraw
@@ -3542,8 +3580,17 @@ impl<S: 'static> App<S> {
             self.panes[idx].end_select();
             false
         } else if self.panes[idx].dragging.is_some() {
+            // A tap on a slider held for its list's sake: it goes where the
+            // finger lifted (not when the touch was cancelled, which lifts
+            // far away).
+            let tap = self.panes[idx].drag_held
+                && self.panes[idx]
+                    .tree
+                    .as_ref()
+                    .is_some_and(|t| t.bounds.contains(position));
+            let moved = tap && self.pane_drag_at_point(idx, position);
             self.panes[idx].end_drag();
-            false
+            moved
         } else {
             let down = self.panes[idx].pressed.take();
             let up = self.panes[idx].tap_at(position);
@@ -3551,7 +3598,16 @@ impl<S: 'static> App<S> {
             app_dbg(format_args!(
                 "release at {position:?}: pressed {down:?}, here {up:?}"
             ));
-            if down.is_some() && down == up {
+            if let Some(id) = down
+                .filter(|_| down == up)
+                .and_then(|a| self.panes[idx].native_host.select_tapped(a))
+            {
+                // A live select's menu is the OS's: the window opens it
+                // (or, where it can't, the click opens Stipple's list).
+                self.panes[idx].os_select_tap = Some((id, position));
+                self.panes[idx].dirty = true;
+                return true;
+            } else if down.is_some() && down == up {
                 self.pane_click_at(idx, position);
             } else if down.is_none() && up.is_none() && press_focus.is_some() {
                 // A press and release off any tap target still moves focus,
@@ -3669,6 +3725,7 @@ impl<S: 'static> App<S> {
             // Whether Back would reach the app (predictive back).
             app.sync_back();
             app.native_context_menu(idx, window);
+            app.native_select_menu(idx, window);
             app.run_edit_pick(idx, Some(window));
             let App {
                 state,
@@ -4835,6 +4892,18 @@ impl<S: 'static> App<S> {
     /// own popup menu where there is one (and the menus aren't drawn in the
     /// window by choice), and run what was picked. The drawn menu stays open
     /// where the platform has none.
+    /// A tap the app's view took on a live select: its own menu opens
+    /// (`Window::open_native_menu`), or, where the window can't open it,
+    /// the tap opens Stipple's list as on a picture.
+    fn native_select_menu(&mut self, idx: usize, window: &dyn crate::platform::Window) {
+        let Some((id, at)) = self.panes[idx].os_select_tap.take() else {
+            return;
+        };
+        if !window.open_native_menu(id) {
+            self.pane_click_at(idx, at);
+        }
+    }
+
     fn native_context_menu(&mut self, idx: usize, window: &dyn crate::platform::Window) {
         use crate::platform::MenuPopup;
         use crate::widgets::menus::MenuRoot;

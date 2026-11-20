@@ -2362,7 +2362,28 @@ where
                         }
                         // The locked pointer's motion, unaccelerated or not
                         // as the system has it, instead of moves.
-                        let event = if win.pointer_locked.get() && pointer::is_motion(etype) {
+                        // A scroll over a live slider: up or down is the
+                        // app's, sideways the slider's.
+                        let wheel = if etype == NS_SCROLL_WHEEL {
+                            let p = msg_point(ev, sel("locationInWindow"));
+                            crate::platform::native::os_views::wheel_route(
+                                view,
+                                crate::platform::native::os_views::CgPoint {
+                                    x: p.x,
+                                    y: view_h - p.y,
+                                },
+                                msg_u64(ev, sel("phase")),
+                                msg_u64(ev, sel("momentumPhase")),
+                                msg_f64(ev, sel("scrollingDeltaX")),
+                                msg_f64(ev, sel("scrollingDeltaY")),
+                            )
+                        } else {
+                            crate::platform::native::os_views::WheelRoute::Both
+                        };
+                        use crate::platform::native::os_views::WheelRoute;
+                        let event = if wheel == WheelRoute::Slider {
+                            None
+                        } else if win.pointer_locked.get() && pointer::is_motion(etype) {
                             let (dx, dy) = (msg_f64(ev, sel("deltaX")), msg_f64(ev, sel("deltaY")));
                             (dx != 0.0 || dy != 0.0).then_some(Event::PointerDelta { dx, dy })
                         } else if pointer::is_press(etype)
@@ -2397,7 +2418,10 @@ where
                         }
                         // Forward to AppKit (drawing, window controls) unless
                         // we're exiting on this event.
-                        if !exit && !(used && etype != keys::NS_FLAGS_CHANGED) {
+                        if !exit
+                            && !(used && etype != keys::NS_FLAGS_CHANGED)
+                            && wheel != WheelRoute::App
+                        {
                             msg_void_id(app, sel("sendEvent:"), ev);
                             // A click into a live text field, a selection
                             // dragged in one: read back.

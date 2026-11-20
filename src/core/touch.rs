@@ -632,6 +632,27 @@ impl TouchGestures {
         }
     }
 
+    /// The first finger, still within the slop, pressed a widget that takes
+    /// sideways drags (a slider) inside a vertical scroll container: a
+    /// sideways move is the widget's (even inside a sideways container
+    /// too), and one up or down still scrolls the vertical container.
+    /// Returns `false`, changing nothing, when there's no vertical
+    /// container to scroll (the widget then takes the finger at once:
+    /// [`yield_to_widget`](Self::yield_to_widget)).
+    pub fn leave_sideways_to_widget(&mut self) -> bool {
+        match &mut self.state {
+            State::Pending {
+                targets,
+                caught: false,
+                ..
+            } if targets.scroll.vertical.is_some() => {
+                targets.scroll.horizontal = None;
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Whether a fling is running (the app keeps asking for frames).
     pub fn flinging(&self) -> bool {
         matches!(self.state, State::Flinging { .. })

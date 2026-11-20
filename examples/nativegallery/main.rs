@@ -34,7 +34,22 @@
 //! runs). It logs to stdout and, on iOS, to `nativegallery.log` in its tmp
 //! dir, ending with `nativegallery selftest: passed` or `... FAILED:
 //! <what>`; and, after that, each change of the field's text
-//! (`nativegallery: name "..."`), for CI's real typing.
+//! (`nativegallery: name "..."`), the checkbox's, the radio buttons' and
+//! the sliders' (`checked`, `choice`, `level 2`), for CI's real input.
+//!
+//! Then a second list shows, scrolled by drags and wheels that start on
+//! the controls in it: a slider (and on iOS and macOS a select) and rows.
+//! On iOS a finger (the backend's touch path) drags up from the slider and
+//! from the select (the list scrolls; the slider doesn't move, no menu
+//! opens) and sideways on the slider (it moves, the list doesn't), and a
+//! tap on the select opens its `UIMenu`; on macOS a mouse wheel posted
+//! through the window server over the slider scrolls the list (and one
+//! sideways moves the slider); then Tab and Shift-Tab, a hardware
+//! keyboard's (iOS: the app view's key commands, macOS: the field
+//! editor's `insertTab:`), move the focus out of the live text field.
+//! That part ends with `nativegallery extra checks: passed` (or `FAILED`);
+//! on Windows the CI script wheels over the list's trackbar itself, and
+//! the part only logs the list's offset (`nativegallery: drag list at N`).
 
 // On Android (emulated TLS) clippy flags even a `const` thread_local.
 #![cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local))]
@@ -61,6 +76,11 @@ struct Gallery {
     /// `locked`): the select keeps showing `size`.
     refused: Select,
     locked: bool,
+    /// The self-test's second list shows.
+    extras: bool,
+    /// Its slider and select.
+    level2: f64,
+    size2: Select,
 }
 
 /// The size options.
@@ -70,6 +90,27 @@ thread_local! {
     /// The self-test's list and how to scroll it.
     static LIST: std::cell::RefCell<Option<(stipple::core::ScrollRequests, stipple::core::ScrollId)>> =
         const { std::cell::RefCell::new(None) };
+    /// The second list's, and how far it is scrolled.
+    static LIST2: std::cell::RefCell<Option<(stipple::core::ScrollRequests, stipple::core::ScrollId)>> =
+        const { std::cell::RefCell::new(None) };
+    static LIST2_AT: std::cell::Cell<f64> = const { std::cell::Cell::new(0.0) };
+    /// Where the self-test keeps it between its drags: half a row down.
+    static BASE: std::cell::Cell<f64> = const { std::cell::Cell::new(16.0) };
+}
+
+/// Print `what` when `now` differs from what was printed last under `key`
+/// (the self-test's log, for CI's real input).
+fn changed<T: PartialEq + std::fmt::Debug + Send + 'static>(key: &'static str, now: T) {
+    use std::any::Any;
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    static LAST: Mutex<Option<HashMap<&'static str, Box<dyn Any + Send>>>> = Mutex::new(None);
+    let mut last = LAST.lock().unwrap();
+    let map = last.get_or_insert_with(HashMap::new);
+    if map.get(key).and_then(|v| v.downcast_ref::<T>()) != Some(&now) {
+        println!("nativegallery: {key} {now:?}");
+        map.insert(key, Box::new(now));
+    }
 }
 
 fn view(state: &Gallery, cx: &mut Cx<Gallery>) -> Element {
@@ -140,6 +181,36 @@ fn view(state: &Gallery, cx: &mut Cx<Gallery>) -> Element {
             .unwrap_or(32.0);
         let list = column(rows).gap(8.0).height(2.5 * row + 8.0);
         items.push(list.scrollable(id));
+        changed("checked", state.checked);
+        changed("choice", state.choice);
+        if state.extras {
+            // A list whose drags (and wheels) start on a slider and a
+            // select: up and down scroll it, sideways moves the slider.
+            changed("level 2", (state.level2 * 100.0).round() as i64);
+            let id = cx.register_scroll();
+            let at = cx.scroll_offset(id);
+            LIST2_AT.with(|a| a.set(at));
+            changed("drag list at", at.round() as i64);
+            LIST2.with(|l| *l.borrow_mut() = Some((cx.scroll_requests(), id)));
+            // Between rows, so the self-test can scroll it either way from
+            // half a row down (BASE).
+            let mut rows = vec![
+                button(cx, "Item 1"),
+                slider(cx, state.level2, |s, v| s.level2 = v).width(240.0),
+            ];
+            // (The Windows script checks the window has one select.)
+            if cfg!(not(target_os = "windows")) {
+                rows.push(select(cx, &SIZES, &state.size2, |s| &mut s.size2).a11y_label("Size 2"));
+            }
+            rows.extend((2..=4).map(|i| button(cx, format!("Item {i}"))));
+            BASE.with(|b| b.set((row / 2.0).round()));
+            items.push(
+                column(rows)
+                    .gap(8.0)
+                    .height(3.0 * row + 16.0)
+                    .scrollable(id),
+            );
+        }
     }
     if state.panel {
         let panel = column(vec![label(cx, "A panel over the controls")])
@@ -170,6 +241,9 @@ fn gallery() -> Gallery {
         size: Select::new(Some(1)),
         refused: Select::new(Some(1)),
         locked: false,
+        extras: false,
+        level2: 0.5,
+        size2: Select::new(Some(0)),
     }
 }
 
@@ -183,7 +257,7 @@ fn main() {
         }
     }
     let test = std::env::var_os("NATIVEGALLERY_SELFTEST").is_some();
-    let height = if test { 560.0 } else { 340.0 };
+    let height = if test { 680.0 } else { 340.0 };
     let app = App::new(Gallery { test, ..gallery() }, view)
         .title("Stipple")
         .theme(Theme::native())
@@ -708,6 +782,271 @@ mod selftest {
                 log(&format!(
                     "nativegallery selftest: FAILED: {}",
                     failures.join("; ")
+                ));
+            }
+        });
+        extras(handle, hosts);
+    }
+
+    /// The second list's slider and select, live (the one lower down).
+    fn list_slider(live: &[LiveControl]) -> Option<&LiveControl> {
+        live.iter()
+            .filter(|c| {
+                let class = c.class.to_ascii_lowercase();
+                SLIDER.iter().any(|k| class.contains(k))
+            })
+            .max_by(|a, b| a.frame.min_y().total_cmp(&b.frame.min_y()))
+    }
+
+    /// The second list's select: the live control showing its choice
+    /// (Small: the first select shows Large by then).
+    fn list_select(live: &[LiveControl]) -> Option<&LiveControl> {
+        titled(live, "Small")
+    }
+
+    fn list_at() -> f64 {
+        super::LIST2_AT.with(|a| a.get())
+    }
+
+    /// How far the second list moved from where the self-test keeps it.
+    fn list_moved() -> f64 {
+        (list_at() - super::BASE.with(|b| b.get())).abs()
+    }
+
+    fn to_base() {
+        scroll_list_to(super::BASE.with(|b| b.get()));
+    }
+
+    fn scroll_list_to(at: f64) {
+        super::LIST2.with(|l| {
+            if let Some((requests, id)) = &*l.borrow() {
+                requests.scroll_to(*id, at);
+            }
+        });
+    }
+
+    /// A finger from `from` to `to` in steps, as the backend's touch path
+    /// takes one (iOS).
+    #[cfg(target_os = "ios")]
+    fn drag(from: stipple::prelude::Point, to: stipple::prelude::Point) {
+        use stipple::platform::TouchPhase;
+        use stipple::platform::backend::ios::simulate::touch;
+        touch(7, TouchPhase::Started, from);
+        for i in 1..=6 {
+            let t = i as f64 / 6.0;
+            let p = stipple::prelude::Point::new(
+                from.x + (to.x - from.x) * t,
+                from.y + (to.y - from.y) * t,
+            );
+            touch(7, TouchPhase::Moved, p);
+        }
+        touch(7, TouchPhase::Ended, to);
+    }
+
+    /// The part after the self-test (see the top of this file).
+    fn extras(handle: &AppHandle<Gallery>, hosts: bool) {
+        use stipple::prelude::Point;
+        static FAILED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+        fn soft(ok: bool, what: impl Into<String>) {
+            if !ok {
+                let what = what.into();
+                log(&format!("nativegallery: extra check failed: {what}"));
+                FAILED.lock().unwrap().push(what);
+            }
+        }
+        let apple = cfg!(any(target_os = "ios", target_os = "macos"));
+        at(handle, 21000, move |s| {
+            s.extras = true;
+            log("nativegallery: extras shown");
+        });
+        if !hosts || !apple {
+            return;
+        }
+        at(handle, 21500, |_| to_base());
+        static SLIDER2: Mutex<Option<(Point, f64)>> = Mutex::new(None);
+        static SELECT2: Mutex<Option<Point>> = Mutex::new(None);
+        // Up from the slider: the list scrolls, the slider stays.
+        at(handle, 22500, move |s| {
+            let live = live_controls();
+            let slider = list_slider(&live);
+            let select = list_select(&live);
+            soft(slider.is_some(), "the list's slider is live");
+            if let Some(c) = slider {
+                describe(c);
+                let mid = c.visible.center();
+                *SLIDER2.lock().unwrap() = Some((mid, c.frame.width()));
+                if cfg!(target_os = "ios") {
+                    soft(c.app_touches, "a finger on the slider is the app's");
+                }
+                #[cfg(target_os = "ios")]
+                drag(mid, Point::new(mid.x + 3.0, mid.y - 60.0));
+                #[cfg(target_os = "macos")]
+                soft(
+                    stipple::platform::native::post_scroll(mid, 0.0, -40.0),
+                    "a wheel posts over the slider",
+                );
+            }
+            if cfg!(target_os = "ios") {
+                soft(select.is_some(), "the list's select is live");
+                if let Some(c) = select {
+                    describe(c);
+                    *SELECT2.lock().unwrap() = Some(c.visible.center());
+                    soft(c.app_touches, "a finger on the select is the app's");
+                }
+            }
+            log(&format!("nativegallery: level 2 before {:.3}", s.level2));
+        });
+        at(handle, 24000, move |s| {
+            soft(
+                list_moved() > 10.0,
+                format!(
+                    "a drag (wheel) up from the slider scrolls the list ({:.1})",
+                    list_at()
+                ),
+            );
+            soft(
+                (s.level2 - 0.5).abs() < 1e-9,
+                format!("and the slider stays ({:.3})", s.level2),
+            );
+            to_base();
+        });
+        // Sideways on the slider: it moves, the list stays.
+        at(handle, 25000, move |_| {
+            let Some((mid, w)) = *SLIDER2.lock().unwrap() else {
+                return;
+            };
+            let _ = (mid, w);
+            #[cfg(target_os = "ios")]
+            drag(
+                Point::new(mid.x - w * 0.3, mid.y),
+                Point::new(mid.x + w * 0.3, mid.y + 2.0),
+            );
+            #[cfg(target_os = "macos")]
+            stipple::platform::native::post_scroll(mid, -60.0, 0.0);
+        });
+        at(handle, 26500, move |s| {
+            log(&format!(
+                "nativegallery: level 2 after a sideways drag (wheel) {:.3}, list at {:.1}",
+                s.level2,
+                list_at()
+            ));
+            // (AppKit's slider may or may not take a sideways wheel: only
+            // logged there.)
+            if cfg!(target_os = "ios") {
+                soft(
+                    s.level2 > 0.6,
+                    format!("a sideways drag moves the slider ({:.3})", s.level2),
+                );
+                soft(
+                    list_moved() < 1.0,
+                    format!("and not the list ({:.1})", list_at()),
+                );
+            }
+            to_base();
+            // Up from the select: the list scrolls, no menu opens.
+            #[cfg(target_os = "ios")]
+            if let Some(mid) = *SELECT2.lock().unwrap() {
+                drag(mid, Point::new(mid.x + 2.0, mid.y - 60.0));
+            }
+        });
+        at(handle, 28000, move |s| {
+            if cfg!(target_os = "ios") {
+                soft(
+                    list_moved() > 10.0,
+                    format!(
+                        "a drag up from the select scrolls the list ({:.1})",
+                        list_at()
+                    ),
+                );
+                soft(!s.size2.is_open(), "the drag opens no list of Stipple's");
+                soft(
+                    !stipple::platform::native::os_menu_shown(true),
+                    "the drag opens no menu",
+                );
+            }
+            to_base();
+        });
+        // A tap on the select: its own menu opens (iOS 17.4 and later).
+        at(handle, 29000, move |_| {
+            #[cfg(target_os = "ios")]
+            if let Some(mid) = *SELECT2.lock().unwrap() {
+                use stipple::platform::TouchPhase;
+                use stipple::platform::backend::ios::simulate::touch;
+                touch(8, TouchPhase::Started, mid);
+                touch(8, TouchPhase::Ended, mid);
+            }
+        });
+        at(handle, 30500, move |s| {
+            if cfg!(target_os = "ios") {
+                let shown = stipple::platform::native::os_menu_shown(true);
+                log(&format!(
+                    "nativegallery: after a tap on the select: menu shown {shown}, Stipple's list open {}",
+                    s.size2.is_open()
+                ));
+                soft(shown, "a tap on the select opens its UIMenu");
+                soft(!s.size2.is_open(), "and not Stipple's list");
+                s.size2.close();
+            }
+            // A hardware keyboard's Tab in the live field moves focus on.
+            let live = live_controls();
+            if let Some(f) = of_kind(&live, FIELD) {
+                soft(
+                    poke_text(f.id, TextPoke::Focus),
+                    "the field takes focus again",
+                );
+            }
+        });
+        at(handle, 31500, move |_| {
+            let live = live_controls();
+            let field = of_kind(&live, FIELD);
+            soft(field.is_some_and(|f| f.focused), "the field is focused");
+            if let Some(f) = field {
+                soft(
+                    poke_text(f.id, TextPoke::Tab { back: false }),
+                    "the field offers Tab (a key command with priority, on iOS)",
+                );
+            }
+        });
+        at(handle, 32500, move |_| {
+            let live = live_controls();
+            soft(
+                of_kind(&live, FIELD).is_some_and(|f| !f.focused),
+                "Tab moved the focus out of the field",
+            );
+            if let Some(f) = of_kind(&live, FIELD) {
+                soft(
+                    poke_text(f.id, TextPoke::Focus),
+                    "the field takes focus once more",
+                );
+            }
+        });
+        at(handle, 33500, move |_| {
+            let live = live_controls();
+            if let Some(f) = of_kind(&live, FIELD) {
+                soft(
+                    poke_text(f.id, TextPoke::Tab { back: true }),
+                    "the field offers Shift-Tab",
+                );
+            }
+        });
+        at(handle, 34500, move |_| {
+            let live = live_controls();
+            soft(
+                of_kind(&live, FIELD).is_some_and(|f| !f.focused),
+                "Shift-Tab moved the focus out of the field",
+            );
+            let failed = std::mem::take(&mut *FAILED.lock().unwrap());
+            if !failed.is_empty() {
+                for line in text_trace() {
+                    log(&format!("nativegallery: trace: {line}"));
+                }
+            }
+            if failed.is_empty() {
+                log("nativegallery extra checks: passed");
+            } else {
+                log(&format!(
+                    "nativegallery extra checks: FAILED: {}",
+                    failed.join("; ")
                 ));
             }
         });

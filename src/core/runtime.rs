@@ -2161,8 +2161,8 @@ pub(crate) fn drag_at(node: &LayoutNode, point: Point) -> Option<(DragId, Rect)>
 /// Like [`drag_at`], but also returns the bounds of the draggable's parent
 /// (its own bounds when it is `node` itself), for [`DragMotion::parent`],
 /// and whether the draggable was laid out right to left ([`LayoutNode::rtl`]).
-pub(crate) fn drag_hit_at(node: &LayoutNode, point: Point) -> Option<(DragId, Rect, Rect, bool)> {
-    fn walk(node: &LayoutNode, parent: Rect, point: Point) -> Option<(DragId, Rect, Rect, bool)> {
+pub(crate) fn drag_hit_at(node: &LayoutNode, point: Point) -> Option<DragHit> {
+    fn walk(node: &LayoutNode, parent: Rect, point: Point) -> Option<DragHit> {
         let point = node.to_local(point)?;
         for child in node.children.iter().rev() {
             if let Some(hit) = walk(child, node.bounds, point) {
@@ -2170,11 +2170,33 @@ pub(crate) fn drag_hit_at(node: &LayoutNode, point: Point) -> Option<(DragId, Re
             }
         }
         match node.drag {
-            Some(id) if node.bounds.contains(point) => Some((id, node.bounds, parent, node.rtl)),
+            Some(id) if node.bounds.contains(point) => Some(DragHit {
+                id,
+                bounds: node.bounds,
+                parent,
+                rtl: node.rtl,
+                slider: node
+                    .semantics
+                    .as_ref()
+                    .is_some_and(|s| s.role == Some(crate::core::Role::Slider)),
+            }),
             _ => None,
         }
     }
     walk(node, node.bounds, point)
+}
+
+/// The draggable under a point (see [`drag_hit_at`]).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct DragHit {
+    pub id: DragId,
+    /// Its bounds and its parent's, in its layout space.
+    pub bounds: Rect,
+    pub parent: Rect,
+    /// Laid out right to left.
+    pub rtl: bool,
+    /// It is a (horizontal) slider.
+    pub slider: bool,
 }
 
 /// The innermost vertical and horizontal scroll containers under a point

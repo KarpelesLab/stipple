@@ -84,7 +84,7 @@ fn app() -> App<Log> {
     .logical_size(Size::new(300.0, 400.0))
 }
 
-fn offset(app: &App<Log>, id: ScrollId) -> f64 {
+fn offset<S>(app: &App<S>, id: ScrollId) -> f64 {
     app.panes[0].scroll_offsets.get(&id).copied().unwrap_or(0.0)
 }
 
@@ -409,4 +409,68 @@ fn the_ios_back_swipe_takes_the_edge_only_while_back_is_enabled() {
     drag(&mut app, &[20.0, 40.0, 60.0, 80.0]);
     assert_eq!(backs.get(), 1);
     assert!(offset(&app, STRIP) < before);
+}
+
+/// A 300×300 window: a list 200 tall of three rows 50 tall, a slider, and
+/// ten rows more; and a slider below the list.
+fn sliders() -> App<(f64, f64)> {
+    App::new((0.5, 0.5), |s: &(f64, f64), cx: &mut Cx<(f64, f64)>| {
+        let mut items: Vec<Element> = (0..3)
+            .map(|_| label(cx, "").width(200.0).height(50.0))
+            .collect();
+        items.push(crate::widgets::slider(cx, s.0, |s, v| s.0 = v));
+        items.extend((0..10).map(|_| label(cx, "").width(200.0).height(50.0)));
+        let below = crate::widgets::slider(cx, s.1, |s, v| s.1 = v);
+        column(vec![scroll(cx).height(200.0).children(items), below])
+    })
+    .no_font()
+    .logical_size(Size::new(300.0, 300.0))
+}
+
+#[test]
+fn a_vertical_drag_on_a_slider_in_a_list_scrolls_the_list_and_a_sideways_one_the_slider() {
+    let list = ScrollId(0);
+    let mut app = sliders();
+    app.render_once();
+    // The slider is at y 150..172, x 0..160. Up from it: the list scrolls,
+    // the slider stays.
+    app.touch(finger(1, TouchPhase::Started, 60.0, 160.0));
+    app.touch(finger(1, TouchPhase::Moved, 62.0, 130.0));
+    app.touch(finger(1, TouchPhase::Moved, 63.0, 100.0));
+    app.touch(finger(1, TouchPhase::Ended, 63.0, 100.0));
+    assert_eq!(app.state().0, 0.5, "the slider didn't move");
+    assert_eq!(offset(&app, list), 60.0 - crate::core::touch::SLOP);
+    // Back to the top; sideways: the slider follows, the list stays.
+    app.panes[0].scroll_offsets.insert(list, 0.0);
+    app.panes[0].dirty = true;
+    app.render_once();
+    app.touch(finger(1, TouchPhase::Started, 40.0, 160.0));
+    assert_eq!(app.state().0, 0.5, "a finger landing doesn't move it yet");
+    app.touch(finger(1, TouchPhase::Moved, 70.0, 162.0));
+    app.touch(finger(1, TouchPhase::Moved, 130.0, 163.0));
+    app.touch(finger(1, TouchPhase::Ended, 130.0, 163.0));
+    assert!(
+        app.state().0 > 0.7,
+        "the slider followed ({})",
+        app.state().0
+    );
+    assert_eq!(offset(&app, list), 0.0);
+    // A tap sets it where it lands.
+    app.render_once();
+    app.touch(finger(1, TouchPhase::Started, 20.0, 160.0));
+    app.touch(finger(1, TouchPhase::Ended, 20.0, 160.0));
+    assert!(app.state().0 < 0.2, "the tap set it ({})", app.state().0);
+    // Cancelled (the system took the touch): it stays.
+    app.render_once();
+    let before = app.state().0;
+    app.touch(finger(1, TouchPhase::Started, 120.0, 160.0));
+    app.touch(finger(1, TouchPhase::Cancelled, 120.0, 160.0));
+    assert_eq!(app.state().0, before);
+    // Outside a list, a finger landing on a slider moves it at once.
+    app.render_once();
+    app.touch(finger(1, TouchPhase::Started, 150.0, 211.0));
+    assert!(app.state().1 > 0.8, "moved at once ({})", app.state().1);
+    app.touch(finger(1, TouchPhase::Moved, 150.0, 260.0));
+    app.touch(finger(1, TouchPhase::Ended, 150.0, 260.0));
+    assert!(app.state().1 > 0.8);
 }

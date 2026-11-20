@@ -117,6 +117,8 @@ pub enum TextPoke {
     Compose(String),
     /// Press Return.
     Enter,
+    /// Press Tab (with Shift, `back`), as a hardware keyboard does.
+    Tab { back: bool },
 }
 
 /// For self-tests (CI): act on live text control `id` as the user would.

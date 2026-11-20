@@ -801,7 +801,10 @@ checkboxes and radio buttons on macOS) are the OS's real controls, live
 the OS's own menu or list), with the OS's effects, input and accessibility;
 one half scrolled out of a scroll area stays live, clipped by the OS (a
 clipping container view per area on iOS and macOS, a window region on
-Windows). Wherever one can't show (under an overlay, a transform or a fade,
+Windows). A drag that starts on a slider in a list scrolls the list when
+it goes up or down and moves the slider sideways (iOS's fingers, macOS's
+wheel and trackpad, Windows' wheel), and on iOS a drag on a select scrolls
+too while a tap opens its menu. Wherever one can't show (under an overlay, a transform or a fade,
 cut by a clip that isn't a scroll area's; off screen), the OS draws a
 picture of it instead. See
 [native-theme.md](native-theme.md#real-controls).
@@ -816,7 +819,9 @@ into the control. In CI trial runs (non-blocking steps for now)
 submitted through the real controls on all three; VoiceOver's elements and
 the macOS accessibility dump listed the field once, named by its hint; on
 Windows a real click and real keys typed into the `EDIT`, UI Automation
-listed it once and MSAA named it by its hint.
+listed it once and MSAA named it by its hint. An iPad's hardware Tab moves
+focus out of a `UITextField` / `UITextView` (key commands, self-tested
+through UIKit's action dispatch, not with real keys).
 See [native-theme.md](native-theme.md#text-fields).
 
 ⁹⁵ MP4 and Matroska natively, with the `video` feature: H.264 and HEVC

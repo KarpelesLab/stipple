@@ -29,7 +29,8 @@ pub(crate) mod objc;
 )]
 mod views;
 pub use views::{
-    LiveControl, NativeClip, NativeMenu, NativeView, NativeViewEvent, live_controls, poke_control,
+    LiveControl, NativeClip, NativeMenu, NativeView, NativeViewEvent, live_controls, os_menu_shown,
+    poke_control, post_scroll,
 };
 // Live text controls: their spec, their edits, and the bookkeeping the
 // backends keep them in step with.
@@ -84,6 +85,12 @@ pub(crate) mod os_views {
         false
     }
     pub(crate) fn poke_text(_id: u64, _poke: super::TextPoke) -> bool {
+        false
+    }
+    pub(crate) fn post_scroll(_at: crate::geometry::Point, _dx: f64, _dy: f64) -> bool {
+        false
+    }
+    pub(crate) fn menu_shown(_dismiss: bool) -> bool {
         false
     }
     /// What a window here would show live: no window does, but the

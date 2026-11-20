@@ -20,11 +20,15 @@ use crate::render::{Color, Surface};
 struct Seen {
     views: Vec<Vec<NativeView>>,
     a11y: Vec<crate::platform::A11yNode>,
+    /// The selects whose own menu the app asked the window to open.
+    menus: Vec<u64>,
 }
 
 struct HostWindow {
     seen: Rc<RefCell<Seen>>,
     hosts: bool,
+    /// It opens a select's menu itself (iOS).
+    opens_menus: bool,
 }
 
 impl Window for HostWindow {
@@ -47,6 +51,12 @@ impl Window for HostWindow {
     }
     fn set_native_views(&self, views: &[NativeView]) {
         self.seen.borrow_mut().views.push(views.to_vec());
+    }
+    fn open_native_menu(&self, id: u64) -> bool {
+        if self.opens_menus {
+            self.seen.borrow_mut().menus.push(id);
+        }
+        self.opens_menus
     }
     fn set_accessibility_tree(&self, root: &crate::platform::A11yNode) {
         self.seen.borrow_mut().a11y.push(root.clone());
@@ -134,6 +144,7 @@ fn start(hosts: bool) -> Started {
     let window = HostWindow {
         seen: seen.clone(),
         hosts,
+        opens_menus: false,
     };
     Started {
         handler: Box::new(handler),
@@ -288,6 +299,7 @@ fn a_select_picks_through_the_os_menu_and_a_refused_pick_goes_back() {
     let window = HostWindow {
         seen: seen.clone(),
         hosts: true,
+        opens_menus: false,
     };
     handler(Event::RedrawRequested, &window);
     let views = seen.borrow().views.last().cloned().unwrap();
@@ -332,4 +344,77 @@ fn a_select_picks_through_the_os_menu_and_a_refused_pick_goes_back() {
     assert_eq!(views[0].menu.as_ref().unwrap().selected, Some(1));
     // Out of range: nothing runs.
     pick(&mut handler, 7);
+}
+
+/// A tap the app's view takes on a live select (iOS's, whose touches are
+/// the app's) opens the select's own menu through the window, or, where
+/// the window can't, the select's tap handler (Stipple's list).
+#[test]
+fn a_tap_the_app_takes_on_a_live_select_opens_its_os_menu() {
+    struct Taps(u32);
+    fn view(_: &Taps, cx: &mut Cx<Taps>) -> Element {
+        let pick = cx.register(|_: &mut Taps| {});
+        Element::stack(
+            Axis::Horizontal,
+            vec![Element::text("Small", 14.0, Color::BLACK)],
+        )
+        .native(deco(NativeControl::Button { primary: false }))
+        .width(200.0)
+        .height(30.0)
+        .on_tap(cx, |s| s.0 += 1)
+        .native_choices(crate::core::a11y::Choices {
+            labels: vec!["Small".into()],
+            selected: Some(0),
+            picks: vec![pick],
+        })
+    }
+    for opens in [true, false] {
+        let app = App::new(Taps(0), view)
+            .no_font()
+            .logical_size(Size::new(300.0, 200.0));
+        let store = app.handle();
+        let (_, handler) = app.into_handler();
+        let mut handler: Handler = Box::new(handler);
+        let seen = Rc::new(RefCell::new(Seen::default()));
+        let window = HostWindow {
+            seen: seen.clone(),
+            hosts: true,
+            opens_menus: opens,
+        };
+        handler(Event::RedrawRequested, &window);
+        let id = seen.borrow().views.last().unwrap()[0].id;
+        let at = crate::geometry::Point::new(100.0, 15.0);
+        for state in [
+            crate::platform::ButtonState::Pressed,
+            crate::platform::ButtonState::Released,
+        ] {
+            handler(
+                Event::PointerButton {
+                    button: crate::platform::PointerButton::Left,
+                    state,
+                    position: at,
+                },
+                &window,
+            );
+        }
+        handler(Event::RedrawRequested, &window);
+        let taps = Arc::new(AtomicU32::new(u32::MAX));
+        let t = taps.clone();
+        store.update(move |s| t.store(s.0, Ordering::Relaxed));
+        handler(Event::Wake, &window);
+        if opens {
+            assert_eq!(seen.borrow().menus, [id]);
+            assert_eq!(
+                taps.load(Ordering::Relaxed),
+                0,
+                "Stipple's list stays closed"
+            );
+        } else {
+            assert_eq!(
+                taps.load(Ordering::Relaxed),
+                1,
+                "the tap opens Stipple's list"
+            );
+        }
+    }
 }

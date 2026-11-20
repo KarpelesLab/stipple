@@ -52,6 +52,10 @@ navigation, its say-all) reaches it between its neighbors, instead of a
 separate element ahead of the app's tree that the .NET client reads as a pane. Checkboxes and radio buttons stay pictures (a Win32 one shows and is
 named by a text of its own, where Stipple draws the label beside the box).
 
+The wheel over a slider scrolls what it's in (it is passed to the window, with
+a move to the pointer first, as a closed select's is) and a horizontal
+wheel moves the slider.
+
 A `select` is a `COMBOBOX` (`CBS_DROPDOWNLIST`, `DarkMode_CFD` in dark
 mode): a click opens Windows' own drop-down list, and a pick
 (`CBN_SELENDOK`, or `CBN_SELCHANGE` from the keyboard with the list closed)
@@ -97,7 +101,9 @@ CI's `visual-windows` job (`.github/scripts/native-views-windows.ps1`) runs
 real (a click on the combo box, then one on Small in its drop-down list,
 where UI Automation puts it), checks the half-scrolled rows are live
 with their regions, types into the text field's `EDIT` for real (a click,
-then keys) and checks MSAA names it by its hint.
+then keys) and checks MSAA names it by its hint. A step of its own (the
+same run's extras) checks that a real wheel over the trackbar in a list
+scrolls the list without moving the slider and a horizontal one moves it.
 
 ## Fonts
 

@@ -18,6 +18,10 @@
 //! and radio buttons stay pictures: a Win32 one would show (and be named
 //! by) a text of its own, where Stipple draws the label beside the box.
 //!
+//! The wheel over a slider scrolls what it's in (it goes to the parent);
+//! a horizontal wheel (a tilt, a trackpad's sideways scroll) moves the
+//! slider (`trackbar_proc`), as a drag across it would.
+//!
 //! A select is a `COMBOBOX` (`windows_select`). A control in a scroll area
 //! is cut at the area's edge by a window region (`SetWindowRgn`, the part
 //! of it the areas show): Windows draws, hit-tests and clips the parent's
@@ -107,6 +111,7 @@ unsafe extern "system" {
     fn GetParent(hwnd: Hwnd) -> Hwnd;
     fn SetWindowRgn(hwnd: Hwnd, rgn: *mut c_void, redraw: i32) -> i32;
     fn GetWindowRgnBox(hwnd: Hwnd, rect: *mut Rect) -> i32;
+    fn CallWindowProcW(prev: isize, hwnd: Hwnd, msg: u32, wp: usize, lp: isize) -> isize;
 }
 
 #[link(name = "gdi32")]
@@ -155,6 +160,10 @@ const WS_EX_NOPARENTNOTIFY: u32 = 0x0000_0004;
 const GWL_STYLE: i32 = -16;
 const BS_PUSHBUTTON: u32 = 0;
 const BS_DEFPUSHBUTTON: u32 = 1;
+const WM_MOUSEWHEEL: u32 = 0x020A;
+const WM_MOUSEHWHEEL: u32 = 0x020E;
+const WM_NCDESTROY: u32 = 0x0082;
+const GWLP_WNDPROC: i32 = -4;
 const TBS_NOTICKS: u32 = 0x10;
 const TBS_BOTH: u32 = 0x8;
 const WM_SETFONT: u32 = 0x0030;
@@ -210,6 +219,58 @@ thread_local! {
     /// The region each control is cut to (in its window's coordinates),
     /// for the ones a scroll area cuts.
     static REGIONS: RefCell<HashMap<usize, (i32, i32, i32, i32)>> = RefCell::new(HashMap::new());
+    /// Each slider's window procedure before `trackbar_proc`.
+    static TRACKBAR_PROCS: RefCell<HashMap<usize, isize>> = RefCell::new(HashMap::new());
+}
+
+/// A slider's wheel: up and down scroll what it's in (the parent's, which
+/// scrolls the area under the pointer), rather than move it; sideways (a
+/// tilt, a trackpad's horizontal scroll) moves it, a step per notch as
+/// the trackbar's own wheel does (right is further on).
+unsafe extern "system" fn trackbar_proc(h: Hwnd, msg: u32, wp: usize, lp: isize) -> isize {
+    let prev = TRACKBAR_PROCS.with(|p| p.borrow().get(&(h as usize)).copied());
+    let Some(prev) = prev else {
+        return 0;
+    };
+    unsafe {
+        match msg {
+            WM_MOUSEWHEEL => wheel_to_parent(h, msg, wp, lp),
+            WM_MOUSEHWHEEL => {
+                // The trackbar's wheel: a notch up is a step back.
+                let delta = ((wp >> 16) & 0xffff) as u16 as i16;
+                let back = (-(delta as i32)) as i16 as u16 as usize;
+                let wp = (wp & 0xffff) | (back << 16);
+                CallWindowProcW(prev, h, WM_MOUSEWHEEL, wp, lp);
+                0
+            }
+            WM_NCDESTROY => {
+                TRACKBAR_PROCS.with(|p| p.borrow_mut().remove(&(h as usize)));
+                SetWindowLongPtrW(h, GWLP_WNDPROC, prev);
+                CallWindowProcW(prev, h, msg, wp, lp)
+            }
+            _ => CallWindowProcW(prev, h, msg, wp, lp),
+        }
+    }
+}
+
+/// Hand the wheel message `msg` a live control `h` got to its parent, as
+/// if the parent had it: first a `WM_MOUSEMOVE` at the pointer (the parent
+/// hears of no moves while the pointer is over a child, and the app
+/// scrolls what is under the last one), then the wheel.
+pub(super) unsafe fn wheel_to_parent(h: Hwnd, msg: u32, wp: usize, lp: isize) -> isize {
+    const WM_MOUSEMOVE: u32 = 0x0200;
+    unsafe {
+        let parent = GetParent(h);
+        // The pointer, in screen coordinates.
+        let mut p = [Point {
+            x: (lp & 0xffff) as u16 as i16 as i32,
+            y: ((lp >> 16) & 0xffff) as u16 as i16 as i32,
+        }];
+        MapWindowPoints(std::ptr::null_mut(), parent, p.as_mut_ptr(), 1);
+        let at = ((p[0].y as u16 as isize) << 16) | (p[0].x as u16 as isize);
+        SendMessageW(parent, WM_MOUSEMOVE, 0, at);
+        SendMessageW(parent, msg, wp, lp)
+    }
 }
 
 /// Run `f` under the Common Controls 6 activation context, made (and the
@@ -443,6 +504,9 @@ impl ViewBackend for Win32 {
                     SendMessageW(h, TBM_SETRANGEMAX, 0, 1000);
                     SendMessageW(h, TBM_SETPAGESIZE, 0, 100);
                     SendMessageW(h, TBM_SETPOS, 1, value as isize);
+                    let prev =
+                        SetWindowLongPtrW(h, GWLP_WNDPROC, trackbar_proc as *const c_void as isize);
+                    TRACKBAR_PROCS.with(|p| p.borrow_mut().insert(h as usize, prev));
                 }
                 NativeControl::Progress { value } => {
                     SendMessageW(h, PBM_SETRANGE32, 0, 1000);
@@ -729,9 +793,20 @@ pub(crate) fn live_controls() -> Vec<super::LiveControl> {
                 focused,
                 hit,
                 container: if cut { "HRGN".into() } else { String::new() },
+                app_touches: false,
             }
         })
         .collect()
+}
+
+/// The CI script wheels over the controls with real input instead.
+pub(crate) fn post_scroll(_at: crate::geometry::Point, _dx: f64, _dy: f64) -> bool {
+    false
+}
+
+/// A `COMBOBOX`'s list is no menu the app opens.
+pub(crate) fn menu_shown(_dismiss: bool) -> bool {
+    false
 }
 
 pub(crate) fn poke_text(id: u64, poke: super::TextPoke) -> bool {

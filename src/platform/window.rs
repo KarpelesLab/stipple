@@ -631,6 +631,14 @@ pub trait Window {
     /// them comes back as [`Event::NativeView`](crate::platform::Event::NativeView).
     fn set_native_views(&self, _views: &[crate::platform::native::NativeView]) {}
 
+    /// Open live select `id`'s own menu, as a tap on it does, for a tap the
+    /// app's view took (iOS, where a select's touches are the app's so a
+    /// drag on one scrolls). Returns whether it did; `false` (the default)
+    /// opens Stipple's list instead.
+    fn open_native_menu(&self, _id: u64) -> bool {
+        false
+    }
+
     /// Create a [`Surface`] that presents into this window's drawable.
     fn create_surface(&self) -> Box<dyn Surface>;
 

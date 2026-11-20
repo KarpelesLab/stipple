@@ -13,13 +13,17 @@
 //! by the app moves with UIKit's animation; a slider the user is dragging
 //! isn't set back under their finger.
 //!
-//! A button's or a switch's touches are the app's view's
-//! (`userInteractionEnabled` off): a finger on one goes to the app as on any
-//! element, so a tap runs the element's handler, a drag scrolls the list it
-//! is in (and flings it), a long press opens its context menu, and an edge
-//! swipe is the back gesture, as with the controls drawn as pictures. The
-//! button shows its pressed look while the app holds it
-//! ([`NativeView::pressed`]). A slider keeps its own drags.
+//! A button's, a switch's, a slider's and a select's touches are the app's
+//! view's (`userInteractionEnabled` off): a finger on one goes to the app
+//! as on any element, so a tap runs the element's handler, a drag scrolls
+//! the list it is in (and flings it), a long press opens its context menu,
+//! and an edge swipe is the back gesture, as with the controls drawn as
+//! pictures. The button shows its pressed look while the app holds it
+//! ([`NativeView::pressed`]). On a slider in a list a drag up or down
+//! scrolls the list and a sideways one moves the slider (the app's drag
+//! handler, whose new value the slider is set to); a tap on a select opens
+//! its menu (`performPrimaryAction`, iOS 17.4 and later; [`open_menu`]),
+//! where on earlier versions a select keeps its own touches.
 //!
 //! VoiceOver reads the control itself (the view's accessibility container
 //! vends it in place of the node it stands for), named with the node's name,
@@ -42,6 +46,7 @@ use super::{NativeControl, NativeView, NativeViewEvent, ViewBackend, ViewSet};
 /// The live text fields.
 #[path = "ios_text.rs"]
 mod text;
+pub(crate) use text::add_key_commands;
 
 #[link(name = "objc", kind = "dylib")]
 unsafe extern "C" {
@@ -212,13 +217,51 @@ unsafe fn set_common(view: Id, v: &NativeView) {
     }
 }
 
-/// Whether the app's view takes `control`'s touches (see the module's
-/// docs).
-fn app_takes_touches(control: NativeControl) -> bool {
-    matches!(
-        control,
-        NativeControl::Button { .. } | NativeControl::Switch { .. }
-    )
+/// Whether the app's view takes the touches of `control` (a select's,
+/// `menu`; see the module's docs).
+fn app_takes_touches(control: NativeControl, menu: bool) -> bool {
+    match control {
+        // A tap opens its menu from the app (`open_menu`), where UIKit can.
+        NativeControl::Button { .. } if menu => opens_menus(),
+        NativeControl::Button { .. }
+        | NativeControl::Switch { .. }
+        | NativeControl::Slider { .. } => true,
+        _ => false,
+    }
+}
+
+/// Whether a button's menu can be opened from code
+/// (`UIControl.performPrimaryAction`, iOS 17.4).
+fn opens_menus() -> bool {
+    thread_local! {
+        static OPENS: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+    }
+    OPENS.with(|o| {
+        if o.get().is_none() {
+            let s = sel("performPrimaryAction");
+            let cls = class("UIButton");
+            o.set(Some(unsafe {
+                msg!(cls, "instancesRespondToSelector:", (s: Sel) -> bool)
+            }));
+        }
+        o.get() == Some(true)
+    })
+}
+
+/// Open live select `id`'s menu, as a tap on it does (the app's view took
+/// the tap: `Window::open_native_menu`). Returns whether it did.
+pub(crate) fn open_menu(id: u64) -> bool {
+    let Some(h) = SET.with(|s| {
+        let s = s.try_borrow().ok()?;
+        s.get(id).filter(|(v, _)| v.menu.is_some()).map(|(_, h)| *h)
+    }) else {
+        return false;
+    };
+    if !opens_menus() {
+        return false;
+    }
+    unsafe { msg!(h, "performPrimaryAction", () -> ()) };
+    true
 }
 
 /// Set `control`'s accessibility frame: its bounds on screen, as VoiceOver
@@ -308,7 +351,7 @@ impl ViewBackend for Uikit {
                 msg!(control, "addTarget:action:forControlEvents:", (t: Id, a: Sel, events: u64) -> ());
             }
             set_common(control, v);
-            if app_takes_touches(v.control) {
+            if app_takes_touches(v.control, v.menu.is_some()) {
                 let no = false;
                 msg!(control, "setUserInteractionEnabled:", (no: bool) -> ());
             }
@@ -449,15 +492,15 @@ pub(crate) fn handle_of(id: u64) -> Option<Id> {
 
 pub(crate) fn live_controls() -> Vec<super::LiveControl> {
     let view = crate::platform::backend::ios::app_view();
-    let shown: Vec<(u64, NativeControl, Id)> = SET.with(|s| {
+    let shown: Vec<(u64, NativeControl, bool, Id)> = SET.with(|s| {
         s.borrow()
             .in_order()
-            .map(|(v, h)| (v.id, v.control, *h))
+            .map(|(v, h)| (v.id, v.control, v.menu.is_some(), *h))
             .collect()
     });
     shown
         .into_iter()
-        .map(|(id, control, h)| unsafe {
+        .map(|(id, control, menu, h)| unsafe {
             let name = super::objc::class_name(h);
             // A configured button's title is its configuration's.
             let config: Id = if responds(h, "configuration") {
@@ -482,7 +525,8 @@ pub(crate) fn live_controls() -> Vec<super::LiveControl> {
             let mut hit: Id = msg!(view, "hitTest:withEvent:", (at: CgPoint, nil: Id) -> Id);
             // A tap there reaches the control: through the app's view, for
             // one whose touches it takes.
-            if hit == view && app_takes_touches(control) {
+            let app_touches = app_takes_touches(control, menu);
+            if hit == view && app_touches {
                 hit = h;
             }
             while !hit.is_null() && hit != h {
@@ -499,9 +543,85 @@ pub(crate) fn live_controls() -> Vec<super::LiveControl> {
                 visible,
                 hit: !hit.is_null() && visible.width() > 0.0 && visible.height() > 0.0,
                 container,
+                app_touches,
             }
         })
         .collect()
+}
+
+/// No mouse wheel to post on the simulator (`simulate::trackpad_scroll`
+/// drives the trackpad's recognizer instead).
+pub(crate) fn post_scroll(_at: crate::geometry::Point, _dx: f64, _dy: f64) -> bool {
+    false
+}
+
+/// Whether a context menu (a select's `UIMenu`) shows in the app's
+/// window scene: a view of UIKit's context-menu classes in one of its
+/// windows. With `dismiss`, each live select's menu interaction closes
+/// its menu (`dismissMenu`).
+pub(crate) fn menu_shown(dismiss: bool) -> bool {
+    let view = crate::platform::backend::ios::app_view();
+    if view.is_null() {
+        return false;
+    }
+    unsafe fn any_menu(v: Id, depth: u32) -> bool {
+        unsafe {
+            if super::objc::class_name(v).contains("ContextMenu") {
+                return true;
+            }
+            if depth == 0 {
+                return false;
+            }
+            let subs: Id = msg!(v, "subviews", () -> Id);
+            let n: usize = msg!(subs, "count", () -> usize);
+            (0..n).any(|i| {
+                let s: Id = msg!(subs, "objectAtIndex:", (i: usize) -> Id);
+                any_menu(s, depth - 1)
+            })
+        }
+    }
+    let shown = unsafe {
+        let window: Id = msg!(view, "window", () -> Id);
+        let scene: Id = if window.is_null() {
+            std::ptr::null_mut()
+        } else {
+            msg!(window, "windowScene", () -> Id)
+        };
+        let windows: Id = if scene.is_null() {
+            std::ptr::null_mut()
+        } else {
+            msg!(scene, "windows", () -> Id)
+        };
+        let n: usize = if windows.is_null() {
+            0
+        } else {
+            msg!(windows, "count", () -> usize)
+        };
+        (0..n).any(|i| {
+            let w: Id = msg!(windows, "objectAtIndex:", (i: usize) -> Id);
+            any_menu(w, 12)
+        })
+    };
+    if dismiss {
+        let selects: Vec<Id> = SET.with(|s| {
+            s.borrow()
+                .in_order()
+                .filter(|(v, _)| v.menu.is_some())
+                .map(|(_, h)| *h)
+                .collect()
+        });
+        for h in selects {
+            unsafe {
+                if responds(h, "contextMenuInteraction") {
+                    let i: Id = msg!(h, "contextMenuInteraction", () -> Id);
+                    if !i.is_null() {
+                        msg!(i, "dismissMenu", () -> ());
+                    }
+                }
+            }
+        }
+    }
+    shown
 }
 
 pub(crate) fn poke_text(id: u64, poke: super::TextPoke) -> bool {

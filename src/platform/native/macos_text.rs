@@ -643,6 +643,10 @@ pub(super) fn poke(control: Id, poke: TextPoke) -> bool {
                 let c = sel("insertNewline:");
                 msg!(ed, "doCommandBySelector:", (c: Sel) -> ());
             }
+            TextPoke::Tab { back } => {
+                let c = sel(if back { "insertBacktab:" } else { "insertTab:" });
+                msg!(ed, "doCommandBySelector:", (c: Sel) -> ());
+            }
         }
     }
     poll(view);

@@ -80,6 +80,10 @@ impl<S: 'static> Pane<S> {
             self.end_text_select();
         }
         self.end_select();
+        // A slider held for the list's sake: the list has the finger.
+        if self.drag_held {
+            self.end_drag();
+        }
         self.dirty = true;
     }
 

@@ -10,6 +10,11 @@
 # real (a click on its COMBOBOX, then one on Small in the drop-down list
 # Windows opens) and check the app took it, then click into the EDIT and
 # type into it for real (SendInput), and check the app's state followed.
+#
+# Then the extras, reported apart (native-views-extras.txt: "ok" or what
+# failed): the wheel over the second list's trackbar scrolls the list
+# without moving the slider, and a horizontal wheel over it moves the
+# slider.
 param(
   [string]$Exe = ".\target\release\examples\nativegallery.exe",
   [string]$Out = "visual_output"
@@ -41,6 +46,17 @@ public static class NV {
   [DllImport("user32.dll")] public static extern void mouse_event(uint flags, int dx, int dy, uint data, UIntPtr extra);
   [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr h, int attr, out RECT r, int size);
   [DllImport("user32.dll")] public static extern IntPtr SendMessageW(IntPtr h, uint msg, IntPtr wp, IntPtr lp);
+  [StructLayout(LayoutKind.Sequential)] public struct MOUSEINPUT {
+    public int dx; public int dy; public uint mouseData; public uint dwFlags; public uint time; public IntPtr dwExtraInfo; }
+  [StructLayout(LayoutKind.Sequential)] public struct INPUT { public uint type; public MOUSEINPUT mi; }
+  [DllImport("user32.dll", SetLastError = true)] public static extern uint SendInput(uint n, INPUT[] inputs, int size);
+  // A wheel notch (MOUSEEVENTF_WHEEL, or MOUSEEVENTF_HWHEEL sideways) at
+  // the pointer.
+  public static uint Wheel(bool sideways, int delta) {
+    var i = new INPUT { type = 0 };
+    i.mi = new MOUSEINPUT { mouseData = unchecked((uint)delta), dwFlags = sideways ? 0x1000u : 0x0800u };
+    return SendInput(1, new INPUT[] { i }, Marshal.SizeOf(typeof(INPUT)));
+  }
   [DllImport("oleacc.dll")] static extern int AccessibleObjectFromWindow(IntPtr h, uint id, ref Guid iid, [MarshalAs(UnmanagedType.IUnknown)] out object acc);
   static Accessibility.IAccessible Acc(IntPtr h) {
     Guid iid = new Guid("618736E0-3C3D-11CF-810C-00AA00389B71");
@@ -220,6 +236,62 @@ try {
     if (-not (Wait-Log 'nativegallery: name ".*xy"' 10)) { $failures += "typing into the EDIT didn't reach the app (no 'name ...xy')" }
   }
   Shot $hwnd "windows-native-after.png"
+
+  # --- the extras --------------------------------------------------------
+  $extra = @()
+  function Middle([IntPtr]$h) {
+    $r = New-Object RECT
+    [NV]::GetWindowRect($h, [ref]$r) | Out-Null
+    return @([int](($r.Left + $r.Right) / 2), [int](($r.Top + $r.Bottom) / 2), $r)
+  }
+
+  # The wheel over the second list's trackbar (the lowest one).
+  if (-not (Wait-Log 'nativegallery: extras shown' 30)) { $extra += "the second list never showed" }
+  Start-Sleep -Seconds 1
+  $tracks = @()
+  $t = [IntPtr]::Zero
+  while ($true) {
+    $t = [NV]::FindWindowExW($hwnd, $t, "msctls_trackbar32", [NullString]::Value)
+    if ($t -eq [IntPtr]::Zero) { break }
+    $tracks += $t
+  }
+  $lowest = $null; $lowestTop = -1
+  foreach ($t in $tracks) {
+    $m = Middle $t
+    if ($m[2].Top -gt $lowestTop) { $lowestTop = $m[2].Top; $lowest = $t }
+  }
+  Write-Host "trackbars: $($tracks.Count), the list's: $lowest"
+  if ($tracks.Count -lt 2) { $extra += "the second list's trackbar isn't live" }
+  if ($tracks.Count -ge 2) {
+    # Sideways first: the slider moves, the list stays (a wheel down after
+    # may scroll the slider out of sight).
+    $m = Middle $lowest
+    [NV]::SetForegroundWindow($hwnd) | Out-Null
+    [NV]::SetCursorPos($m[0], $m[1]) | Out-Null
+    Start-Sleep -Milliseconds 300
+    $pos = [int][NV]::SendMessageW($lowest, 0x0400, [IntPtr]::Zero, [IntPtr]::Zero) # TBM_GETPOS
+    Write-Host "wheel right over the list's trackbar at $($m[0]),$($m[1]) (position $pos)"
+    [NV]::Wheel($true, 120) | Out-Null
+    if (-not (Wait-Log 'nativegallery: level 2 (?!50$)\d+' 10)) { $extra += "a horizontal wheel over the trackbar didn't move the slider" }
+    Start-Sleep -Milliseconds 500
+    $after = [int][NV]::SendMessageW($lowest, 0x0400, [IntPtr]::Zero, [IntPtr]::Zero)
+    Write-Host "the list's trackbar after the sideways wheel: $after"
+    if ((Select-String -Path $log -Pattern 'nativegallery: drag list at [1-9]' -Quiet)) { $extra += "the sideways wheel scrolled the list" }
+    $moved = @(Select-String -Path $log -Pattern 'nativegallery: level 2 ').Count
+    # Down: the list scrolls, the slider stays.
+    [NV]::SetCursorPos($m[0], $m[1]) | Out-Null
+    Start-Sleep -Milliseconds 300
+    Write-Host "wheel down over the list's trackbar at $($m[0]),$($m[1])"
+    [NV]::Wheel($false, -120) | Out-Null
+    if (-not (Wait-Log 'nativegallery: drag list at [1-9]' 10)) { $extra += "the wheel over the trackbar didn't scroll its list (no 'drag list at N')" }
+    Start-Sleep -Milliseconds 500
+    $now = @(Select-String -Path $log -Pattern 'nativegallery: level 2 ').Count
+    if ($now -ne $moved) { $extra += "the wheel down moved the slider" }
+    Shot $hwnd "windows-native-wheel.png"
+  }
+  $report = if ($extra.Count -eq 0) { "ok" } else { "FAILED: " + ($extra -join "; ") }
+  Write-Host "native views extras: $report"
+  Set-Content -Path (Join-Path $Out "native-views-extras.txt") -Value $report
 } finally {
   Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
   Start-Sleep -Seconds 1
