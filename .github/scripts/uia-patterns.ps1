@@ -8,8 +8,6 @@
 # tree. UIA's notification event (what announces the toast) has no .NET
 # client API, so only the toast's element is checked here; NVDA's script
 # listens for its speech.
-#
-# Not required yet: the visual-windows step running it is continue-on-error.
 param(
   [string]$Exe = ".\target\release\examples\touchdemo.exe",
   [string]$Out = "visual_output",
@@ -39,6 +37,14 @@ public static class Seen {
   }
   public static void OnStructure(object s, StructureChangedEventArgs e) {
     System.Threading.Interlocked.Increment(ref Structure);
+  }
+  // Subscribe here: Windows PowerShell 5.1 can't turn a static method
+  // ([Seen]::OnProperty) into a delegate itself, C# can.
+  public static void Watch(AutomationElement win, AutomationProperty[] props) {
+    Automation.AddAutomationPropertyChangedEventHandler(win, TreeScope.Subtree,
+      new AutomationPropertyChangedEventHandler(OnProperty), props);
+    Automation.AddStructureChangedEventHandler(win, TreeScope.Subtree,
+      new StructureChangedEventHandler(OnStructure));
   }
   [DllImport("user32.dll", CharSet = CharSet.Unicode)]
   public static extern IntPtr FindWindowW(string cls, string title);
@@ -107,10 +113,7 @@ try {
     $A::NameProperty,
     [System.Windows.Automation.ScrollPattern]::VerticalScrollPercentProperty
   )
-  [System.Windows.Automation.Automation]::AddAutomationPropertyChangedEventHandler(
-    $win, $T::Subtree, [System.Windows.Automation.AutomationPropertyChangedEventHandler][Seen]::OnProperty, $props)
-  [System.Windows.Automation.Automation]::AddStructureChangedEventHandler(
-    $win, $T::Subtree, [System.Windows.Automation.StructureChangedEventHandler][Seen]::OnStructure)
+  [Seen]::Watch($win, [System.Windows.Automation.AutomationProperty[]]$props)
 
   # The field: Value and Text.
   $field = Find $C::Edit
