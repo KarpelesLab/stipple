@@ -325,8 +325,8 @@ identity as a `Pixmap`'s texture is:
 
 | Handle | Executor | How | Formats |
 |---|---|---|---|
-| `dma-buf` | GLES (Linux) | `EGL_EXT_image_dma_buf_import`, an `EGLImage` per plane (the modifier echoed), `glEGLImageTargetTexture2DOES` | all; NV12 as an `R8` and a `GR88` plane, converted in the shader |
-| `dma-buf` | Vulkan (Linux) | `VK_EXT_external_memory_dma_buf` and `VK_KHR_external_memory_fd`, laid out with `VK_EXT_image_drm_format_modifier` (modifier, offset, pitch), a dedicated allocation per plane | all; NV12 as an `R8` and an `R8G8` image (each at its own offset and pitch), converted by `quad_yuv.frag` |
+| `dma-buf` | GLES (Linux) | `EGL_EXT_image_dma_buf_import`, an `EGLImage` per plane (the modifier echoed), `glEGLImageTargetTexture2DOES`; a layout the driver says it samples only as an external texture (`eglQueryDmaBufModifiersEXT`, NVIDIA's linear one) as a `GL_TEXTURE_EXTERNAL_OES` texture | all; NV12 as an `R8` and a `GR88` plane, converted in the shader, or (external only) as one image the driver converts, its color space and range given as hints (limited range only: NVIDIA's takes full range as limited) |
+| `dma-buf` | Vulkan (Linux) | `VK_EXT_external_memory_dma_buf` and `VK_KHR_external_memory_fd`, laid out with `VK_EXT_image_drm_format_modifier` (modifier, offset, pitch), the whole buffer imported into a dedicated allocation per plane; a plane whose rows the driver lays out otherwise (`vkGetImageSubresourceLayout`) is refused | all; NV12 as an `R8` and an `R8G8` image (each at its own offset and pitch), converted by `quad_yuv.frag` |
 | `IOSurface` | Metal | `newTextureWithDescriptor:iosurface:plane:`, a texture per plane | BGRA, RGBA, NV12 (`R8Unorm` + `RG8Unorm`, converted in the shader) |
 | DXGI shared handle | Direct3D 11 | `ID3D11Device1::OpenSharedResource1` (NT handle) or `OpenSharedResource`, a view in the texture's format | all; a `DXGI_FORMAT_NV12` texture through an `R8_UNORM` and an `R8G8_UNORM` view, converted by `quad_yuv_ps` |
 | `AHardwareBuffer` | GLES (Android) | `eglGetNativeClientBufferANDROID`, `EGL_NATIVE_BUFFER_ANDROID` | `R8G8B8A8`, `R8G8B8X8`; `Y8Cb8Cr8_420` (`Yuv420`, the camera's) as a `GL_TEXTURE_EXTERNAL_OES` texture, which the driver converts as it samples (`samplerExternalOES`) |
@@ -354,7 +354,10 @@ emulator it isn't (below), unless `debug.stipple.vk_ahb` is set to `1`.
 
 Where an executor has no import for the handle or the format, or the
 driver refuses it, the
-image is read on the CPU instead, once, and drawn as its pixels: a linear
+image is read on the CPU instead, once, and drawn as its pixels (as is a
+linear one whose rows aren't a multiple of 32 bytes apart on NVIDIA's
+drivers, GLES and Vulkan, which import such a pitch but sample it as
+another): a linear
 `dma-buf` is mapped (`mmap`, inside `DMA_BUF_IOCTL_SYNC`), an `IOSurface`
 locked, an `AHardwareBuffer` locked (a YUV one's planes through
 `AHardwareBuffer_lockPlanes`, Android 10), a web source drawn into a 2D
@@ -404,7 +407,10 @@ chroma plane at an offset, drawn rotated and mirrored as the camera's
 preview draws a phone's frames) on the GPU and on the CPU, which maps them,
 and compares; on GLES it also checks nothing was uploaded. A third test
 renders a buffer on the GPU itself, exports it through GBM (tiled, with a
-vendor modifier) and imports it back. `STIPPLE_REQUIRE_UDMABUF` makes the
+vendor modifier) and imports it back. The buffers' rows are padded (to 96
+bytes, 32 for NV12, which also changes down its rows, so a wrong pitch
+shows), and one more has an 80-byte pitch, drawn right whether imported
+or not. `STIPPLE_REQUIRE_UDMABUF` makes the
 first two fail instead of skipping without `/dev/udmabuf`.
 
 ```sh
@@ -416,9 +422,10 @@ Run so far:
 
 - GLES on Mesa's llvmpipe (locally with Mesa 26.1, and on CI's Ubuntu
   runner): the `udmabuf` BGRA and NV12 buffers are imported (no upload) and
-  match the software renderer (BGRA exactly; NV12 within a mean of 0.33 of
-  255, where the GPU samples the half-size chroma plane bilinearly and the
-  CPU per pixel).
+  match the software renderer (BGRA exactly, its 80-byte pitch too; NV12
+  within a mean of 0.33 of 255, 0.26 since the test's luma also changes
+  down the rows, where the GPU samples the half-size chroma plane
+  bilinearly and the CPU per pixel).
 - Vulkan on Mesa's lavapipe (locally with Mesa 25.0, and CI's Ubuntu
   runner): the BGRA buffer is imported (no upload, through
   `VK_EXT_image_drm_format_modifier` with the linear modifier) and matches
@@ -433,13 +440,43 @@ Run so far:
   the shader, within a mean of 0.2 of the CPU's conversion of the same
   bytes, with no upload (`gpu::d3d::scene::external::tests`, run by the
   Windows job's `gpu::` tests).
-- GLES on an NVIDIA GPU (driver 595): a buffer the GPU rendered and
-  exported (modifier `0x0300000000606011`, block-linear) is imported and
-  drawn. NVIDIA's driver accepts a `udmabuf` (system memory) but samples
-  zeros from it, so the tests skip those there.
-- Vulkan on the same NVIDIA GPU: the import of the GLES-exported,
-  block-linear buffer goes through (image, memory, view) but samples
-  nothing, which needs looking into.
+- GLES and Vulkan on an NVIDIA GPU (RTX 5080, driver 595): a buffer the
+  GPU rendered and exported (modifier `0x0300000000606011`, block-linear)
+  is imported and drawn, as are the `udmabuf` (system memory) BGRA, BGRX
+  and NV12 buffers (BGRA exactly; NV12 on Vulkan within a mean of 0.26,
+  and in BT.709 limited range of 0.01; on GLES the BT.709 one, through the
+  driver's conversion, within 0.01, and the full-range one converted on
+  the CPU). What it took (each found on that GPU):
+  - The exporter, not Vulkan: `eglCreateImageKHR` on a texture makes
+    NVIDIA's driver move it into shareable, block-linear memory with a
+    copy it queues but doesn't submit, and nothing on the `dma-buf` (its
+    exported `sync_file` is already signaled) makes another API wait for
+    it: Vulkan read zeros from it (a `glFlush` is enough to see it; GLES,
+    through the same driver, read it whole). `export_dmabuf_on_device`
+    finishes (`glFinish`) before exporting now, so the buffer it hands an
+    X server through DRI3 is whole too.
+  - A plane at an offset (NV12's chroma) hung the GPU (Xid 109, a context
+    switch timeout) on Vulkan: its allocation was the image's size, so the
+    plane lay past it. The whole buffer is imported now.
+  - NVIDIA's Vulkan driver takes any explicit pitch for a linear image,
+    reports it back (`vkGetImageSubresourceLayout`) and copies with it,
+    but samples rows 64 bytes apart where they're 80 (96, 128, 160 and
+    192 sample right; 112 doesn't), and turns a 16-byte pitch into 32
+    (that it reports). NVIDIA's GLES samples 80 wrong too. Both now draw a
+    pitch that isn't a multiple of 32 from its pixels
+    (`a_bgra_dma_buf_with_an_odd_pitch_...`), and the tests' buffers have
+    32-byte rows.
+  - NVIDIA's EGL lists the linear modifier as "external only" for every
+    format (`eglQueryDmaBufModifiersEXT`); bound to `GL_TEXTURE_2D` such
+    an image reads as zeros, without an error. That was the `udmabuf`
+    zeros: GLES imports it as an external texture now.
+  - Vulkan's "alpha forced to one" for BGRX and RGBX used
+    `VK_COMPONENT_SWIZZLE_A` (6) for `_ONE` (2): the alpha byte was drawn
+    (`a_bgrx_dma_buf_is_drawn_opaque`); the same on Android's
+    `R8G8B8X8` hardware buffers.
+
+  Validation layers (`VK_LAYER_KHRONOS_validation`) reported nothing in
+  any of these.
 - CI's `visual-gpu` job runs these on llvmpipe and lavapipe with
   `/dev/udmabuf` opened up (the runner's kernel has it built in), not
   blocking yet.

@@ -8,6 +8,13 @@
 //! texture, which converts as it samples (`samplerExternalOES`,
 //! `GL_OES_EGL_image_external`).
 //!
+//! A `dma-buf` whose layout the driver samples only as an external texture
+//! (`eglQueryDmaBufModifiersEXT` says "external only": NVIDIA's for the
+//! linear modifier, a `udmabuf`'s) is imported that way too, an NV12 one
+//! as a single image the driver converts with the color space's matrix
+//! and range given as hints. Bound to `GL_TEXTURE_2D`, such an image reads
+//! as zeros on NVIDIA's driver, with no error.
+//!
 //! Imports are cached by the image's identity, like the image textures:
 //! made the first frame an image is drawn, freed once it's dropped or
 //! hasn't been drawn for a while. The images a frame drew are held until
@@ -34,6 +41,16 @@ type CreateImage =
     unsafe extern "C" fn(EGLDisplay, EGLContext, EGLenum, *mut c_void, *const EGLint) -> EglImage;
 type DestroyImage = unsafe extern "C" fn(EGLDisplay, EglImage) -> EGLBoolean;
 type TargetTexture = unsafe extern "C" fn(GLenum, EglImage);
+/// `eglQueryDmaBufModifiersEXT`.
+#[cfg(target_os = "linux")]
+type QueryModifiers = unsafe extern "C" fn(
+    EGLDisplay,
+    EGLint,
+    EGLint,
+    *mut u64,
+    *mut EGLBoolean,
+    *mut EGLint,
+) -> EGLBoolean;
 #[cfg(target_os = "android")]
 type NativeClientBuffer = unsafe extern "C" fn(*const c_void) -> *mut c_void;
 
@@ -48,6 +65,11 @@ const KEEP_FRAMES: u64 = 120;
 /// `GL_TEXTURE_EXTERNAL_OES`.
 pub(super) const GL_TEXTURE_EXTERNAL_OES: GLenum = 0x8D65;
 const GL_EXTENSIONS: GLenum = 0x1F03;
+const GL_VENDOR: GLenum = 0x1F00;
+/// The row alignment NVIDIA's driver samples a linear `dma-buf` with: it
+/// imports any pitch, but samples rows a multiple of 32 bytes apart, so
+/// other pitches are drawn from their pixels instead (as on Vulkan).
+const NVIDIA_LINEAR_PITCH: u32 = 32;
 
 /// One external image's import: a texture per plane (none if it failed).
 struct Import {
@@ -67,7 +89,6 @@ pub(super) enum Planes {
     /// Luma and chroma, converted by the YUV program in this color space.
     Yuv(GLuint, GLuint, YuvColorSpace),
     /// One `GL_TEXTURE_EXTERNAL_OES` texture (converted as it's sampled).
-    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
     External(GLuint),
 }
 
@@ -92,9 +113,14 @@ pub(super) struct Imports {
     #[cfg(target_os = "android")]
     client_buffer: Option<NativeClientBuffer>,
     dma_buf: bool,
+    /// Which layouts are sampled only as external textures.
+    #[cfg(target_os = "linux")]
+    query_modifiers: Option<QueryModifiers>,
     /// The external-texture program is built (`has_oes_external`).
-    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
     oes: bool,
+    /// What a linear plane's pitch must be a multiple of to be sampled as
+    /// laid out (1: anything).
+    linear_pitch: u32,
     map: HashMap<usize, Import>,
     /// The images the last frame drew, held until the next one.
     held: Vec<Arc<ExternalImage>>,
@@ -128,7 +154,23 @@ impl Imports {
                     .then(|| proc_addr(c"eglGetNativeClientBufferANDROID"))
                     .flatten(),
                 dma_buf: cfg!(target_os = "linux") && has("EGL_EXT_image_dma_buf_import"),
+                #[cfg(target_os = "linux")]
+                query_modifiers: has("EGL_EXT_image_dma_buf_import_modifiers")
+                    .then(|| proc_addr(c"eglQueryDmaBufModifiersEXT"))
+                    .flatten(),
                 oes,
+                linear_pitch: {
+                    let v = glGetString(GL_VENDOR);
+                    if !v.is_null()
+                        && CStr::from_ptr(v as *const std::ffi::c_char)
+                            .to_bytes()
+                            .starts_with(b"NVIDIA")
+                    {
+                        NVIDIA_LINEAR_PITCH
+                    } else {
+                        1
+                    }
+                },
                 map: HashMap::new(),
                 held: Vec::new(),
             }
@@ -226,8 +268,30 @@ impl Imports {
         let (Some(create), Some(target)) = (self.create, self.target) else {
             return import;
         };
-        // A driver-laid YUV buffer is sampled as an external texture.
-        let kind = if image.format() == ExternalFormat::Yuv420 {
+        #[cfg(target_os = "linux")]
+        if crate::platform::external::modifier_is_linear(image.modifier())
+            && image
+                .dma_buf_planes()
+                .is_some_and(|p| p.iter().any(|&(_, _, s)| s % self.linear_pitch != 0))
+        {
+            return import;
+        }
+        // A driver-laid YUV buffer is sampled as an external texture, as is
+        // a dma-buf the driver samples no other way.
+        let whole = unsafe { self.external_only(dpy, image) };
+        // The driver converts a whole NV12 image with the color space it's
+        // told but, on NVIDIA's, always as limited range: a full-range frame
+        // is converted on the CPU instead.
+        if whole
+            && matches!(
+                image.yuv_color_space(),
+                YuvColorSpace::Bt601Full | YuvColorSpace::Bt709Full
+            )
+            && image.format() == ExternalFormat::Nv12
+        {
+            return import;
+        }
+        let kind = if image.format() == ExternalFormat::Yuv420 || whole {
             if !self.oes {
                 return import;
             }
@@ -237,8 +301,13 @@ impl Imports {
             GL_TEXTURE_2D
         };
         image.wait_acquire();
+        let planes = if import.external {
+            1
+        } else {
+            image.format().planes()
+        };
         unsafe {
-            for (buffer, target_kind, attribs) in self.sources(image) {
+            for (buffer, target_kind, attribs) in self.sources(image, whole) {
                 let egl = create(
                     dpy,
                     std::ptr::null_mut(),
@@ -268,21 +337,81 @@ impl Imports {
                     break;
                 }
             }
-            if import.textures.len() != image.format().planes()
-                || import.egl.len() != import.textures.len()
-            {
+            if import.textures.len() != planes || import.egl.len() != import.textures.len() {
                 free(dpy, self.destroy, &mut import);
             }
         }
         import
     }
 
-    /// Each plane's `eglCreateImageKHR` arguments: the client buffer, the
-    /// target and the attributes.
+    /// Whether `image` is a `dma-buf` the driver samples only as an external
+    /// texture: any of its planes' layouts (NV12's as `R8` and `GR88`) said
+    /// to be "external only" (`eglQueryDmaBufModifiersEXT`).
     #[allow(unused_variables)]
-    fn sources(&self, image: &ExternalImage) -> Vec<(*mut c_void, EGLenum, Vec<EGLint>)> {
+    unsafe fn external_only(&self, dpy: EGLDisplay, image: &ExternalImage) -> bool {
+        #[cfg(target_os = "linux")]
+        if let (crate::platform::external::Handle::DmaBuf(_), true, Some(query)) =
+            (image.handle(), self.dma_buf, self.query_modifiers)
+        {
+            let modifier = image.modifier();
+            if modifier == crate::platform::external::DRM_FORMAT_MOD_INVALID {
+                return false;
+            }
+            let only = |fourcc: u32| unsafe {
+                let mut n = 0;
+                if query(
+                    dpy,
+                    fourcc as EGLint,
+                    0,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    &mut n,
+                ) == 0
+                    || n <= 0
+                {
+                    return false;
+                }
+                let mut mods = vec![0u64; n as usize];
+                let mut external = vec![0 as EGLBoolean; n as usize];
+                if query(
+                    dpy,
+                    fourcc as EGLint,
+                    n,
+                    mods.as_mut_ptr(),
+                    external.as_mut_ptr(),
+                    &mut n,
+                ) == 0
+                {
+                    return false;
+                }
+                mods.iter()
+                    .zip(&external)
+                    .take(n.max(0) as usize)
+                    .any(|(&m, &e)| m == modifier && e != 0)
+            };
+            return image.format().plane_fourccs().iter().any(|&f| only(f));
+        }
+        false
+    }
+
+    /// Each plane's `eglCreateImageKHR` arguments: the client buffer, the
+    /// target and the attributes; or, `whole`, one image of all the planes
+    /// (sampled as an external texture, converting YUV).
+    #[allow(unused_variables)]
+    fn sources(
+        &self,
+        image: &ExternalImage,
+        whole: bool,
+    ) -> Vec<(*mut c_void, EGLenum, Vec<EGLint>)> {
         use crate::platform::external::Handle;
         match image.handle() {
+            #[cfg(target_os = "linux")]
+            Handle::DmaBuf(_) if self.dma_buf && whole => {
+                let planes = image.dma_buf_planes().unwrap_or_default();
+                crate::platform::external::egl_dma_buf_image_attribs(image, &planes)
+                    .map(|a| vec![(std::ptr::null_mut(), EGL_LINUX_DMA_BUF_EXT, a)])
+                    .unwrap_or_default()
+            }
             #[cfg(target_os = "linux")]
             Handle::DmaBuf(_) if self.dma_buf => {
                 let fds = image.dma_buf_planes().unwrap_or_default();
@@ -372,13 +501,15 @@ void main() {\n\
 pub(super) const OES_EXTENSION: &str = "#extension GL_OES_EGL_image_external : require\n";
 
 /// The external-texture program's body: the quad program sampling a
-/// `samplerExternalOES` (opaque: the driver converted the YUV).
+/// `samplerExternalOES` (YUV converted by the driver, opaque; RGBA as it
+/// is, straight).
 pub(super) const QUAD_EXT_MAIN: &str = "uniform samplerExternalOES u_tex;\n\
 void main() {\n\
   if (v_mode < 0.5) {\n\
     gl_FragColor = quadBox();\n\
   } else {\n\
-    vec4 t = vec4(texture2D(u_tex, clamp(v_p, v_a2.xy, v_a2.zw)).rgb, 1.0);\n\
+    vec4 t = texture2D(u_tex, clamp(v_p, v_a2.xy, v_a2.zw));\n\
+    if (v_mode < 1.5) { t.rgb *= t.a; }\n\
     t *= v_a3;\n\
     float cov = clamp(min(v_a1.x, v_a1.z) + 0.5, 0.0, 1.0)\n\
               * clamp(min(v_a1.y, v_a1.w) + 0.5, 0.0, 1.0);\n\

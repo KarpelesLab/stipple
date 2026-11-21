@@ -327,7 +327,7 @@ External images (`dma-buf`, `IOSurface`, DXGI shared handles,
 imported without a copy, NV12 on every native GPU API and an Android
 camera's YUV through an external texture (GLES) or a sampler YCbCr
 conversion (Vulkan); the `dma-buf` import (NV12 included) has run on GLES
-(llvmpipe, NVIDIA) and Vulkan (lavapipe), the shared NV12 texture on WARP,
+(llvmpipe, NVIDIA) and Vulkan (lavapipe, NVIDIA), the shared NV12 texture on WARP,
 the camera's hardware buffers on the Android emulator (GLES; Vulkan too,
 but its gfxstream misreads their chroma, so it's off there by default), the
 others are compile-checked; the camera preview hands the GPU its own

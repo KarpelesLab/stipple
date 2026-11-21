@@ -859,6 +859,88 @@ pub(crate) mod egl {
     pub const PLANE0_PITCH: i32 = 0x3274;
     pub const PLANE0_MODIFIER_LO: i32 = 0x3443;
     pub const PLANE0_MODIFIER_HI: i32 = 0x3444;
+    pub const PLANE1_FD: i32 = 0x3275;
+    pub const PLANE1_OFFSET: i32 = 0x3276;
+    pub const PLANE1_PITCH: i32 = 0x3277;
+    pub const PLANE1_MODIFIER_LO: i32 = 0x3445;
+    pub const PLANE1_MODIFIER_HI: i32 = 0x3446;
+    pub const YUV_COLOR_SPACE_HINT: i32 = 0x327B;
+    pub const SAMPLE_RANGE_HINT: i32 = 0x327C;
+    pub const ITU_REC601: i32 = 0x327F;
+    pub const ITU_REC709: i32 = 0x3280;
+    pub const YUV_FULL_RANGE: i32 = 0x3282;
+    pub const YUV_NARROW_RANGE: i32 = 0x3283;
+    pub const CHROMA_HORIZONTAL_SITING_HINT: i32 = 0x327D;
+    pub const CHROMA_VERTICAL_SITING_HINT: i32 = 0x327E;
+    pub const CHROMA_SITING_0_5: i32 = 0x3285;
+}
+
+/// The attribute list for `eglCreateImageKHR(EGL_LINUX_DMA_BUF_EXT)` of all
+/// of `image`'s planes (`planes`: each one's descriptor, offset and stride)
+/// as one image: its DRM fourcc and modifier, and for NV12 its color space
+/// and range as hints for the driver's conversion. `None` for more than two
+/// planes.
+#[allow(dead_code)] // for the GPU executors built in
+pub(crate) fn egl_dma_buf_image_attribs(
+    image: &ExternalImage,
+    planes: &[(i32, u64, u32)],
+) -> Option<Vec<i32>> {
+    let size = image.size;
+    let (fd, offset, stride) = *planes.first()?;
+    let mut a = egl_dma_buf_attribs(
+        size.width,
+        size.height,
+        image.format.drm_fourcc(),
+        fd,
+        offset,
+        stride,
+        image.modifier,
+    );
+    a.pop(); // NONE
+    match planes {
+        [_] => {}
+        [_, (fd, offset, stride)] => {
+            a.extend([
+                egl::PLANE1_FD,
+                *fd,
+                egl::PLANE1_OFFSET,
+                *offset as i32,
+                egl::PLANE1_PITCH,
+                *stride as i32,
+            ]);
+            if image.modifier != DRM_FORMAT_MOD_INVALID {
+                a.extend([
+                    egl::PLANE1_MODIFIER_LO,
+                    image.modifier as u32 as i32,
+                    egl::PLANE1_MODIFIER_HI,
+                    (image.modifier >> 32) as u32 as i32,
+                ]);
+            }
+        }
+        _ => return None,
+    }
+    if image.format == ExternalFormat::Nv12 {
+        use YuvColorSpace::*;
+        let (space, range) = match image.yuv_color_space() {
+            Bt601Full => (egl::ITU_REC601, egl::YUV_FULL_RANGE),
+            Bt601Limited => (egl::ITU_REC601, egl::YUV_NARROW_RANGE),
+            Bt709Full => (egl::ITU_REC709, egl::YUV_FULL_RANGE),
+            Bt709Limited => (egl::ITU_REC709, egl::YUV_NARROW_RANGE),
+        };
+        // Chroma between its luma samples, as the plane textures sample it.
+        a.extend([
+            egl::YUV_COLOR_SPACE_HINT,
+            space,
+            egl::SAMPLE_RANGE_HINT,
+            range,
+            egl::CHROMA_HORIZONTAL_SITING_HINT,
+            egl::CHROMA_SITING_0_5,
+            egl::CHROMA_VERTICAL_SITING_HINT,
+            egl::CHROMA_SITING_0_5,
+        ]);
+    }
+    a.push(egl::NONE);
+    Some(a)
 }
 
 /// The attribute list for `eglCreateImageKHR(EGL_LINUX_DMA_BUF_EXT)` of one

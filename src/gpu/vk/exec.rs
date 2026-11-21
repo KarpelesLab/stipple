@@ -527,6 +527,13 @@ impl VkExecutor {
                     None
                 },
                 dedicated: dma_buf,
+                linear_pitch: if u32::from_ne_bytes(props[8..12].try_into().unwrap())
+                    == external::VENDOR_NVIDIA
+                {
+                    external::NVIDIA_LINEAR_PITCH
+                } else {
+                    1
+                },
                 ahb: if hardware_buffers {
                     ahb::Ahb::load(&vk, device)
                 } else {

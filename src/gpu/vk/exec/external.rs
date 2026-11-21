@@ -58,7 +58,16 @@ pub(super) const ACCESS_SHADER_READ: u32 = 0x20;
 /// `VK_QUEUE_FAMILY_EXTERNAL`: the image's memory comes from outside.
 const QUEUE_FAMILY_EXTERNAL: u32 = !1;
 pub(super) const SWIZZLE_IDENTITY: u32 = 0;
-pub(super) const SWIZZLE_ONE: u32 = 6;
+/// `VK_COMPONENT_SWIZZLE_ONE` (6 is `_A`, which left alpha as it was).
+pub(super) const SWIZZLE_ONE: u32 = 2;
+/// `VK_IMAGE_ASPECT_MEMORY_PLANE_0_BIT_EXT`.
+const ASPECT_MEMORY_PLANE_0: u32 = 0x80;
+/// The row alignment NVIDIA's driver samples a linear image with: it takes
+/// any explicit pitch, reports it back and copies with it, but samples rows
+/// a multiple of 32 bytes apart (an 80-byte pitch as 64), so other pitches
+/// are drawn from their pixels instead.
+pub(super) const NVIDIA_LINEAR_PITCH: u64 = 32;
+pub(super) const VENDOR_NVIDIA: u32 = 0x10de;
 
 #[repr(C)]
 struct ExternalMemoryImageCreateInfo {
@@ -83,6 +92,13 @@ struct DrmFormatModifierExplicitCreateInfo {
     modifier: u64,
     plane_count: u32,
     planes: *const SubresourceLayout,
+}
+
+#[repr(C)]
+struct ImageSubresource {
+    aspect_mask: u32,
+    mip_level: u32,
+    array_layer: u32,
 }
 
 #[repr(C)]
@@ -115,8 +131,10 @@ pub(super) type GetMemoryFdProperties =
 unsafe extern "C" {
     fn fcntl(fd: i32, cmd: i32, ...) -> i32;
     fn close(fd: i32) -> i32;
+    fn lseek(fd: i32, offset: i64, whence: i32) -> i64;
 }
 const F_DUPFD_CLOEXEC: i32 = 1030;
+const SEEK_END: i32 = 2;
 
 /// One plane imported: its image, memory and view.
 type Plane = (VkImage, VkDeviceMemory, VkImageView);
@@ -168,6 +186,9 @@ pub(super) struct Imports {
     /// are on, with `vkGetMemoryFdPropertiesKHR`.
     pub get_fd_properties: Option<GetMemoryFdProperties>,
     pub dedicated: bool,
+    /// What a linear plane's pitch must be a multiple of to be sampled as
+    /// laid out (0 or 1: anything).
+    pub linear_pitch: u64,
     /// Android hardware buffers' imports, where the device takes them.
     pub(super) ahb: Option<super::ahb::Ahb>,
     pub(super) map: HashMap<usize, Import>,
@@ -355,6 +376,11 @@ impl VkExecutor {
         h: u32,
     ) -> Option<Plane> {
         let get_props = self.externals.get_fd_properties?;
+        if modifier == DRM_FORMAT_MOD_LINEAR
+            && !(stride as u64).is_multiple_of(self.externals.linear_pitch.max(1))
+        {
+            return None;
+        }
         unsafe {
             let d = self.device;
             let plane = SubresourceLayout {
@@ -419,6 +445,14 @@ impl VkExecutor {
             else {
                 return fail(&self.vk);
             };
+            // The whole buffer is imported, not just what the image needs
+            // from its start: a plane at an offset (NV12's chroma) lies past
+            // that, and NVIDIA's GPU hangs reading outside the allocation
+            // (lavapipe maps the whole buffer either way).
+            let size = match lseek(fd, 0, SEEK_END) {
+                n if n > 0 => req.size.max(n as u64),
+                _ => req.size,
+            };
             // The allocation takes the descriptor it imports: a duplicate.
             let dup = fcntl(fd, F_DUPFD_CLOEXEC, 0);
             if dup < 0 {
@@ -443,7 +477,7 @@ impl VkExecutor {
             let ai = VkMemoryAllocateInfo {
                 sType: ST_MEMORY_ALLOCATE_INFO,
                 pNext: (&import as *const ImportMemoryFdInfo).cast(),
-                allocationSize: req.size,
+                allocationSize: size,
                 memoryTypeIndex: type_index,
             };
             let mut mem = NULL;
@@ -454,6 +488,39 @@ impl VkExecutor {
             if (self.vk.vkBindImageMemory)(d, img, mem, 0) != VK_SUCCESS {
                 (self.vk.vkFreeMemory)(d, mem, std::ptr::null());
                 return fail(&self.vk);
+            }
+            // A driver that takes a linear plane but lays its rows out
+            // otherwise (NVIDIA pads a 16-byte pitch to 32) would sample the
+            // wrong ones. (Its offset isn't compared: NVIDIA's driver samples
+            // at the one given but reports zero. A tiled layout's pitch is
+            // the modifier's business.)
+            if let Some(layout) = self
+                .vk
+                .vkGetImageSubresourceLayout
+                .filter(|_| modifier == DRM_FORMAT_MOD_LINEAR)
+            {
+                let sub = ImageSubresource {
+                    aspect_mask: ASPECT_MEMORY_PLANE_0,
+                    mip_level: 0,
+                    array_layer: 0,
+                };
+                let mut got = SubresourceLayout {
+                    offset,
+                    size: 0,
+                    row_pitch: stride as u64,
+                    array_pitch: 0,
+                    depth_pitch: 0,
+                };
+                layout(
+                    d,
+                    img,
+                    (&sub as *const ImageSubresource).cast(),
+                    (&mut got as *mut SubresourceLayout).cast(),
+                );
+                if got.row_pitch != stride as u64 {
+                    (self.vk.vkFreeMemory)(d, mem, std::ptr::null());
+                    return fail(&self.vk);
+                }
             }
             let alpha = if opaque {
                 SWIZZLE_ONE

@@ -682,8 +682,9 @@ impl State {
                 &format!("{QUAD_BOX}{}", external::QUAD_YUV_MAIN),
                 &["u_tex", "u_tex2", "u_m0", "u_m1", "u_m2"],
             )?;
-            // Only on Android is there anything to sample through it.
-            let quads_ext = if cfg!(target_os = "android") && external::has_oes_external() {
+            // Android's YUV buffers, and dma-bufs a driver samples no other
+            // way, are sampled through it.
+            let quads_ext = if external::has_oes_external() {
                 Program::with(
                     QUAD_VS,
                     QUAD_ATTRIBS,
@@ -1059,7 +1060,6 @@ impl State {
 
     /// [`draw_quads`](Self::draw_quads) sampling the external texture
     /// `tex` (`GL_TEXTURE_EXTERNAL_OES`, which converts YUV as it samples).
-    #[cfg(target_os = "android")]
     unsafe fn draw_quads_ext(&mut self, level: &Level, verts: &[f32], tex: GLuint, nearest: bool) {
         unsafe {
             let s = level.scissor;
@@ -1491,14 +1491,10 @@ impl State {
                             (Some(y), Some((uv, color))) => {
                                 self.draw_quads_yuv(&level, verts, y, uv, color, q.nearest)
                             }
-                            #[cfg(target_os = "android")]
                             (Some(t), None) if oes => {
                                 self.draw_quads_ext(&level, verts, t, q.nearest)
                             }
-                            _ => {
-                                let _ = oes;
-                                self.draw_quads(&level, verts, tex, q.nearest)
-                            }
+                            _ => self.draw_quads(&level, verts, tex, q.nearest),
                         }
                         levels.push(level);
                         continue;

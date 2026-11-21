@@ -1270,14 +1270,16 @@ CPU elsewhere, and the CPU is always the fallback.
   an external image (`ExternalImage::web_source`), imported by WebGPU
   (`importExternalTexture`) or handed to WebGL2's `texImage2D` each frame,
   and the camera preview draws its `<video>` that way. Run: the `dma-buf`
-  import on GLES (llvmpipe, and an NVIDIA GPU's own tiled buffers) and
-  Vulkan (lavapipe, NV12 included), the shared NV12 texture on WARP
+  import on GLES and Vulkan (llvmpipe and lavapipe, NV12 included; an
+  NVIDIA GPU, its own tiled buffers and `udmabuf`s, after fixing the
+  exporter's unsubmitted copy, imports of planes at an offset, pitches its
+  driver doesn't sample, its "external only" linear layout on GLES and
+  Vulkan's alpha swizzle: docs/gpu.md), the shared NV12 texture on WARP
   (Direct3D 11), the Android camera's buffers on the API 34 emulator with
   GLES (the picture right) and Vulkan (imported and drawn, but the
   emulator's gfxstream samples the three-plane buffers as NV12, scrambling
   the chroma: off there unless `debug.stipple.vk_ahb` is `1`). Left:
-  Vulkan's import of a tiled NVIDIA buffer samples nothing; Metal, the
-  Android camera and the web's sources to run on devices and in a browser
+  Metal, the Android camera and the web's sources to run on devices and in a browser
   with a video. Video frames (`stipple::video`, #54): VideoToolbox's NV12
   `CVPixelBuffer`s (H.264, HEVC) are `IOSurface` external images, drawn by
   Metal with nothing uploaded (run on an M5 Max, against the software

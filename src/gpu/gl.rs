@@ -1147,6 +1147,12 @@ mod dmabuf {
                     eglGetError()
                 ));
             }
+            // Making the image can move the texture into memory that can be
+            // shared (NVIDIA's driver does, into its block-linear layout),
+            // a copy queued but not submitted: another API (Vulkan) reading
+            // the buffer would find it empty, and nothing on the dma-buf
+            // makes it wait, so finish here.
+            glFinish();
             let (mut fourcc, mut planes, mut modifier) = (0i32, 0i32, 0u64);
             if export_query(dpy, img, &mut fourcc, &mut planes, &mut modifier) == 0 {
                 destroy_image(dpy, img);
