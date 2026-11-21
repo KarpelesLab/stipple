@@ -391,8 +391,9 @@ pub(super) struct Wayland {
     fns: Option<Fns>,
     support: Support,
     /// The format the compositor and the driver agree on (`None` inside:
-    /// none, read back), once worked out.
-    choice: RefCell<Option<Option<Choice>>>,
+    /// none, read back), once worked out: for opaque windows, and for
+    /// transparent ones (which need a format with alpha).
+    choice: RefCell<[Option<Option<Choice>>; 2]>,
     rings: HashMap<u32, Ring<Exported>>,
     /// The frame swizzled to `[B, G, R, A]`, for buffers in that order, and
     /// its size.
@@ -461,7 +462,7 @@ impl Wayland {
                     ..support
                 },
                 fns,
-                choice: RefCell::new(None),
+                choice: RefCell::new([None, None]),
                 rings: HashMap::new(),
                 swizzle: None,
                 devices,
@@ -533,7 +534,8 @@ impl VkExecutor {
     /// The format to make `sink`'s buffers in, worked out once.
     unsafe fn choice(&self, sink: &dyn Present) -> Option<Choice> {
         unsafe {
-            if let Some(c) = &*self.wayland.choice.borrow() {
+            let alpha = sink.alpha();
+            if let Some(c) = &self.wayland.choice.borrow()[alpha as usize] {
                 return c.clone();
             }
             let choice = if self.wayland.fns.is_none() {
@@ -550,7 +552,7 @@ impl VkExecutor {
                 }
                 let offered = dp::offered(&sink.tranches(), ours);
                 let mut planes = HashMap::new();
-                let picked = dp::choose_in(&offered, |fourcc, layout| {
+                let picked = dp::choose_in(&offered, alpha, |fourcc, layout| {
                     let format = vk_format(layout);
                     let mods = self.drawable(format, layout);
                     for &(m, n) in &mods {
@@ -579,7 +581,7 @@ impl VkExecutor {
                     })
                     .filter(|choice| self.probe(choice, sink))
             };
-            *self.wayland.choice.borrow_mut() = Some(choice.clone());
+            self.wayland.choice.borrow_mut()[alpha as usize] = Some(choice.clone());
             choice
         }
     }
@@ -838,7 +840,7 @@ impl VkExecutor {
                     Err(e) => {
                         // Read back from the next frame on.
                         dp::say_reading_back("Vulkan", &e);
-                        *self.wayland.choice.borrow_mut() = Some(None);
+                        self.wayland.choice.borrow_mut()[sink.alpha() as usize] = Some(None);
                         return Err(GpuError::Skipped);
                     }
                 };
@@ -855,7 +857,7 @@ impl VkExecutor {
                     Err(e) => {
                         image.free(self);
                         dp::say_reading_back("Vulkan", &e);
-                        *self.wayland.choice.borrow_mut() = Some(None);
+                        self.wayland.choice.borrow_mut()[sink.alpha() as usize] = Some(None);
                         Err(GpuError::Skipped)
                     }
                 }

@@ -2016,6 +2016,52 @@ jobs:
           echo "distinct colors: $colors"
           [ "$colors" -gt 16 ]
 
+      # A transparent window (the ARGB visual) under a compositing manager,
+      # presented with ${{ matrix.api }}: a swapchain with a premultiplied
+      # compositeAlpha, or an EGL surface whose config has alpha, keeps the
+      # frame's premultiplied alpha, so xcompmgr's gray root shows through
+      # the background: wholly at 0%, blended at 70% as through the CPU's
+      # frame, not at 100%. Not blocking yet.
+      - name: A transparent window presented with ${{ matrix.api }} (xcompmgr)
+        continue-on-error: true
+        env:
+          DISPLAY: ":99"
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          GALLIUM_DRIVER: llvmpipe
+        run: |
+          kill "$APP_PID" 2>/dev/null || true
+          sudo apt-get install -y xcompmgr
+          cargo build --release --example glass --features gl,vk
+          xcompmgr > visual_output/xcompmgr-${{ matrix.renderer }}.log 2>&1 &
+          CM_PID=$!
+          sleep 1
+          for r in ${{ matrix.renderer }} software; do
+            for o in 0 70 100; do
+              STIPPLE_RENDERER=$r ./target/release/examples/glass --opacity $o > visual_output/glass-$r-$o.log 2>&1 &
+              GLASS_PID=$!
+              sleep 5
+              import -window root -crop 960x640+0+0 +repage visual_output/stipple-x11-glass-$r-$o.png
+              kill "$GLASS_PID" 2>/dev/null || true
+              sleep 1
+            done
+          done
+          kill "$CM_PID" 2>/dev/null || true
+          LOG=visual_output/glass-${{ matrix.renderer }}-70.log
+          grep -v "raw key" "$LOG" | head -20
+          grep -q "stipple: presenting with ${{ matrix.api }} straight to the window" "$LOG"
+          if grep -q "can't keep a transparent window's alpha\|drawing on the CPU" "$LOG"; then
+            echo "::error::the transparent window's frames didn't go straight to it"
+            exit 1
+          fi
+          px() { convert "$1" -format '%[fx:round(255*p{20,20}.r)] %[fx:round(255*p{20,20}.g)] %[fx:round(255*p{20,20}.b)]' info:; }
+          for o in 0 70 100; do
+            gpu=$(px visual_output/stipple-x11-glass-${{ matrix.renderer }}-$o.png)
+            cpu=$(px visual_output/stipple-x11-glass-software-$o.png)
+            echo "background at $o%: ${{ matrix.api }} $gpu, CPU $cpu"
+            echo "$gpu $cpu" | awk '{ for (i = 1; i <= 3; i++) { d = $i - $(i + 3); if (d < -3 || d > 3) exit 1 } }'
+          done
+          [ "$(px visual_output/stipple-x11-glass-${{ matrix.renderer }}-0.png)" != "$(px visual_output/stipple-x11-glass-${{ matrix.renderer }}-100.png)" ]
+
       - name: Frame pacing drawn with ${{ matrix.api }}; idle, no GPU work
         env:
           DISPLAY: ":99"
@@ -2135,6 +2181,32 @@ jobs:
             2>&1 | tee visual_output/wl-occluded-${{ matrix.renderer }}.log
           grep -q 'occluded 0x[0-9a-f]* true (frame callback)' visual_output/wl-occluded-${{ matrix.renderer }}.log
           grep -q 'framepacing: hidden ok, shown again ok' visual_output/wl-occluded-${{ matrix.renderer }}.log
+          # A transparent window: its dma-bufs are of a format with alpha
+          # (AR24, AB24), so sway's background shows through the window's
+          # at 0%, and at 70% as through the CPU's frame.
+          cargo build --release --example glass --features gl,vk
+          for r in ${{ matrix.renderer }} software; do
+            for o in 0 70 100; do
+              STIPPLE_RENDERER=$r ./target/release/examples/glass --opacity $o > visual_output/wl-glass-$r-$o.log 2>&1 &
+              WL_APP=$!
+              sleep 5
+              grim visual_output/stipple-wayland-glass-$r-$o.png || echo "grim failed"
+              kill "$WL_APP" 2>/dev/null || true
+              sleep 1
+            done
+          done
+          GLOG=visual_output/wl-glass-${{ matrix.renderer }}-70.log
+          grep -v "raw key" "$GLOG" | head -20
+          grep -qE "stipple: presenting with ${{ matrix.api }} to the Wayland window through linux-dmabuf \((AR24|AB24)," "$GLOG"
+          ! grep -q "drawing on the CPU\|reading frames back" "$GLOG"
+          px() { convert "$1" -format '%[fx:round(255*p{40,200}.r)] %[fx:round(255*p{40,200}.g)] %[fx:round(255*p{40,200}.b)]' info:; }
+          for o in 0 70 100; do
+            gpu=$(px visual_output/stipple-wayland-glass-${{ matrix.renderer }}-$o.png)
+            cpu=$(px visual_output/stipple-wayland-glass-software-$o.png)
+            echo "glass background at $o%: ${{ matrix.api }} $gpu, CPU $cpu"
+            echo "$gpu $cpu" | awk '{ for (i = 1; i <= 3; i++) { d = $i - $(i + 3); if (d < -3 || d > 3) exit 1 } }'
+          done
+          [ "$(px visual_output/stipple-wayland-glass-${{ matrix.renderer }}-0.png)" != "$(px visual_output/stipple-wayland-glass-${{ matrix.renderer }}-100.png)" ]
 
       - name: Stop sway
         if: always()
@@ -2370,6 +2442,30 @@ jobs:
           cat "$LOG"
           grep -q "through linux-dmabuf" "$LOG"
           grep -q 'framepacing: ok' "$LOG"
+
+      # A transparent window's GPU frames go as dma-bufs of a format with
+      # alpha (AR24, AB24), the compositor blending them over what is
+      # behind (no screenshot here: the log only). Not blocking yet.
+      - name: A transparent window presented with ${{ matrix.api }} through linux-dmabuf
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          GALLIUM_DRIVER: llvmpipe
+          STIPPLE_RENDERER: ${{ matrix.renderer }}
+        run: |
+          cargo build --release --example glass --features gl,vk
+          LOG=visual_output/${{ matrix.compositor }}-glass-${{ matrix.renderer }}.log
+          STIPPLE_WAYLAND_DEBUG=1 ./target/release/examples/glass --opacity 50 > "$LOG" 2>&1 &
+          WL_APP=$!
+          sleep 8
+          kill "$WL_APP" 2>/dev/null || true
+          grep -v "raw key" "$LOG" | grep -E "stipple:|dma-buf|blur|transparent" | head -30
+          grep -qE "stipple: presenting with ${{ matrix.api }} to the Wayland window through linux-dmabuf \((AR24|AB24)," "$LOG"
+          if grep -q "drawing on the CPU\|reading frames back" "$LOG"; then
+            echo "::error::the transparent window's frames went through the CPU"
+            exit 1
+          fi
 
       # `Renderer::Auto` here: it tries Vulkan, finds lavapipe (a software
       # GPU, slower than the CPU renderer) and draws on the CPU, reading
@@ -3400,6 +3496,60 @@ jobs:
           $solid = [System.Drawing.Bitmap]::new((Join-Path $PWD "visual_output\glass-windows-100.png")).GetPixel(30, 120)
           Write-Host "background at 0%: $clear, at 100%: $solid"
           if ($clear.ToArgb() -eq $solid.ToArgb()) { throw "the transparent window looked the same at 0% and 100%" }
+
+      # The same window drawn with Direct3D 11 (WARP): a premultiplied
+      # composition swap chain shown over the window through
+      # DirectComposition. Over a magenta window: at 0% the magenta shows
+      # through, at 70% it is blended as through the CPU's frame, at 100% it
+      # doesn't show. Not blocking yet.
+      - name: A transparent window presented with Direct3D 11 (non-blocking)
+        continue-on-error: true
+        shell: powershell
+        run: |
+          cargo build --release --features d3d --example glass
+          # The magenta window, in a PowerShell of its own (the command
+          # encoded, so its quotes survive the command line).
+          $form = 'Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.Form; ' +
+            '$f.Text = "Backdrop"; $f.BackColor = [System.Drawing.Color]::FromArgb(255, 0, 255); ' +
+            '$f.FormBorderStyle = "None"; $f.StartPosition = "Manual"; ' +
+            '$f.Bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds; ' +
+            '[System.Windows.Forms.Application]::Run($f)'
+          $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($form))
+          $backdrop = Start-Process powershell -PassThru -ArgumentList '-NoProfile', '-STA', '-EncodedCommand', $encoded
+          Start-Sleep -Seconds 5
+          foreach ($r in 'd3d11', 'software') {
+            foreach ($o in 0, 70, 100) {
+              $env:STIPPLE_RENDERER = $r
+              .github\scripts\capture-window.ps1 -Exe target\release\examples\glass.exe `
+                -Out "visual_output\glass-$r-$o.png" -Title "Glass" -Arguments "--opacity $o" `
+                -Log "visual_output\glass-$r-$o.log" -Topmost
+            }
+          }
+          Remove-Item Env:\STIPPLE_RENDERER
+          Stop-Process -Id $backdrop.Id -Force -ErrorAction SilentlyContinue
+          Get-Content visual_output\glass-d3d11-70.log
+          if (-not (Select-String -Path visual_output\glass-d3d11-70.log -Pattern 'stipple: presenting with Direct3D 11 straight to the window' -Quiet)) { throw 'not presented with Direct3D 11' }
+          if (Select-String -Path visual_output\glass-d3d11-70.log -Pattern 'drawing on the CPU' -Quiet) { throw 'fell back to the CPU' }
+          Add-Type -AssemblyName System.Drawing
+          $px = @{}
+          foreach ($r in 'd3d11', 'software') {
+            foreach ($o in 0, 70, 100) {
+              $bmp = [System.Drawing.Bitmap]::new((Join-Path $PWD "visual_output\glass-$r-$o.png"))
+              $px["$r-$o"] = $bmp.GetPixel(30, 120)
+              $bmp.Dispose()
+            }
+          }
+          foreach ($o in 0, 70, 100) {
+            $g = $px["d3d11-$o"]; $c = $px["software-$o"]
+            Write-Host "background at ${o}%: Direct3D 11 $g, CPU $c"
+            if ([Math]::Abs($g.R - $c.R) -gt 4 -or [Math]::Abs($g.G - $c.G) -gt 4 -or [Math]::Abs($g.B - $c.B) -gt 4) { throw "Direct3D 11 and the CPU differ at ${o}%" }
+          }
+          # (On the runner what shows through has been white for the CPU's
+          # frame and Direct3D 11's alike, whether or not the magenta window
+          # is behind: said, not failed on, until that is understood.)
+          $clear = $px["d3d11-0"]
+          if (-not ($clear.R -gt 200 -and $clear.G -lt 60 -and $clear.B -gt 200)) { Write-Host "::warning::the magenta window doesn't show through at 0%: $clear" }
+          if ($px["d3d11-0"].ToArgb() -eq $px["d3d11-100"].ToArgb()) { throw "the transparent window looked the same at 0% and 100%" }
 
       # The reference app (examples/mediabrowser): its selftest off screen
       # (PNG of each step) and in a real Win32 window; then its window
@@ -7007,6 +7157,20 @@ jobs:
           STIPPLE_APK_FEATURES=gl bash examples/androiddemo/build-apk.sh x86_64 cameraview-gl.apk
           STIPPLE_APK_FEATURES=vk bash examples/androiddemo/build-apk.sh x86_64 cameraview-vk.apk
 
+      # On the same emulator, a translucent window (examples/glass) over the
+      # wallpaper, drawn on the CPU and with each GPU renderer
+      # (examples/glass/test-android.sh).
+      - name: Build glass on the CPU, with GLES and with Vulkan
+        env:
+          STIPPLE_APK_EXAMPLE: glass_android
+          STIPPLE_APK_MANIFEST: examples/glass/AndroidManifest.xml
+        run: |
+          # (test-android.sh reads the screenshots' pixels with ImageMagick.)
+          sudo apt-get install -y imagemagick
+          bash examples/androiddemo/build-apk.sh x86_64 glass.apk
+          STIPPLE_APK_FEATURES=gl bash examples/androiddemo/build-apk.sh x86_64 glass-gl.apk
+          STIPPLE_APK_FEATURES=vk bash examples/androiddemo/build-apk.sh x86_64 glass-vk.apk
+
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
@@ -7035,6 +7199,7 @@ jobs:
             bash examples/cameraview/test-on-device.sh cameraview.apk visual_output
             bash examples/cameraview/test-gpu.sh cameraview-gl.apk "OpenGL ES" visual_output/gl || echo "::warning::cameraview's preview didn't draw the camera's buffers with OpenGL ES (not blocking yet)"
             bash examples/cameraview/test-gpu.sh cameraview-vk.apk Vulkan visual_output/vk || echo "::warning::cameraview's preview didn't draw the camera's buffers with Vulkan (not blocking yet)"
+            bash examples/glass/test-android.sh visual_output/glass glass.apk glass-vk.apk Vulkan glass-gl.apk "OpenGL ES" || echo "::warning::glass's translucent window differed between the CPU and the GPU renderers (not blocking yet)"
 
       - name: Upload the screenshot and log
         uses: actions/upload-artifact@v4

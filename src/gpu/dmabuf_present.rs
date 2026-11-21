@@ -44,18 +44,28 @@ pub(crate) const FOURCCS: [(u32, Layout); 4] = [
     (ARGB8888, Layout::Bgra),
 ];
 
+/// Whether `fourcc` (one of `FOURCCS`) keeps an alpha channel.
+pub(crate) fn has_alpha(fourcc: u32) -> bool {
+    fourcc == ABGR8888 || fourcc == ARGB8888
+}
+
 /// The first of `FOURCCS` the compositor takes (`offered`) with a modifier
 /// the driver can draw (`drawable(fourcc, layout)`, its modifiers for that
 /// format, best first; LINEAR stands for "a linear image" where the driver
 /// can't say): the fourcc, how it's drawn, and the modifiers both take, in
 /// the driver's order. A compositor that gives no modifier for a format
 /// (`MOD_INVALID`) is taken to mean LINEAR is fine only if it says so too.
+/// A transparent window's buffers (`alpha`) are of a format with alpha.
 #[cfg_attr(not(feature = "vk"), allow(dead_code))]
 pub(crate) fn choose(
     offered: &[(u32, u64)],
+    alpha: bool,
     mut drawable: impl FnMut(u32, Layout) -> Vec<u64>,
 ) -> Option<(u32, Layout, Vec<u64>)> {
     FOURCCS.iter().find_map(|&(fourcc, layout)| {
+        if alpha && !has_alpha(fourcc) {
+            return None;
+        }
         let theirs: Vec<u64> = offered
             .iter()
             .filter(|(f, m)| *f == fourcc && *m != MOD_INVALID)
@@ -102,9 +112,10 @@ pub(crate) fn offered(tranches: &[Tranche], ours: &[u64]) -> Vec<Vec<(u32, u64)>
 #[cfg_attr(not(feature = "vk"), allow(dead_code))] // Vulkan's
 pub(crate) fn choose_in(
     offered: &[Vec<(u32, u64)>],
+    alpha: bool,
     mut drawable: impl FnMut(u32, Layout) -> Vec<u64>,
 ) -> Option<(u32, Layout, Vec<u64>)> {
-    offered.iter().find_map(|t| choose(t, &mut drawable))
+    offered.iter().find_map(|t| choose(t, alpha, &mut drawable))
 }
 
 /// A `dev_t` as `major:minor`, for logs.
@@ -265,23 +276,28 @@ mod tests {
             (ABGR8888, MOD_INVALID),
         ];
         // The driver draws XBGR as 7 or 9, preferring 9: only 7 is taken.
-        let pick = choose(
-            &offered,
-            |f, _| {
-                if f == XBGR8888 { vec![9, 7] } else { linear() }
-            },
-        );
+        let pick = choose(&offered, false, |f, _| {
+            if f == XBGR8888 { vec![9, 7] } else { linear() }
+        });
         assert_eq!(pick, Some((XBGR8888, Layout::Rgba, vec![7])));
         // Linear only: XBGR8888 linear.
-        let pick = choose(&offered, |_, _| linear());
+        let pick = choose(&offered, false, |_, _| linear());
         assert_eq!(pick, Some((XBGR8888, Layout::Rgba, vec![MOD_LINEAR])));
+        // A transparent window's: a format with alpha (ARGB linear, a blit:
+        // ABGR has no modifier).
+        let pick = choose(&offered, true, |_, _| linear());
+        assert_eq!(pick, Some((ARGB8888, Layout::Bgra, vec![MOD_LINEAR])));
+        assert_eq!(
+            choose(&[(XBGR8888, MOD_LINEAR)], true, |_, _| linear()),
+            None
+        );
         // ABGR without a modifier doesn't count; ARGB linear does (a blit).
         let offered = [(ABGR8888, MOD_INVALID), (ARGB8888, MOD_LINEAR)];
-        let pick = choose(&offered, |_, _| linear());
+        let pick = choose(&offered, false, |_, _| linear());
         assert_eq!(pick, Some((ARGB8888, Layout::Bgra, vec![MOD_LINEAR])));
         // Nothing in common.
-        assert_eq!(choose(&offered, |_, _| vec![5]), None);
-        assert_eq!(choose(&[], |_, _| linear()), None);
+        assert_eq!(choose(&offered, false, |_, _| vec![5]), None);
+        assert_eq!(choose(&[], false, |_, _| linear()), None);
     }
 
     #[test]
@@ -314,10 +330,10 @@ mod tests {
             ]
         );
         // The scanout tranche's modifier where the driver draws it...
-        let pick = choose_in(&o, |_, _| vec![MOD_LINEAR, 7, 9]);
+        let pick = choose_in(&o, false, |_, _| vec![MOD_LINEAR, 7, 9]);
         assert_eq!(pick, Some((XBGR8888, Layout::Rgba, vec![9])));
         // ...else the next tranche's, in the driver's order.
-        let pick = choose_in(&o, |_, _| vec![MOD_LINEAR, 7]);
+        let pick = choose_in(&o, false, |_, _| vec![MOD_LINEAR, 7]);
         assert_eq!(pick, Some((XBGR8888, Layout::Rgba, vec![MOD_LINEAR, 7])));
         // On another device: LINEAR from the main device's tranches.
         assert_eq!(

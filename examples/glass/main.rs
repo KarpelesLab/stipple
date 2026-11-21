@@ -8,6 +8,10 @@
 //!   vibrancy view on macOS, acrylic on Windows 11, KWin's blur or
 //!   `ext-background-effect` on Wayland, KDE's blur on X11).
 //! - `--opacity N` starts the background at `N` percent (default 70).
+//!
+//! The GPU renderers keep the window's alpha too (`STIPPLE_RENDERER=vulkan`,
+//! `gl`, `d3d11` or `metal`, built with that feature). On Android it's the
+//! `glass_android` example (`android.rs`), over the wallpaper.
 
 use stipple::prelude::*;
 
@@ -45,7 +49,7 @@ fn view(state: &Glass, cx: &mut Cx<Glass>) -> Element {
         .align(Align::Center, Align::Center)
 }
 
-fn main() {
+pub fn main() {
     let args: Vec<String> = std::env::args().collect();
     let blur = args.iter().any(|a| a == "--blur");
     let opacity = args
@@ -54,8 +58,13 @@ fn main() {
         .and_then(|i| args.get(i + 1))
         .and_then(|v| v.parse::<f64>().ok())
         .map_or(0.7, |p| (p / 100.0).clamp(0.0, 1.0));
-    App::new(Glass { opacity, blur }, view)
-        .title("Glass")
+    let app = App::new(Glass { opacity, blur }, view);
+    // On Android, an APK built with a GPU backend (`STIPPLE_APK_FEATURES=vk`
+    // for build-apk.sh) draws with it, straight to the window (there is no
+    // environment for STIPPLE_RENDERER there).
+    #[cfg(all(target_os = "android", any(feature = "vk", feature = "gl")))]
+    let app = app.renderer(stipple::render::Renderer::Gpu);
+    app.title("Glass")
         .logical_size(Size::new(480.0, 320.0))
         .transparent(true)
         .blur(blur)

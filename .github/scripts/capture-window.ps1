@@ -1,7 +1,8 @@
 # Launch a Stipple example, screenshot just its window, and stop it.
 # -Arguments are passed to the example; -Title is its window title; -Log, if
-# given, is where its standard error goes.
-param([string]$Exe, [string]$Out, [string]$Title = "Stipple", [string]$Arguments = "", [string]$Log = "")
+# given, is where its standard error goes. -Topmost raises the window over
+# every other one (its console's too) without needing the foreground.
+param([string]$Exe, [string]$Out, [string]$Title = "Stipple", [string]$Arguments = "", [string]$Log = "", [switch]$Topmost)
 
 New-Item -ItemType Directory -Force -Path (Split-Path $Out) | Out-Null
 $start = @{ FilePath = $Exe; PassThru = $true }
@@ -18,6 +19,7 @@ public static class Win {
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindowW(string cls, string title);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
   [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+  [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
   // The extended frame bounds exclude the invisible resize borders.
   [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr h, int attr, out RECT r, int size);
 }
@@ -27,6 +29,8 @@ public static class Win {
 $hwnd = [Win]::FindWindowW([NullString]::Value, $Title)
 if ($hwnd -eq [IntPtr]::Zero) { throw "no window titled '$Title'" }
 [Win]::SetForegroundWindow($hwnd) | Out-Null
+# HWND_TOPMOST; SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE.
+if ($Topmost) { [Win]::SetWindowPos($hwnd, [IntPtr](-1), 0, 0, 0, 0, 0x13) | Out-Null }
 Start-Sleep -Seconds 1
 $r = New-Object RECT
 [Win]::DwmGetWindowAttribute($hwnd, 9, [ref]$r, 16) | Out-Null

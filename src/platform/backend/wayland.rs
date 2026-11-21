@@ -1647,13 +1647,15 @@ impl Window for WaylandWindow {
         if !dmabuf::enabled() {
             return None;
         }
+        let alpha;
         {
             let mut conn = self.conn.lock().unwrap();
-            // The GPU renderers' frames are opaque: a transparent window is
-            // drawn on the CPU.
-            if !dmabuf::available(&conn) || backdrop::is_transparent(&conn, self.surface) {
+            if !dmabuf::available(&conn) {
                 return None;
             }
+            // A transparent window's buffers keep the frames' premultiplied
+            // alpha (a format with alpha, see `dmabuf_present::choose`).
+            alpha = backdrop::is_transparent(&conn, self.surface);
             toplevel::use_decor(&mut conn, self.toplevel);
             if conn.decor.title_height() > 0.0 && !self.content.borrow().available() {
                 return None;
@@ -1673,6 +1675,7 @@ impl Window for WaylandWindow {
                     content: self.content.clone(),
                     made: RefCell::new(Vec::new()),
                     explicit: Cell::new(None),
+                    alpha,
                 },
             )))
         });

@@ -367,7 +367,8 @@ pub struct WindowAttributes {
     /// the window shows through wherever the app paints with less than full
     /// alpha (a theme whose `palette.background` is translucent, say).
     /// `false` by default. Honored on macOS, Windows, X11 (with a compositing
-    /// manager running) and Wayland; see `docs/windows-and-cursors.md`.
+    /// manager running), Wayland and Android (over the wallpaper), by the
+    /// CPU and the GPU renderers; see `docs/windows-and-cursors.md`.
     pub transparent: bool,
     /// Blur what shows through a [`transparent`](Self::transparent) window,
     /// where the system offers it: a vibrancy view on macOS, the acrylic
@@ -586,10 +587,15 @@ impl WindowAttributes {
     }
 
     /// Whether the window keeps its frame's alpha: asked for transparency,
-    /// or for blur, which implies it. (The phones and the web have no
-    /// transparent windows.)
+    /// or for blur, which implies it. (iOS and the web have no transparent
+    /// windows.)
     #[cfg_attr(
-        not(any(target_os = "macos", target_os = "windows", target_os = "linux")),
+        not(any(
+            target_os = "macos",
+            target_os = "windows",
+            target_os = "linux",
+            target_os = "android"
+        )),
         allow(dead_code)
     )]
     pub(crate) fn is_transparent(&self) -> bool {
@@ -606,9 +612,14 @@ pub(crate) enum GpuLayer {
     #[cfg_attr(not(any(target_os = "macos", target_os = "ios")), allow(dead_code))]
     Metal(*mut std::ffi::c_void),
     /// A window (`HWND`) the renderer gives a DXGI swap chain (Windows); the
-    /// window stops painting its bitmap over it.
+    /// window stops painting its bitmap over it. With `alpha` (a transparent
+    /// window) the swap chain is a premultiplied one composed over the
+    /// desktop through DirectComposition.
     #[cfg_attr(not(all(target_os = "windows", feature = "d3d")), allow(dead_code))]
-    Hwnd(*mut std::ffi::c_void),
+    Hwnd {
+        hwnd: *mut std::ffi::c_void,
+        alpha: bool,
+    },
     /// The page's canvas, drawn into through `web/gpu.js` (the web).
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     Web,
@@ -616,8 +627,10 @@ pub(crate) enum GpuLayer {
     /// own socket, so a GPU renderer presents to the window over a libxcb
     /// connection of its own (`gpu::xcb`): a window id is the same on every
     /// connection to the server.
+    /// With `alpha` the window has the ARGB visual (it is transparent): its
+    /// frames keep their premultiplied alpha.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-    X11 { window: u32 },
+    X11 { window: u32, alpha: bool },
     /// A Wayland window, by its `wl_surface` id, and where the renderer
     /// hands its frames as `dma-buf`s (see [`crate::platform::dmabuf`]): the
     /// backend speaks the protocol itself, so there is no libwayland surface
@@ -631,12 +644,14 @@ pub(crate) enum GpuLayer {
     /// The activity's `ANativeWindow` (Android): the window is `size`
     /// pixels, and the app draws in its `content` rectangle (`[x0, y0, x1,
     /// y1]`, clear of the system bars unless edge to edge); the rest shows
-    /// the background.
+    /// the background. With `alpha` the window is translucent
+    /// (`RGBA_8888`): its frames keep their premultiplied alpha.
     #[cfg_attr(not(target_os = "android"), allow(dead_code))]
     Android {
         window: *mut std::ffi::c_void,
         size: (i32, i32),
         content: [i32; 4],
+        alpha: bool,
     },
 }
 

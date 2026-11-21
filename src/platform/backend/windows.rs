@@ -1400,6 +1400,10 @@ unsafe fn handle_message(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) -> Lresul
             let mut ps: PaintStruct = unsafe { std::mem::zeroed() };
             let hdc = unsafe { BeginPaint(hwnd, &mut ps) };
             unsafe { blit_frame(hwnd, hdc) };
+            // Under a transparent window's GPU frames: nothing.
+            if read_win(hwnd, |w| w.gpu && w.transparent) == Some(true) {
+                unsafe { backdrop::clear(hdc, &ps.rc_paint) };
+            }
             unsafe { EndPaint(hwnd, &ps) };
             // Painted: maybe uncloaked.
             occlusion::refresh(hwnd);
@@ -1906,15 +1910,21 @@ impl Window for WinWindow {
     }
     #[cfg(feature = "d3d")]
     fn gpu_layer(&self) -> Option<crate::platform::GpuLayer> {
-        // A flip-model swap chain on a window is opaque: a transparent
-        // window is drawn on the CPU.
-        if read_win(self.hwnd, |w| w.transparent) == Some(true) {
-            return None;
-        }
         // The renderer gives the window a flip-model swap chain and sizes its
-        // buffers to each frame; from here on the bitmap isn't painted.
+        // buffers to each frame; from here on the bitmap isn't painted. A
+        // transparent window's swap chain is a premultiplied one shown over
+        // the window through DirectComposition (a flip-model swap chain on a
+        // window is opaque): its own surface is cleared to transparent
+        // under it.
+        let (was, alpha) = read_win(self.hwnd, |w| (w.gpu, w.transparent))?;
         with_win(self.hwnd, |w| w.gpu = true);
-        Some(crate::platform::GpuLayer::Hwnd(self.hwnd))
+        if alpha && !was {
+            unsafe { InvalidateRect(self.hwnd, std::ptr::null(), 0) };
+        }
+        Some(crate::platform::GpuLayer::Hwnd {
+            hwnd: self.hwnd,
+            alpha,
+        })
     }
     #[cfg(feature = "d3d")]
     fn drop_gpu_layer(&self) {

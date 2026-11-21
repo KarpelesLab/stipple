@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The APK manifest for glass: a NativeActivity that loads
+     libstipple_android.so (built from the glass_android example), a
+     translucent window over the wallpaper. Build it with
+       STIPPLE_APK_EXAMPLE=glass_android \
+       STIPPLE_APK_MANIFEST=examples/glass/AndroidManifest.xml \
+       bash examples/androiddemo/build-apk.sh x86_64 glass.apk
+     The theme needn't be translucent: the window is made so at run time
+     (WindowAttributes::transparent), over the wallpaper. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.karpeleslab.stipple.glass"
+    android:versionCode="1" android:versionName="1.0">
+  <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34"/>
+  <application android:label="Stipple Glass" android:hasCode="true" android:debuggable="true"
+      android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+    <activity android:name="android.app.NativeActivity" android:exported="true"
+        android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density|locale|layoutDirection">
+      <meta-data android:name="android.app.lib_name" android:value="stipple_android"/>
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN"/>
+        <category android:name="android.intent.category.LAUNCHER"/>
+      </intent-filter>
+    </activity>
+  </application>
+</manifest>

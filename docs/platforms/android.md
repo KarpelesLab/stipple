@@ -549,6 +549,21 @@ with `STIPPLE_APK_EXAMPLE=cameraview_android
 STIPPLE_APK_MANIFEST=examples/cameraview/AndroidManifest.xml
 examples/androiddemo/build-apk.sh`. See [camera.md](../camera.md).
 
+## Translucent windows
+
+`App::transparent(true)` makes the activity's window translucent at run
+time (`Window.setFormat(PixelFormat.TRANSLUCENT)`; `NativeActivity` asks for
+an opaque one) and shows the wallpaper behind it (`FLAG_SHOW_WALLPAPER`):
+wherever the app paints with less than full alpha, the wallpaper shows. The
+window's buffers are `RGBA_8888`, premultiplied; a Vulkan swapchain keeps
+the alpha (`compositeAlpha` `INHERIT`), as does an EGL config with alpha.
+Under a translucent theme in the manifest (`android:windowIsTranslucent`)
+the activity below shows instead of the wallpaper. `App::blur(true)` blurs
+it on Android 12 and later (`Window.setBackgroundBlurRadius`) where the
+device blurs across windows. `examples/glass/android.rs` (`glass_android`)
+is the glass example as an APK; `examples/glass/test-android.sh` compares
+its CPU and GPU frames on a device.
+
 ## Share sheet and haptics
 
 `platform::share` sends an `ACTION_SEND` (`ACTION_SEND_MULTIPLE` for several

@@ -176,8 +176,10 @@ impl Exported {
 pub(super) struct Wayland {
     /// The export entry points (or why there are none), looked up once.
     fns: Option<Result<Fns, String>>,
-    /// Whether the compositor takes what the export makes (probed once).
-    taken: Option<bool>,
+    /// Whether the compositor takes what the export makes (probed once):
+    /// for opaque windows, and for transparent ones (in a format with
+    /// alpha).
+    taken: [Option<bool>; 2],
     rings: HashMap<u32, Ring<Exported>>,
     /// The display's `dev_t`s (primary, render node), where it says.
     devices: Option<Vec<u64>>,
@@ -290,11 +292,11 @@ unsafe fn export(state: &State, fns: Fns, w: i32, h: i32) -> Result<(Exported, B
 /// frame is drawn into it with red and blue swapped: XBGR8888 (the same
 /// bytes, alpha ignored) first, as a window is opaque, then ABGR8888, then
 /// the `[B, G, R]` orders (XRGB8888, ARGB8888: the same layout, drawn
-/// swapped).
-fn taken_as(offered: &[(u32, u64)], buffer: &Buffer) -> Option<(u32, bool)> {
+/// swapped). A transparent window's (`alpha`) only with alpha.
+fn taken_as(offered: &[(u32, u64)], buffer: &Buffer, alpha: bool) -> Option<(u32, bool)> {
+    let keeps = |f: u32| !alpha || dp::has_alpha(f);
     if buffer.fourcc != ABGR8888 && buffer.fourcc != XBGR8888 {
-        return offered
-            .contains(&(buffer.fourcc, buffer.modifier))
+        return (offered.contains(&(buffer.fourcc, buffer.modifier)) && keeps(buffer.fourcc))
             .then_some((buffer.fourcc, false));
     }
     [
@@ -304,13 +306,13 @@ fn taken_as(offered: &[(u32, u64)], buffer: &Buffer) -> Option<(u32, bool)> {
         (ARGB8888, true),
     ]
     .into_iter()
-    .find(|&(f, _)| offered.contains(&(f, buffer.modifier)))
+    .find(|&(f, _)| keeps(f) && offered.contains(&(f, buffer.modifier)))
 }
 
 /// [`taken_as`] in the first of the tranches (see `dp::offered`) that takes
 /// `buffer`.
-fn taken_in(offered: &[Vec<(u32, u64)>], buffer: &Buffer) -> Option<(u32, bool)> {
-    offered.iter().find_map(|t| taken_as(t, buffer))
+fn taken_in(offered: &[Vec<(u32, u64)>], buffer: &Buffer, alpha: bool) -> Option<(u32, bool)> {
+    offered.iter().find_map(|t| taken_as(t, buffer, alpha))
 }
 
 /// The function `name` of an extension, if EGL has it.
@@ -465,21 +467,22 @@ impl State {
     /// a small texture, imported once, the first time).
     pub(super) unsafe fn can_present_dmabuf(&mut self, sink: &dyn Present) -> bool {
         unsafe {
-            if let Some(taken) = self.wayland.taken {
+            let alpha = sink.alpha() as usize;
+            if let Some(taken) = self.wayland.taken[alpha] {
                 return taken;
             }
             let fns = match self.export_fns() {
                 Ok(f) => f,
                 Err(e) => {
                     dp::say_reading_back("OpenGL ES", &e);
-                    self.wayland.taken = Some(false);
+                    self.wayland.taken[alpha] = Some(false);
                     return false;
                 }
             };
             let offered = self.offered(sink);
             let taken = match export(self, fns, 64, 64) {
                 Ok((probe, buffer)) => {
-                    let as_ = taken_in(&offered, &buffer);
+                    let as_ = taken_in(&offered, &buffer, alpha == 1);
                     // And that it imports what it says it takes.
                     let imported = match as_ {
                         None => Err(format!(
@@ -506,7 +509,7 @@ impl State {
                     false
                 }
             };
-            self.wayland.taken = Some(taken);
+            self.wayland.taken[alpha] = Some(taken);
             taken
         }
     }
@@ -564,7 +567,7 @@ impl State {
             let offered = self.offered(sink);
             let i = ring.acquire(sink, || {
                 let (mut image, buffer) = export(self, fns, w, h).map_err(GpuError::Lost)?;
-                let Some((fourcc, swizzled)) = taken_in(&offered, &buffer) else {
+                let Some((fourcc, swizzled)) = taken_in(&offered, &buffer, sink.alpha()) else {
                     image.delete();
                     // Read back from the next frame on.
                     dp::say_reading_back(
@@ -575,7 +578,7 @@ impl State {
                             buffer.modifier
                         ),
                     );
-                    self.wayland.taken = Some(false);
+                    self.wayland.taken[sink.alpha() as usize] = Some(false);
                     return Err(GpuError::Skipped);
                 };
                 let buffer = Buffer { fourcc, ..buffer };
@@ -593,7 +596,7 @@ impl State {
                     Err(e) => {
                         image.delete();
                         dp::say_reading_back("OpenGL ES", &e);
-                        self.wayland.taken = Some(false);
+                        self.wayland.taken[sink.alpha() as usize] = Some(false);
                         Err(GpuError::Skipped)
                     }
                 }
@@ -731,24 +734,32 @@ mod tests {
         };
         let offered = [(ABGR8888, 5), (XBGR8888, 5), (ABGR8888, MOD_LINEAR)];
         assert_eq!(
-            taken_as(&offered, &buffer(ABGR8888, 5)),
+            taken_as(&offered, &buffer(ABGR8888, 5), false),
             Some((XBGR8888, false))
         );
         assert_eq!(
-            taken_as(&offered, &buffer(ABGR8888, MOD_LINEAR)),
+            taken_as(&offered, &buffer(ABGR8888, MOD_LINEAR), false),
             Some((ABGR8888, false))
         );
-        assert_eq!(taken_as(&offered, &buffer(ABGR8888, 6)), None);
-        assert_eq!(taken_as(&offered, &buffer(ARGB8888, 5)), None);
+        assert_eq!(taken_as(&offered, &buffer(ABGR8888, 6), false), None);
+        assert_eq!(taken_as(&offered, &buffer(ARGB8888, 5), false), None);
         // Only [B, G, R] orders: drawn swapped, opaque first.
         let offered = [(ARGB8888, 5), (XRGB8888, 5)];
         assert_eq!(
-            taken_as(&offered, &buffer(ABGR8888, 5)),
+            taken_as(&offered, &buffer(ABGR8888, 5), false),
             Some((XRGB8888, true))
         );
         assert_eq!(
-            taken_as(&[(ARGB8888, 5)], &buffer(XBGR8888, 5)),
+            taken_as(&[(ARGB8888, 5)], &buffer(XBGR8888, 5), false),
             Some((ARGB8888, true))
         );
+        // A transparent window's: with alpha only.
+        let offered = [(XBGR8888, 5), (ABGR8888, 5), (XRGB8888, 5)];
+        assert_eq!(
+            taken_as(&offered, &buffer(ABGR8888, 5), true),
+            Some((ABGR8888, false))
+        );
+        assert_eq!(taken_as(&[(XBGR8888, 5)], &buffer(ABGR8888, 5), true), None);
+        assert_eq!(taken_as(&[(XRGB8888, 5)], &buffer(XRGB8888, 5), true), None);
     }
 }
