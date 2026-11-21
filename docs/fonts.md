@@ -293,17 +293,53 @@ bitmap is resampled to the pixels it covers at the window's scale; a layered
 glyph stays vector. Layers in the text's color take the color it is drawn
 in. Both are cached, so a screen of emoji isn't rebuilt every frame.
 
+### Emoji sequences
+
+Many emoji are several characters drawn as one glyph: a skin tone after a
+hand (👍🏽), two regional indicators making a flag (🇯🇵), a keycap (1️⃣), people
+and objects joined by zero-width joiners (👩🏽‍💻, 🏳️‍🌈), tag characters
+(England's flag), a selector asking for the emoji form (❤️). Shaping finds
+these sequences in the text and gives each whole sequence to the first
+color font in the chain that has its first character, rather than each
+character to the first font that has it (the joiner from the text font, a
+digit from the text font, the selector from a symbol font), so the emoji
+font's ligature can form:
+
+- Noto Color Emoji and Segoe UI Emoji list their sequences in `GSUB`
+  (ligatures, and for Segoe UI Emoji's couples, chained substitutions into
+  layers drawn over each other); the sequence is matched with and without
+  its selectors, as fonts list them either way. Ligature lookups apply one
+  after the other over the whole run, as OpenType specifies, so a later one
+  sees an earlier one's ligatures.
+- Apple Color Emoji lists them in `morx`, Apple's own (AAT) substitution
+  table, read by hand in `src/render/morx.rs`: rearrangement, contextual,
+  ligature and noncontextual subtables, the chains' default features, for
+  horizontal text. It is read for fonts that have no `GSUB`.
+
+Joiners and selectors left over when the font has no glyph for a sequence
+are dropped, so an unknown ZWJ sequence shows as its emoji side by side.
+A lone emoji drawn as an emoji by default (😀, not ☺ without its selector)
+is also drawn from the color font, even when the text font has a
+monochrome one. Text with a sequence loads the system's `emoji` family if
+the chain doesn't have it yet, even when the text font covers every
+character (the digit and the keycap mark of 1️⃣).
+
+`fontdemo --emoji` draws each kind of sequence through the system's fonts
+and checks it is one emoji wide and in color; CI runs it on Linux (Noto
+Color Emoji), Windows (Segoe UI Emoji, which has no country flags: they stay
+letters there) and macOS (Apple Color Emoji).
+
 ## Limits
 
 - Shaping consults the fallbacks per character, and the shaper re-parses a
   face's tables for each lookup (oxideav-scribe issue #17), so long fallback
   chains make shaping new strings slower; shaped runs are cached per font and
   style.
-- Apple Color Emoji joins skin tones, flags and ZWJ sequences through its
-  `morx` (AAT) table, which isn't read: they show as their parts on macOS
-  (fonts whose sequences are in `GSUB`, as Noto Color Emoji's and Segoe UI
-  Emoji's are, join). In a `COLR` version 1 glyph, sweep gradients draw as
-  one color and composite modes other than source-over approximately.
+- `morx` insertion subtables aren't applied, nor features other than a
+  chain's defaults; `kerx` (AAT kerning) isn't read. Which characters are
+  emoji is approximated with ranges, not Unicode's full property tables.
+  In a `COLR` version 1 glyph, sweep gradients draw as one color and
+  composite modes other than source-over approximately.
 - OpenType features can't be chosen per text yet (`tnum`, `liga` off for
   code).
 - Variable fonts draw their default instance; weights come from separate

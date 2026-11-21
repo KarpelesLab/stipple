@@ -14,7 +14,7 @@ pub(crate) mod system;
 pub(crate) mod warm;
 
 #[cfg(test)]
-mod cff_tests;
+pub(crate) mod cff_tests;
 #[cfg(test)]
 mod color_tests;
 
@@ -661,7 +661,7 @@ impl Font {
         // A few rounds: Hangul tries the CJK family, then a Korean one.
         for _ in 0..3 {
             if !self.family.system_fallbacks
-                || !glyphs.iter().any(|g| g.glyph_id == 0)
+                || !(glyphs.iter().any(|g| g.glyph_id == 0) || self.wants_color_emoji(text))
                 || !self.load_system_fallbacks(text)
             {
                 break;
@@ -671,8 +671,18 @@ impl Font {
         glyphs
     }
 
+    /// Whether `text` has an emoji sequence (a keycap, a flag, an emoji
+    /// with its selector …) and the system's emoji family hasn't been
+    /// tried: its characters may all be in the text font (digits, a
+    /// monochrome heart), but the sequence asks for the color emoji.
+    fn wants_color_emoji(&self, text: &str) -> bool {
+        !self.chain().system.contains(&"emoji")
+            && !crate::render::emoji_seq::sequences(text).is_empty()
+    }
+
     /// Add to the chain the system fallbacks `text`'s missing characters
-    /// need and that haven't been tried. Whether the chain grew.
+    /// need and that haven't been tried, and the emoji family for its
+    /// emoji sequences. Whether the chain grew.
     fn load_system_fallbacks(&self, text: &str) -> bool {
         let chain = self.chain();
         let mut want: Vec<&'static str> = Vec::new();
@@ -696,6 +706,9 @@ impl Font {
             if !covered {
                 want.push(generic);
             }
+        }
+        if !want.contains(&"emoji") && self.wants_color_emoji(text) {
+            want.push("emoji");
         }
         // While this thread takes text input, a fallback that isn't ready
         // loads in the background (see `warm`): the text goes without it

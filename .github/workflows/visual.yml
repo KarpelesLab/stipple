@@ -675,7 +675,7 @@ jobs:
       - name: Install Xvfb, ImageMagick, fonts
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb imagemagick xdotool fonts-dejavu-core fonts-liberation fonts-noto-cjk
+          sudo apt-get install -y xvfb imagemagick xdotool fonts-dejavu-core fonts-liberation fonts-noto-cjk fonts-noto-color-emoji
 
       - name: Build the font demo
         run: cargo build --release --example fontdemo --example richtext --example textflow --example richeditor
@@ -700,6 +700,16 @@ jobs:
           # The rich text editor: toolbar edits, the image drawn, both exports.
           ./target/release/examples/richeditor --check | tee visual_output/richeditor-check.log
           grep -q 'richeditor: ok' visual_output/richeditor-check.log
+
+      # Color emoji through the system's fonts: Noto Color Emoji's CBDT
+      # bitmaps, its skin tones, flags, keycaps and ZWJ sequences joined by
+      # its GSUB. Each sequence must be one emoji wide (one glyph, not its
+      # parts) and drawn in color.
+      - name: Color emoji and joined sequences (Noto Color Emoji)
+        continue-on-error: true
+        run: |
+          ./target/release/examples/fontdemo --emoji --emoji-png visual_output/stipple-x11-emoji.png | tee visual_output/emoji-check.log
+          grep -q 'fontdemo: emoji ok' visual_output/emoji-check.log
 
       - name: Start Xvfb
         run: |
@@ -3516,6 +3526,18 @@ jobs:
           timeout 60 ./target/release/examples/fontdemo.exe --check | tee fonts-check.log
           grep -q 'fontdemo: ok' fonts-check.log
 
+      # Color emoji through the system's fonts: Segoe UI Emoji's COLR glyphs,
+      # its skin tones, keycaps and ZWJ sequences joined by its GSUB. Each
+      # sequence must be one emoji wide (one glyph, not its parts) and drawn
+      # in color; country flags may stay letters, as Segoe UI Emoji has none.
+      - name: Color emoji and joined sequences (Segoe UI Emoji)
+        continue-on-error: true
+        shell: bash
+        run: |
+          mkdir -p visual_output
+          timeout 120 ./target/release/examples/fontdemo.exe --emoji --emoji-png visual_output/stipple-windows-emoji.png | tee emoji-check.log
+          grep -q 'fontdemo: emoji ok' emoji-check.log
+
       - name: Screenshot the mirrored UI
         shell: powershell
         run: |
@@ -4621,6 +4643,17 @@ jobs:
           [ -n "$win" ]
           screencapture -x -o -l "$win" visual_output/stipple-macos-bidi-mirror.png
           kill "$PID" 2>/dev/null || true
+
+      # Color emoji through the system's fonts: Apple Color Emoji's sbix
+      # bitmaps, its skin tones, flags, keycaps and ZWJ sequences joined by
+      # its morx table. Each sequence must be one emoji wide (one glyph, not
+      # its parts) and drawn in color.
+      - name: Color emoji and joined sequences (Apple Color Emoji)
+        continue-on-error: true
+        run: |
+          mkdir -p visual_output
+          perl -e 'alarm 120; exec @ARGV' ./target/release/examples/fontdemo --emoji --emoji-png visual_output/stipple-macos-emoji.png | tee emoji-check.log
+          grep -q 'fontdemo: emoji ok' emoji-check.log
 
       # From outside the app, as VoiceOver reads it: axprobe
       # (.github/a11y/macos/axprobe.swift) reads a running touchdemo's tree

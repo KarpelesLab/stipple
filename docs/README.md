@@ -60,6 +60,7 @@ How to build, package and run on each platform, and what works there today.
 | Mirrored right-to-left layouts | ✅ ²⁵ | ✅ ²⁵ | ✅ ²⁵ | ✅ ²⁵ | ✅ ²⁵ | ✅ ²⁵ |
 | System fonts by family name | ✅ ³⁴ | ✅ ³⁴ | ✅ ³⁴ | ✅ ¹⁰ | ✅ ¹⁰ | — ³⁴ |
 | Bold, italic, per-element fonts, fallbacks, text decorations | ✅ ³⁵ | ✅ ³⁵ | ✅ ³⁵ | ✅ ³⁵ | ✅ ³⁵ | ✅ ³⁵ |
+| Color emoji, sequences as one glyph (skin tones, flags, keycaps, ZWJ) | ✅ ⁹⁷ | ✅ ⁹⁷ | ✅ ⁹⁷ | ✅ ⁹⁷ | ✅ ⁹⁷ | ✅ ⁹⁷ |
 | Text flowing around floats, shapes and images' opaque pixels | ✅ ⁷⁵ | ✅ ⁷⁵ | ✅ ⁷⁵ | ✅ ⁷⁵ | ✅ ⁷⁵ | ✅ ⁷⁵ |
 | Custom-paint canvases, repainting only what changed | ✅ ⁴¹ | ✅ ⁴¹ | ✅ ⁴¹ | ✅ ¹⁰ | ✅ ¹⁰ | ✅ ¹⁰ |
 | Memoized subtrees, animation frames without a rebuild, painting only what shows | ✅ ⁶⁹ | ✅ ⁶⁹ | ✅ ⁶⁹ | ✅ ⁶⁹ | ✅ ⁶⁹ | ✅ ⁶⁹ |
@@ -850,6 +851,15 @@ a second launch reaches the owner over a private `dbus-daemon` in `cargo
 test`, and CI (not blocking yet) packages and installs `instancedemo` and
 lets a private bus start it for `gdbus call` (passing locally under Xvfb).
 See [os-integration.md](os-integration.md#one-instance-reopening-and-the-dock).
+
+⁹⁷ Shared code (shaping and the CPU text path): each emoji sequence goes
+whole to the color font that has it and is joined by its `GSUB` (Noto Color
+Emoji, Segoe UI Emoji) or `morx` (Apple Color Emoji, read by hand). CI's
+`fontdemo --emoji` draws them through the system's fonts on Linux, Windows
+and macOS and checks each is one emoji wide and in color (Segoe UI Emoji has
+no country flags: they stay letters on Windows); iOS (Apple Color Emoji), Android
+and the web (the fonts the app passes) use the same code, untested there.
+See [fonts.md](fonts.md#emoji-sequences).
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled;

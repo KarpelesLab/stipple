@@ -127,6 +127,12 @@ fn sbix_bitmaps_fill_their_box() {
 /// A `GSUB` with a `dlig` ligature (glyphs 1 2 → 2) and a `liga` one
 /// (2 1 → 1), under `DFLT`.
 fn gsub() -> Vec<(&'static [u8; 4], Vec<u8>)> {
+    gsub_with(b"dlig", [1, 2, 2], [2, 1, 1])
+}
+
+/// A `GSUB` with lookup 0 (`first` feature) and lookup 1 (`liga`), each a
+/// ligature `[first glyph, second glyph, ligature]`, under `DFLT`.
+fn gsub_with(first: &[u8; 4], l0: [i32; 3], l1: [i32; 3]) -> Vec<(&'static [u8; 4], Vec<u8>)> {
     // One LigatureSubst format 1 lookup: `first second` → `out`.
     let lookup = |first: i32, second: i32, out: i32| {
         // Lookup header (8), subtable at 8: format, coverage at 8,
@@ -139,14 +145,14 @@ fn gsub() -> Vec<(&'static [u8; 4], Vec<u8>)> {
         l.extend(words(&[out, 2, second]));
         l
     };
-    let (dlig, liga) = (lookup(1, 2, 2), lookup(2, 1, 1));
+    let (dlig, liga) = (lookup(l0[0], l0[1], l0[2]), lookup(l1[0], l1[1], l1[2]));
     // ScriptList: DFLT → default LangSys with features 0 and 1.
     let mut scripts = words(&[1]);
     scripts.extend_from_slice(b"DFLT");
     scripts.extend(words(&[8, 4, 0, 0, 0xFFFF, 2, 0, 1]));
     // FeatureList: dlig → lookup 0, liga → lookup 1.
     let mut features = words(&[2]);
-    features.extend_from_slice(b"dlig");
+    features.extend_from_slice(first);
     features.extend(words(&[14]));
     features.extend_from_slice(b"liga");
     features.extend(words(&[20]));
@@ -182,6 +188,22 @@ fn only_default_ligatures_form() {
     );
 }
 
+/// Ligature lookups apply one after the other over the whole run: the
+/// second sees the first's ligatures (X Y → Y, then Y Y → X).
+#[test]
+fn ligature_lookups_apply_in_turn() {
+    let font = Font::from_bytes(ttf_with(
+        "Lookup Order",
+        ['X', 'Y'],
+        gsub_with(b"liga", [1, 2, 2], [2, 2, 1]),
+    ))
+    .unwrap();
+    let ids = |s: &str| -> Vec<u16> { font.shaped(s, 16.0).iter().map(|g| g.glyph_id).collect() };
+    assert_eq!(ids("XYY"), [1]);
+    assert_eq!(ids("YY"), [1]);
+    assert_eq!(ids("XY"), [2]);
+}
+
 /// Apple Color Emoji (`sbix`) draws emoji in color, where the system has
 /// it.
 #[test]
@@ -211,4 +233,141 @@ fn apple_color_emoji_draws_in_color() {
         })
         .count();
     assert!(yellow > 200, "{yellow} yellow pixels");
+}
+
+/// Real emoji sequences: skin tone, flag, keycap, ZWJ ones (one with a
+/// skin tone, one with a selector inside), the rainbow
+/// flag (selector and joiner), England's tag flag, a heart with its
+/// selector. `true` for the ones every system font joins (Segoe UI Emoji
+/// has no country flags, by design).
+pub(crate) const SEQUENCES: &[(&str, &str, bool)] = &[
+    ("skin tone", "\u{1F44D}\u{1F3FD}", true),
+    ("flag", "\u{1F1EF}\u{1F1F5}", false),
+    ("keycap", "1\u{FE0F}\u{20E3}", true),
+    ("technologist", "\u{1F469}\u{1F3FD}\u{200D}\u{1F4BB}", true),
+    (
+        "couple with heart",
+        "\u{1F469}\u{200D}\u{2764}\u{FE0F}\u{200D}\u{1F468}",
+        true,
+    ),
+    ("rainbow flag", "\u{1F3F3}\u{FE0F}\u{200D}\u{1F308}", true),
+    (
+        "England",
+        "\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}",
+        true,
+    ),
+    ("heart", "\u{2764}\u{FE0F}", true),
+];
+
+/// Checks an installed emoji font joins [`SEQUENCES`], alone and as the
+/// fallback of a text font, and draws them in color. Returns the names of
+/// the sequences that didn't join, or `None` when the font isn't there.
+fn joins_sequences(paths: &[&str]) -> Option<Vec<&'static str>> {
+    let bytes = paths.iter().find_map(|p| std::fs::read(p).ok())?;
+    let emoji = Font::from_bytes(bytes).ok()?;
+    let text = super::cff_tests::ttf_with("Emoji Host", ['a', 'b'], vec![]);
+    let host = Font::from_bytes(text)
+        .unwrap()
+        .with_fallbacks(std::slice::from_ref(&emoji));
+    let mut split = Vec::new();
+    for &(name, seq, _) in SEQUENCES {
+        let alone = emoji.shaped(seq, 40.0);
+        let hosted = host.shaped(&format!("a{seq}b"), 40.0);
+        eprintln!(
+            "{name}: alone {:?}, hosted {:?}",
+            alone.iter().map(|g| g.glyph_id).collect::<Vec<_>>(),
+            hosted
+                .iter()
+                .map(|g| (g.face_idx, g.glyph_id))
+                .collect::<Vec<_>>()
+        );
+        // One glyph that takes room (Apple Color Emoji leaves an empty one
+        // after some of its ligatures).
+        let drawn = |glyphs: &[oxideav_scribe::PositionedGlyph]| {
+            glyphs.iter().filter(|g| g.x_advance > 0.0).count()
+        };
+        let alone: Vec<_> = alone.into_iter().filter(|g| g.x_advance > 0.0).collect();
+        if drawn(&alone) != 1 {
+            split.push(name);
+            continue;
+        }
+        // The same glyph between the host's letters, from the emoji face.
+        let hosted: Vec<_> = hosted.into_iter().filter(|g| g.x_advance > 0.0).collect();
+        assert_eq!(hosted.len(), 3, "{name} between letters");
+        assert_eq!(hosted[1].glyph_id, alone[0].glyph_id, "{name} hosted");
+        assert_eq!(hosted[1].face_idx, 1, "{name} from the emoji face");
+        // One emoji wide.
+        let one = emoji.measure("\u{1F600}", 40.0).width;
+        let w = host.measure(seq, 40.0).width;
+        assert!(
+            (w - one).abs() < one * 0.25,
+            "{name}: {w} wide, one emoji {one}"
+        );
+        // Drawn in color: plenty of saturated pixels.
+        let mut scene = Scene::new(Size::new(80.0, 80.0));
+        scene.fill_text(
+            seq,
+            Point::new(5.0, 5.0),
+            &TextPaint::new(&host, 48.0, Color::BLACK),
+        );
+        let px = SoftwareRenderer::new()
+            .background(Color::WHITE)
+            .render(scene, ScaleFactor::IDENTITY);
+        let colored = (0..80u32)
+            .flat_map(|y| (0..80u32).map(move |x| (x, y)))
+            .filter(|&(x, y)| {
+                px.pixel(x, y).is_some_and(|p| {
+                    let (hi, lo) = (p[0].max(p[1]).max(p[2]), p[0].min(p[1]).min(p[2]));
+                    hi as i32 - lo as i32 > 24
+                })
+            })
+            .count();
+        assert!(colored > 100, "{name}: {colored} colored pixels");
+    }
+    Some(split)
+}
+
+fn assert_joined(font: &str, split: Option<Vec<&'static str>>) {
+    let Some(split) = split else {
+        eprintln!("{font} isn't installed: skipped");
+        return;
+    };
+    for &(name, _, always) in SEQUENCES {
+        assert!(!always || !split.contains(&name), "{font} split the {name}");
+    }
+    eprintln!("{font}: split {split:?}");
+}
+
+/// Noto Color Emoji (`CBDT`, its sequences in `GSUB`), where installed
+/// (Linux): every sequence joins.
+#[test]
+fn noto_color_emoji_joins_sequences() {
+    let split = joins_sequences(&[
+        "/usr/share/fonts/noto-emoji/NotoColorEmoji.ttf",
+        "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
+        "/usr/share/fonts/google-noto-emoji/NotoColorEmoji.ttf",
+        "/system/fonts/NotoColorEmoji.ttf",
+    ]);
+    if let Some(split) = &split {
+        assert!(split.is_empty(), "Noto Color Emoji split {split:?}");
+    }
+    assert_joined("Noto Color Emoji", split);
+}
+
+/// Segoe UI Emoji (`COLR`, `GSUB`), on Windows.
+#[test]
+fn segoe_ui_emoji_joins_sequences() {
+    let split = joins_sequences(&["C:\\Windows\\Fonts\\seguiemj.ttf"]);
+    assert_joined("Segoe UI Emoji", split);
+}
+
+/// Apple Color Emoji (`sbix`, its sequences in `morx`), on macOS: every
+/// sequence joins.
+#[test]
+fn apple_color_emoji_joins_sequences() {
+    let split = joins_sequences(&["/System/Library/Fonts/Apple Color Emoji.ttc"]);
+    if let Some(split) = &split {
+        assert!(split.is_empty(), "Apple Color Emoji split {split:?}");
+    }
+    assert_joined("Apple Color Emoji", split);
 }

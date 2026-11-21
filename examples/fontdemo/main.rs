@@ -13,8 +13,15 @@
 //! (Noto Sans CJK on Linux: CFF outlines in a collection), which the font
 //! loads when that row first needs them.
 //!
+//! `--emoji` checks emoji sequences instead (see `emoji.rs`): skin tones,
+//! flags, keycaps and ZWJ sequences each drawn as one glyph, in color,
+//! through the system's fonts; it prints `fontdemo: emoji ok` and exits.
+//! `--emoji-png PATH` saves them in a strip.
+//!
 //! Rows are `ROW` high, row `k` spanning y = 16 + `ROW`·k, so the CI checks
 //! (the `visual-fonts` job) look at fixed places.
+
+mod emoji;
 
 use stipple::prelude::*;
 
@@ -239,6 +246,20 @@ fn main() {
                 .collect();
             let mono = if f.monospace { " [mono]" } else { "" };
             println!("{}{mono}: {}", f.name, styles.join(" "));
+        }
+        return;
+    }
+    if args.iter().any(|a| a == "--emoji") {
+        let out = args
+            .iter()
+            .position(|a| a == "--emoji-png")
+            .and_then(|i| args.get(i + 1));
+        match emoji::check(out.map(String::as_str)) {
+            Ok(()) => println!("fontdemo: emoji ok"),
+            Err(e) => {
+                println!("fontdemo: emoji FAILED: {e}");
+                std::process::exit(1);
+            }
         }
         return;
     }

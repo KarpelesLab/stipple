@@ -107,7 +107,7 @@ fn ttf(family: &str, chars: [char; 2]) -> Vec<u8> {
 }
 
 /// [`ttf`] with `extra` tables (color, substitution) added.
-pub(super) fn ttf_with(
+pub(crate) fn ttf_with(
     family: &str,
     chars: [char; 2],
     extra: Vec<(&'static [u8; 4], Vec<u8>)>,

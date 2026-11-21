@@ -861,9 +861,12 @@ abstraction is frozen at the end of Phase 2.
 - ✅ **Color emoji, default ligatures, ellipsis** (#76, #93, #95): *`sbix`
   (Apple Color Emoji) and `COLR`/`CPAL` v0 and v1 glyphs drawn in color;
   only default-on ligature features (no `dlig`/`hlig`); `max_lines` and
-  `ellipsis` (end, middle) on text, read in full by screen readers. Apple's
-  `morx` sequences (skin tones, ZWJ, flags) and per-text OpenType features
-  are still to come.*
+  `ellipsis` (end, middle) on text, read in full by screen readers. Emoji
+  sequences (skin tones, flags, keycaps, ZWJ, tags) drawn as one glyph:
+  each sequence shaped in the color font that has it, joined by its `GSUB`
+  or, for Apple Color Emoji, its `morx` (read by hand); checked on CI with
+  Noto Color Emoji, Segoe UI Emoji and Apple Color Emoji
+  (`fontdemo --emoji`). Per-text OpenType features are still to come.*
 - ✅ **Text flowing around shapes**: an engine laying plain and rich text
   (runs, inline images, bidi) into a region around exclusions, line band by
   line band, a band split into pieces around a shape in the middle and
