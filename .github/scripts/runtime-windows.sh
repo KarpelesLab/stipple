@@ -83,7 +83,7 @@ if [ "$mode" = x11 ]; then
   eventually "x11_title $b | grep -qF 'Stipple — B ✓ retitled'"
   eventually "xprop -id $a WM_NORMAL_HINTS | grep -q 'resize increment: 8 by 16'"
   eventually "xdotool getwindowgeometry $b | grep -q 'Position: 360,260'"
-  eventually "xdotool getwindowgeometry $b | grep -q 'Geometry: 300x200'"
+  eventually "xdotool getwindowgeometry $b | grep -q 'Geometry: 400x300'"
   xprop -id "$a" _NET_WM_NAME WM_NAME WM_NORMAL_HINTS
   xdotool getwindowgeometry "$b"
 fi
@@ -106,7 +106,7 @@ wait_for "multiwindow: step 3"
 # platform lets apps place windows), C as it opened.
 grep "multiwindow: info" "$log"
 if [ "$mode" != wayland ]; then
-  grep -q "multiwindow: info WindowId(1) pos=360,260 inner=300x200" "$log"
+  grep -q "multiwindow: info WindowId(1) pos=360,260 inner=400x300" "$log"
 fi
 grep -q "multiwindow: info WindowId(2) " "$log"
 
@@ -133,7 +133,7 @@ if [ "$mode" != log ]; then
 fi
 if [ "$mode" = log ]; then
   # Maximized, B goes back to where it was moved and resized.
-  grep -q "multiwindow: restored WindowId(1) maximized=true pos=360,260 inner=300x200" "$log"
+  grep -q "multiwindow: restored WindowId(1) maximized=true pos=360,260 inner=400x300" "$log"
 fi
 wait_for "multiwindow: event loop exited"
 wait "$pid"
@@ -146,7 +146,7 @@ grep -q "stipple-window: closed " "$log"
 if [ "$mode" = log ]; then
   grep -q 'stipple-window: title .*"Stipple — A step 1"' "$log"
   grep -q 'stipple-window: title .*"Stipple — B ✓ retitled"' "$log"
-  grep -q "stipple-window: frame .* pos=360,260 inner=300x200" "$log"
+  grep -q "stipple-window: frame .* pos=360,260 inner=400x300" "$log"
   grep -q "stipple-window: increments .* 8x16" "$log"
   grep -q "stipple-window: activate " "$log"
   # Every window has the menu bar: one per window on Windows, the app's one

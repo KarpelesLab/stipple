@@ -289,10 +289,25 @@ pub struct WindowAttributes {
     /// The color behind the content, for any window area the app doesn't draw.
     /// Honored on iOS, where the safe area leaves such areas around the content.
     pub background: Option<Color>,
-    /// Smallest inner size the user can resize to, in logical pixels.
+    /// Smallest inner size the user can resize to, in logical pixels. With
+    /// [`layout_limits`](Self::layout_limits) (the default) it is a floor
+    /// under the size the content's layout needs.
     pub min_size: Option<Size>,
-    /// Largest inner size the user can resize to, in logical pixels.
+    /// Largest inner size the user can resize to, in logical pixels. With
+    /// [`layout_limits`](Self::layout_limits) it is a ceiling over the size
+    /// the content has a use for, but never under the minimum.
     pub max_size: Option<Size>,
+    /// Whether the App also limits the window's size by its content's
+    /// layout (`true` by default): no smaller than the content fits in
+    /// without overflowing, no larger than it has a use for where that is
+    /// finite. The App keeps them up to date as the content changes, and
+    /// resizes the window into them. See `docs/layout.md`, *Window size
+    /// limits*. Backends ignore it: the App hands them the limits.
+    pub layout_limits: bool,
+    /// Open the window at its content's natural size (its text unwrapped,
+    /// its lists at full length, within the limits) instead of
+    /// [`logical_size`](Self::logical_size). `false` by default.
+    pub natural_size: bool,
     /// Open maximized, with [`position`](Self::position) and
     /// [`logical_size`](Self::logical_size) as the bounds it restores to.
     pub maximized: bool,
@@ -369,6 +384,8 @@ impl Default for WindowAttributes {
             background: None,
             min_size: None,
             max_size: None,
+            layout_limits: true,
+            natural_size: false,
             maximized: false,
             fullscreen: false,
             icon: None,
@@ -437,6 +454,21 @@ impl WindowAttributes {
     /// Set the largest inner size, in logical pixels, the user can resize to.
     pub fn max_size(mut self, size: Size) -> Self {
         self.max_size = Some(size);
+        self
+    }
+
+    /// Whether the window's size also follows its content's layout (`true`
+    /// by default); see [`layout_limits`](Self#structfield.layout_limits).
+    pub fn layout_limits(mut self, on: bool) -> Self {
+        self.layout_limits = on;
+        self
+    }
+
+    /// Open the window at its content's natural size instead of
+    /// [`logical_size`](Self::logical_size); see
+    /// [`natural_size`](Self#structfield.natural_size).
+    pub fn natural_size(mut self, on: bool) -> Self {
+        self.natural_size = on;
         self
     }
 
@@ -804,7 +836,8 @@ pub trait Window {
     /// Set or clear the smallest inner size, in logical pixels. Default: a no-op.
     fn set_min_size(&self, _size: Option<Size>) {}
 
-    /// Set or clear the largest inner size, in logical pixels. Default: a no-op.
+    /// Set or clear the largest inner size, in logical pixels; an infinite
+    /// width or height leaves that side unlimited. Default: a no-op.
     fn set_max_size(&self, _size: Option<Size>) {}
 
     /// Maximize or restore the window. Default: a no-op.

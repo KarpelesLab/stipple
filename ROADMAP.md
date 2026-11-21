@@ -2239,6 +2239,14 @@ Most input only works on X11 today.
 - ✅ Aspect ratio (#96): `Element::aspect_ratio`, the height following a
   decided width (a column's, a grid cell's, a row's share) or the width a
   fixed height, as CSS's `aspect-ratio`.
+- ✅ Window size from the layout: a window is no smaller than its content
+  fits in without overflowing and no larger than it has a use for (where
+  that's finite), kept up to date as the view changes and combined with
+  `min_size`/`max_size` (a floor and a ceiling); `App::layout_limits(false)`
+  opts out, `App::natural_size(true)` opens at the content's natural size.
+  Per window, on X11, Wayland, Windows and macOS. *The smallest width adds
+  children up rather than solving the layout (a row of paragraphs that
+  don't shrink can still overflow), and only X11 is checked on CI.*
 - ✅ Focus-visible (#94): _the ring shows after the keyboard, not after a
   tap or a click (but on a text field), and is drawn with its layer, under a
   sheet, scrim or popup over it._

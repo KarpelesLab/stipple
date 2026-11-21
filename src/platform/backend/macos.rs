@@ -1880,9 +1880,18 @@ fn set_content_limit(window: Id, setter: Sel, size: Option<Size>, unbounded: f64
             width: unbounded,
             height: unbounded,
         },
+        // An infinite side is unlimited, too.
         |s| CgSize {
-            width: s.width,
-            height: s.height,
+            width: if s.width.is_finite() {
+                s.width
+            } else {
+                unbounded
+            },
+            height: if s.height.is_finite() {
+                s.height
+            } else {
+                unbounded
+            },
         },
     );
     unsafe { msg_void_size(window, setter, size) };

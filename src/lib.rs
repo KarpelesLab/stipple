@@ -49,6 +49,7 @@ mod app_gpu;
 mod app_instance;
 mod app_keys;
 mod app_lifecycle;
+mod app_limits;
 mod app_locale;
 mod app_native_views;
 mod app_network;
@@ -412,6 +413,8 @@ struct Pane<S> {
     /// The app's handle, given to each frame's [`Cx`].
     handle: AppHandle<S>,
     attrs: WindowAttributes,
+    /// The window's size limits from its content (`App::layout_limits`).
+    limits: app_limits::Limits,
     scale: ScaleFactor,
     // Optional GPU (or other) rasterizer used in place of the software renderer
     // to turn each frame's `Scene` into the `Pixmap` that is presented. Lets a
@@ -630,6 +633,7 @@ impl<S: 'static> Pane<S> {
             dark_sent: None,
             handle,
             attrs: WindowAttributes::new(),
+            limits: Default::default(),
             scale: ScaleFactor::IDENTITY,
             frame_renderer: None,
             gpu: Default::default(),
@@ -936,15 +940,60 @@ impl<S: 'static> App<S> {
         self
     }
 
-    /// Set the smallest logical size the user can resize the window to.
+    /// Set the smallest logical size the user can resize the window to. The
+    /// window is also no smaller than its content needs (see
+    /// [`layout_limits`](Self::layout_limits)): this is a floor under that,
+    /// per side.
     pub fn min_size(mut self, size: Size) -> Self {
         self.primary().attrs.min_size = Some(size);
         self
     }
 
-    /// Set the largest logical size the user can resize the window to.
+    /// Set the largest logical size the user can resize the window to: a
+    /// ceiling over the size the content has a use for (see
+    /// [`layout_limits`](Self::layout_limits)), but never under the
+    /// smallest size.
     pub fn max_size(mut self, size: Size) -> Self {
         self.primary().attrs.max_size = Some(size);
+        self
+    }
+
+    /// Whether the window's size follows its content's layout (`true`, the
+    /// default): the window is no smaller than the content fits in without
+    /// overflowing (fixed widths, text that doesn't wrap, padding and gaps;
+    /// a scroll container or a child that shrinks counts at its own
+    /// minimum), and no larger than the content has a use for where that is
+    /// finite (every child of a column fixed in height and none growing,
+    /// say). The limits follow the view as it changes, the window grows or
+    /// shrinks into them, and [`min_size`](Self::min_size) and
+    /// [`max_size`](Self::max_size) narrow them further. `false` leaves the
+    /// window's size to those two alone. Windows opened with
+    /// [`WindowAttributes`] have the same switch. See `docs/layout.md`.
+    ///
+    /// ```
+    /// use stipple::prelude::*;
+    /// let app = App::new((), |_: &(), cx: &mut Cx<()>| label(cx, "Hello"))
+    ///     .layout_limits(false)
+    ///     .min_size(Size::new(200.0, 100.0));
+    /// ```
+    pub fn layout_limits(mut self, on: bool) -> Self {
+        self.primary().attrs.layout_limits = on;
+        self
+    }
+
+    /// Open the window at its content's natural size (`true`) instead of
+    /// [`logical_size`](Self::logical_size): as wide as its text is
+    /// unwrapped and as tall as the content is at that width, a scroll
+    /// container at its content's full length, kept within the window's
+    /// limits. `false` by default.
+    ///
+    /// ```
+    /// use stipple::prelude::*;
+    /// let app = App::new((), |_: &(), cx: &mut Cx<()>| label(cx, "Hello"))
+    ///     .natural_size(true);
+    /// ```
+    pub fn natural_size(mut self, on: bool) -> Self {
+        self.primary().attrs.natural_size = on;
         self
     }
 
@@ -1427,6 +1476,7 @@ impl<S: 'static> Pane<S> {
         cx.set_pointer_locked(self.pointer.locked);
         let mut element = (self.view)(state, &mut cx);
         let fits = cx.take_scroll_fits();
+        let follows_window = cx.window_size_read();
         self.info_read = cx.window_info_read();
         self.safe_area_read = cx.safe_area_read();
         self.built_title = cx.take_window_title();
@@ -1510,6 +1560,9 @@ impl<S: 'static> Pane<S> {
         self.transitions.end();
 
         let size = self.layout_size();
+        // The window's size limits follow the view's.
+        self.limits
+            .measure(&element, &self.attrs, size.width, follows_window, font);
         let win = Rect::from_xywh(0.0, 0.0, size.width, size.height);
         // A right-to-left theme mirrors the view and its overlays.
         let dir = theme.layout_direction;
@@ -2543,6 +2596,67 @@ impl<S: 'static> Pane<S> {
             return true;
         }
         false
+    }
+
+    /// Before the window opens: build the view once to learn its content's
+    /// size limits (and its natural size, when the window opens at it), and
+    /// bring the size it opens at within them.
+    fn fit_to_content(&mut self, state: &S, theme: &Theme, font: Option<&Font>) {
+        if !app_limits::RESIZABLE_WINDOWS || !(self.attrs.layout_limits || self.attrs.natural_size)
+        {
+            return;
+        }
+        let asked = self.attrs.logical_size;
+        self.info = provisional_info(&self.attrs, ScaleFactor::IDENTITY);
+        self.limits.want_natural(self.attrs.natural_size);
+        let _ = self.build_frame(state, theme, font);
+        self.limits.want_natural(false);
+        self.dirty = true;
+        if let Some(natural) = self.limits.take_natural() {
+            self.attrs.logical_size = natural;
+        }
+        let limits = self.limits.effective(&self.attrs);
+        self.attrs.logical_size = app_limits::fit(self.attrs.logical_size, limits);
+        if self.attrs.layout_limits && self.attrs.resizable {
+            self.limits.opened_with(limits);
+        }
+        app_dbg(format_args!(
+            "window opens at {:?} (asked {asked:?}), limits {limits:?}",
+            self.attrs.logical_size
+        ));
+    }
+
+    /// The attributes the window opens with: its own, with the limits its
+    /// content gave it.
+    fn open_attrs(&self) -> WindowAttributes {
+        let mut attrs = self.attrs.clone();
+        if attrs.layout_limits && attrs.resizable {
+            (attrs.min_size, attrs.max_size) = self.limits.effective(&attrs);
+        }
+        attrs
+    }
+
+    /// Give the window the size limits the last build found, if they
+    /// changed, and resize it into them.
+    fn sync_limits(&mut self, window: &dyn crate::platform::Window) {
+        let pinned = self.info.maximized || self.info.fullscreen;
+        if let Some(size) = self
+            .limits
+            .sync(&self.attrs, window, self.attrs.logical_size, pinned)
+        {
+            app_dbg(format_args!("window resized to {size:?} for its content"));
+        }
+    }
+
+    /// The caller changed the window's own limits: tell the window again.
+    fn resend_limits(&mut self, window: &dyn crate::platform::Window) {
+        if self.attrs.layout_limits && self.attrs.resizable && self.limits.measured() {
+            self.limits.resend();
+            self.sync_limits(window);
+        } else {
+            window.set_min_size(self.attrs.min_size);
+            window.set_max_size(self.attrs.max_size);
+        }
     }
 
     /// The size the view is laid out in: the window above the on-screen
@@ -3682,7 +3796,18 @@ impl<S: 'static> App<S> {
             pane.attrs.dark.get_or_insert(dark);
             pane.attrs.background.get_or_insert(background);
         }
-        let primary_attrs = self.panes[0].attrs.clone();
+        // Windows open at the size their content's layout allows.
+        for idx in 0..self.panes.len() {
+            let App {
+                state,
+                theme,
+                font,
+                panes,
+                ..
+            } = &mut self;
+            panes[idx].fit_to_content(state, theme, font.get());
+        }
+        let primary_attrs = self.panes[0].open_attrs();
         // Per-pane surfaces, created lazily on first present, parallel to panes.
         let mut surfaces: Vec<Option<Box<dyn Surface>>> =
             (0..self.panes.len()).map(|_| None).collect();
@@ -3759,6 +3884,7 @@ impl<S: 'static> App<S> {
                     pane.drop_stale_preedit(state);
                     let scene = pane.build_frame(state, theme, font.get());
                     app_dbg(format_args!("present: built"));
+                    pane.sync_limits(window);
                     pane.sync_ime(window, font.get());
                     pane.sync_edit_menu(window);
                     retitled = pane.sync_title(window);
@@ -3881,6 +4007,15 @@ impl<S: 'static> App<S> {
                     // The app keeps the lock's state, and tells the view.
                     crate::platform::WindowRequest::PointerLock(on) => {
                         relocked |= self.window_pointer_lock(idx, window, on);
+                    }
+                    // The caller's own limits combine with the content's.
+                    crate::platform::WindowRequest::MinSize(size) => {
+                        self.panes[idx].attrs.min_size = size;
+                        self.panes[idx].resend_limits(window);
+                    }
+                    crate::platform::WindowRequest::MaxSize(size) => {
+                        self.panes[idx].attrs.max_size = size;
+                        self.panes[idx].resend_limits(window);
                     }
                     request => request.apply(window),
                 }
@@ -4526,7 +4661,7 @@ impl<S: 'static> App<S> {
         self.panes[0].native = Some(window.id());
         let mut idx = 1;
         while idx < self.panes.len() {
-            let attrs = self.native_attrs(self.panes[idx].attrs.clone());
+            let attrs = self.native_attrs(self.panes[idx].open_attrs());
             match window.open_window(attrs) {
                 Some(native) => {
                     self.panes[idx].native = Some(native);
@@ -4561,17 +4696,20 @@ impl<S: 'static> App<S> {
             attrs
                 .background
                 .get_or_insert(self.theme.palette.background);
+            let mut pane = Pane::new(request.id, request.view, self.handle.clone());
+            pane.gpu.choice = self.renderer;
+            pane.menu_bar = self.menu.clone();
+            pane.attrs = attrs;
+            // It opens at the size its content's layout allows.
+            pane.fit_to_content(&self.state, &self.theme, self.font.get());
+            let attrs = pane.open_attrs();
             let Some(native) = window.open_window(self.native_attrs(attrs.clone())) else {
                 app_dbg(format_args!("the backend has a single window"));
                 continue;
             };
-            let mut pane = Pane::new(request.id, request.view, self.handle.clone());
-            pane.gpu.choice = self.renderer;
-            pane.menu_bar = self.menu.clone();
             pane.native = Some(native);
             pane.dark_sent = attrs.dark;
-            pane.info = provisional_info(&attrs, window.scale_factor());
-            pane.attrs = attrs;
+            pane.info = provisional_info(&pane.attrs, window.scale_factor());
             self.handle.set_window_info(pane.id, Some(pane.info));
             self.handle.set_native(pane.id, native);
             self.panes.push(pane);

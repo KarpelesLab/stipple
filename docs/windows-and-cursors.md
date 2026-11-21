@@ -30,6 +30,13 @@ or on the `WindowAttributes` of a window opened with `App::open_window`
 (`min_size`, `max_size`, `maximized`, `fullscreen`,
 `icon`). Sizes are in logical pixels, like `logical_size`.
 
+A window is also no smaller than its content fits in, and no larger than
+its content has a use for where that is finite: `min_size` is a floor
+under that and `max_size` a ceiling over it. `layout_limits(false)` turns
+that off, and `natural_size(true)` opens the window at its content's
+natural size instead of `logical_size`; see
+[layout.md](layout.md#window-size-limits).
+
 To change the window while the app runs, queue a `WindowRequest` through the
 app's handle. It applies to the primary window between events:
 
@@ -46,7 +53,8 @@ button(cx, "Fullscreen").on_tap(cx, move |s| {
 ```
 
 The requests are `Maximized(bool)`, `Fullscreen(bool)`, `Minimized(bool)`,
-`MinSize(Option<Size>)`, `MaxSize(Option<Size>)`, `Icon(Option<Pixmap>)`,
+`MinSize(Option<Size>)`, `MaxSize(Option<Size>)` (the window's own limits,
+which the content's combine with), `Icon(Option<Pixmap>)`,
 `Title(String)`, `Position(Point)` (the outer top-left corner),
 `InnerSize(Size)`, `ResizeIncrements(Option<Size>)` and `Activate(..)` (see
 [below](#bringing-a-window-to-the-front)), and for the app as
@@ -429,9 +437,9 @@ hand, on macOS.
 
 `multiwindow --selftest` changes its windows while it runs: the first
 window's title follows the state, the second is retitled, moved to 360,260
-and resized to 300x200, the first gets 8x16 resize increments, and a third
+and resized to 400x300, the first gets 8x16 resize increments, and a third
 window opens and then closes; then the second is maximized (its restored
-bounds must be 360,260 and 300x200, checked on Windows and macOS) and the
+bounds must be 360,260 and 400x300, checked on Windows and macOS) and the
 first brought to the front (on X11, with no window manager, `xdotool
 getwindowfocus` must name it). It is started with a startup id and an
 activation token, which must be gone from its environment on Linux, and on

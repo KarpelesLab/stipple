@@ -110,6 +110,9 @@ fn the_loop_updates_per_frame_repaints_without_builds_and_pauses() {
     )
     .no_font()
     .logical_size(Size::new(200.0, 100.0))
+    // Builds are counted from the first frame: no build before the window
+    // opens to learn its size.
+    .layout_limits(false)
     .game_loop(GameLoop::new(update).paused_when(|g: &Game| g.paused));
     let requests = app.game.as_ref().unwrap().requests.clone();
     let handle = app.handle();

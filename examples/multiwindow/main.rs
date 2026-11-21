@@ -11,7 +11,7 @@
 //! check it from outside (`xprop`, `xdotool`, `swaymsg`):
 //!
 //! 1. the first window's title follows the state (`Cx::set_window_title`), the
-//!    second is retitled, moved to 360,260 and resized to 300x200
+//!    second is retitled, moved to 360,260 and resized to 400x300
 //!    (`AppHandle::window_to`), and the first snaps its resizing to 8x16
 //!    steps;
 //! 2. a third window opens (`AppHandle::open_window`), without taking focus;
@@ -68,7 +68,7 @@ fn selftest(handle: &AppHandle<Shared>, b: WindowId) {
         s.step = 1;
         h.window_to(b, WindowRequest::Title("Stipple — B ✓ retitled".into()));
         h.window_to(b, WindowRequest::Position(Point::new(360.0, 260.0)));
-        h.window_to(b, WindowRequest::InnerSize(Size::new(300.0, 200.0)));
+        h.window_to(b, WindowRequest::InnerSize(Size::new(400.0, 300.0)));
         h.window(WindowRequest::ResizeIncrements(Some(Size::new(8.0, 16.0))));
         say(format_args!("step 1"));
     });

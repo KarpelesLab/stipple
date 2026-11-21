@@ -1345,14 +1345,17 @@ impl WaylandWindow {
 }
 
 /// The arguments of `xdg_toplevel.set_min_size` / `set_max_size`: a size in
-/// surface coordinates (logical pixels), 0 for "no limit".
+/// surface coordinates (logical pixels), 0 for "no limit" (on a side that
+/// is infinite, too).
 fn size_args(size: Option<Size>) -> Vec<u8> {
-    let (w, h) = size.map_or((0, 0), |s| {
-        (
-            s.width.round().max(1.0) as u32,
-            s.height.round().max(1.0) as u32,
-        )
-    });
+    let side = |v: f64| {
+        if v.is_finite() {
+            v.round().clamp(1.0, i32::MAX as f64) as u32
+        } else {
+            0
+        }
+    };
+    let (w, h) = size.map_or((0, 0), |s| (side(s.width), side(s.height)));
     let mut a = Vec::new();
     arg_u32(&mut a, w);
     arg_u32(&mut a, h);

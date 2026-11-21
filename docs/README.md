@@ -51,6 +51,7 @@ How to build, package and run on each platform, and what works there today.
 | File dialogs | ✅ | ✅ ⁵ | ✅ ⁵ | ✅ ⁶² | ✅ ⁶² | ✅ ¹⁴ |
 | Accessibility | AT-SPI ⁶⁶ | UI Automation ⁶⁷ | NSAccessibility ⁶⁸ | UIAccessibility ⁴⁹ | node provider ⁵⁶ | ARIA ²² |
 | Window size limits, maximize, fullscreen | ✅ ⁹ | ✅ ¹⁰ | ✅ ¹⁰ | — | fullscreen ¹⁰ | ❌ |
+| Window size limits from the content's layout | ✅ ⁹⁸ | ✅ ⁹⁸ | ✅ ⁹⁸ | — | — | — |
 | Window icon | ✅ ⁹ | ✅ ¹⁰ | Dock icon ¹⁰ | — | — | ❌ |
 | Several windows, opened and closed at run time | ✅ ⁴⁵ | ✅ ⁴⁵ | ✅ ⁴⁵ | — | — | — |
 | Window titles at run time | ✅ ⁴⁵ | ✅ ⁴⁵ | ✅ ⁴⁵ | — | — | ❌ |
@@ -860,6 +861,16 @@ and macOS and checks each is one emoji wide and in color (Segoe UI Emoji has
 no country flags: they stay letters on Windows); iOS (Apple Color Emoji), Android
 and the web (the fonts the app passes) use the same code, untested there.
 See [fonts.md](fonts.md#emoji-sequences).
+
+⁹⁸ Shared code: each build measures the view's root for the smallest size
+it fits in without overflowing and the largest it has a use for, combines
+them with the window's own `min_size`/`max_size` and hands them to the
+backend's existing size limits (`WM_NORMAL_HINTS`, `xdg_toplevel`,
+`WM_GETMINMAXINFO`, `contentMinSize`), growing or shrinking the window into
+them; `App::layout_limits(false)` opts out and `App::natural_size(true)`
+opens at the content's natural size. Unit- and App-tested; CI reads the X11
+hints back with `xprop`. Wayland, Windows and macOS only build it. See
+[layout.md](layout.md#window-size-limits).
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled;

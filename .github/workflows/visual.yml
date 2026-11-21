@@ -277,6 +277,27 @@ jobs:
           sleep 4
           import -window root -crop 720x520+0+0 +repage visual_output/stipple-x11-layout.png
 
+      # The window is no smaller than its content's layout: layoutdemo sets no
+      # minimum of its own, yet its hints carry one (its columns of text and
+      # boxes); squeezed narrower and shorter (no window manager holds it to
+      # its hints here), it asks for the height its wrapped text needs back.
+      - name: Window size limits from the layout (not blocking yet)
+        continue-on-error: true
+        env:
+          DISPLAY: ":99"
+        run: |
+          xprop -name "Stipple Layout" WM_NORMAL_HINTS | tee visual_output/layout-hints.txt
+          grep -q 'program specified minimum size' visual_output/layout-hints.txt
+          min_h=$(sed -n 's/.*minimum size: [0-9]* by \([0-9]*\).*/\1/p' visual_output/layout-hints.txt)
+          id=$(xdotool search --name '^Stipple Layout$' | head -n1)
+          xdotool windowsize "$id" 300 200
+          sleep 2
+          h=$(xwininfo -id "$id" | sed -n 's/.*Height: \([0-9]*\).*/\1/p')
+          echo "minimum height $min_h; squeezed to 200, back at $h"
+          [ "$h" -ge "$min_h" ]
+          xdotool windowsize "$id" 720 520
+          sleep 1
+
       - name: Screenshot the widgets demo, then open its select
         env:
           DISPLAY: ":99"

@@ -1313,9 +1313,18 @@ unsafe fn handle_message(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) -> Lresul
                 info.min_track_size = outer_size(hwnd, min);
             }
             // A fullscreen window covers the monitor whatever its maximum.
+            // An infinite side keeps the system's maximum on that side.
             if let Some(max) = max.filter(|_| !fullscreen) {
-                info.max_track_size = outer_size(hwnd, max);
-                info.max_size = outer_size(hwnd, max);
+                let finite = |v: f64| if v.is_finite() { v } else { 0.0 };
+                let outer = outer_size(hwnd, Size::new(finite(max.width), finite(max.height)));
+                if max.width.is_finite() {
+                    info.max_track_size.x = outer.x;
+                    info.max_size.x = outer.x;
+                }
+                if max.height.is_finite() {
+                    info.max_track_size.y = outer.y;
+                    info.max_size.y = outer.y;
+                }
             }
             0
         }

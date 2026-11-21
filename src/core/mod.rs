@@ -96,8 +96,8 @@ pub(crate) use pointer_events::{
 };
 pub use presence::Effect;
 pub(crate) use render::{
-    apply_scroll, caret_index_at, leaf_layout, mark_native_states, paint_focus_look, paint_hover,
-    reveal, scroll_range, scroll_range_for, text_hit_at, translate,
+    apply_scroll, caret_index_at, content_limits, leaf_layout, mark_native_states, natural_size,
+    paint_focus_look, paint_hover, reveal, scroll_range, scroll_range_for, text_hit_at, translate,
 };
 pub use render::{layout, layout_with_direction, measure, paint, paint_visible};
 pub use runtime::{

@@ -544,6 +544,8 @@ pub struct Cx<'a, S> {
     window_title: Option<String>,
     /// The window's size in logical pixels; zero when unknown.
     window_size: Size,
+    /// Whether the view read [`window_size`](Self::window_size).
+    window_size_read: std::cell::Cell<bool>,
     /// What Back does while this build is on screen ([`Cx::on_back`]).
     backs: Vec<BackHandler<S>>,
     /// Focus changes asked for ([`Cx::focus`], [`Cx::blur`]) and what Enter
@@ -611,6 +613,7 @@ impl<'a, S> Cx<'a, S> {
             pointer_locked: false,
             window_title: None,
             window_size: Size::new(0.0, 0.0),
+            window_size_read: std::cell::Cell::new(false),
             backs: Vec::new(),
             focus_requests: Vec::new(),
             defaults: Vec::new(),
@@ -744,7 +747,16 @@ impl<'a, S> Cx<'a, S> {
     ///
     /// [`tab_bar`]: crate::widgets::tab_bar
     pub fn window_size(&self) -> Size {
+        self.window_size_read.set(true);
         self.window_size
+    }
+
+    /// Whether the view sized anything from the window: it read
+    /// [`window_size`](Self::window_size) or
+    /// [`window_info`](Self::window_info). Its layout then follows the
+    /// window, so the window takes no size limits from it.
+    pub(crate) fn window_size_read(&self) -> bool {
+        self.window_size_read.get() || self.window_info_read
     }
 
     /// Set what [`window_size`](Self::window_size) reports (the app does

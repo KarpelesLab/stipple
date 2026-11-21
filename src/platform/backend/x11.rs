@@ -1377,9 +1377,10 @@ fn size_hints(
     increments: Option<Size>,
 ) -> [u32; 18] {
     let mut hints = [0u32; 18];
+    // An unlimited side (infinite) is the largest window X has.
     let px = |s: Size| {
         let p = scale.to_physical(s);
-        (p.width.max(1), p.height.max(1))
+        (p.width.clamp(1, 32767), p.height.clamp(1, 32767))
     };
     if let Some(min) = min {
         hints[0] |= P_MIN_SIZE;

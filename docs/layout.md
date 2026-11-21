@@ -42,7 +42,11 @@ like any other unsized child, while `.width(w)` fixes it.
   `spacer()` is an empty element with `grow(1.0)`.
 - A child's `.shrink(weight)` lets it give up space when its siblings don't fit,
   in proportion to `weight × its natural size`. Children don't shrink by
-  default; without a shrinking child, an overflowing stack overflows.
+  default; without a shrinking child, an overflowing stack overflows. The
+  window itself doesn't let it come to that: by default it is no smaller
+  than its content fits in (see [Window size limits](#window-size-limits)),
+  so only a stack inside a fixed size, or in a window that opted out,
+  overflows.
 - Main-axis alignment (`Start`, `Center`, `End`) places the children as a block
   when nothing grows. Cross-axis `Stretch` fills the stack's cross extent,
   except for a child sized on that axis.
@@ -195,6 +199,71 @@ Linux, Windows and the web it keeps a gutter for it: the content is laid
 out that much narrower (shorter, sideways), and a container sized by its
 content grows by that much instead. See
 [Scroll bars](widgets.md#scroll-bars).
+
+## Window size limits
+
+By default a window's size follows its content's layout. Its smallest size
+is the smallest the root element fits in without overflowing; its largest
+is the largest the content has a use for, where that is finite. The App
+measures them each time it builds the view, gives them to the window when
+they change, and resizes the window into them: a view that gets a wider
+row grows its window. No second layout pass runs for it; it reuses the
+same measuring.
+
+What counts toward the smallest size:
+
+- fixed sizes (`.width(..)`, `.height(..)`) and `min_width`/`min_height`,
+  padding and gaps;
+- text that doesn't wrap, at its whole width; wrapped text at its longest
+  word, and as tall as it gets at the window's width (so a narrower window
+  can be taller);
+- in a row, every child's natural width, end to end; in a column, every
+  child's natural height (and the widest child's smallest width across);
+- a child that may `.shrink(..)` only at its own minimum (`min_width`, or
+  nothing), and a scroll container at its own minimum, not its content's
+  (which it clips): along the way it scrolls, its floor (`min_height`, or
+  100 pixels; less for less content), across, its `min_width`.
+
+The largest size is finite only on a side where the content's extent is
+fixed all the way down: each child of a column fixed in height (or capped
+with `max_height`) and none growing makes the window no taller than they
+are; across, every child fixed or capped in width. Text, images, unsized
+boxes, growing children (a `spacer()`) and scroll containers take any
+length, and so does a stack that centers its children or places them at
+the end (as a row does across, by default): content centered in the
+window has a use for any room around it. So most windows only get a
+minimum. A spacer across a column doesn't count: it has no use for width.
+
+The window's own limits combine with these, side by side:
+
+```rust,no_run
+# use stipple::prelude::*;
+# struct State;
+# fn view(_: &State, _: &mut Cx<State>) -> Element { spacer() }
+App::new(State, view)
+    .min_size(Size::new(400.0, 300.0)) // a floor: the larger of this and the content's
+    .max_size(Size::new(1200.0, 900.0)) // a ceiling: the smaller, never under the minimum
+    .run();
+```
+
+`App::layout_limits(false)` (or `WindowAttributes::layout_limits(false)`
+for a window opened with `App::open_window` or `AppHandle::open_window`)
+leaves the window to `min_size` and `max_size` alone, as before.
+`App::natural_size(true)` opens the window at its content's natural size
+instead of `logical_size`: its text unwrapped, a scroll container at its
+content's full length, within the limits. Every window follows its own
+view; the limits are logical pixels, which each backend converts:
+`WM_NORMAL_HINTS` on X11, `xdg_toplevel.set_min_size`/`set_max_size` on
+Wayland (with the title bar Stipple draws, if any), `WM_GETMINMAXINFO` on
+Windows and `contentMinSize`/`contentMaxSize` on macOS. Phones, tablets
+and the web have no windows to resize, and a window that isn't `resizable`
+keeps its size (it still opens at least as big as its content needs).
+Overlays (menus, popups, dialogs drawn in the window) don't count. A view
+that sizes its content from the window (it reads `cx.window_size()` or
+`cx.window_info()`, as a file browser setting its panes' heights from the
+window's does) gets no limits from its layout while it does: its layout
+follows the window, and limits taken from it would chase the window as it
+chases them. The window keeps `min_size` and `max_size` alone then.
 
 ## The safe area (phones)
 

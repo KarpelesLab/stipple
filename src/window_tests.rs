@@ -27,6 +27,8 @@ struct Desk {
     /// Whether windows show a native menu bar (as on Windows) or the app
     /// draws one (as on Linux).
     native_menus: Cell<bool>,
+    /// The size limits windows were given, opening or since.
+    limits: RefCell<Vec<String>>,
 }
 
 impl Desk {
@@ -40,6 +42,15 @@ impl Desk {
     fn take_log(&self) -> Vec<String> {
         std::mem::take(&mut self.log.borrow_mut())
     }
+
+    fn take_limits(&self) -> Vec<String> {
+        std::mem::take(&mut self.limits.borrow_mut())
+    }
+}
+
+/// A size as the logs write it.
+fn wh(size: Option<Size>) -> String {
+    size.map_or("-".into(), |s| format!("{}x{}", s.width, s.height))
 }
 
 struct FakeWindow {
@@ -75,6 +86,12 @@ impl Window for FakeWindow {
             .log
             .borrow_mut()
             .push(format!("open {id} {} focus={}", attrs.title, attrs.focus));
+        self.desk.limits.borrow_mut().push(format!(
+            "open {id} {} min {} max {}",
+            wh(Some(attrs.logical_size)),
+            wh(attrs.min_size),
+            wh(attrs.max_size)
+        ));
         if let Some(parent) = attrs.parent {
             self.desk.log.borrow_mut().push(format!(
                 "parent {id} {} modal={}",
@@ -116,6 +133,14 @@ impl Window for FakeWindow {
             .log
             .borrow_mut()
             .push(format!("size {} {}x{}", self.id, size.width, size.height));
+    }
+    fn set_min_size(&self, size: Option<Size>) {
+        let line = format!("min {} {}", self.id, wh(size));
+        self.desk.limits.borrow_mut().push(line);
+    }
+    fn set_max_size(&self, size: Option<Size>) {
+        let line = format!("max {} {}", self.id, wh(size));
+        self.desk.limits.borrow_mut().push(line);
     }
     fn set_resize_increments(&self, step: Option<Size>) {
         self.desk
@@ -190,13 +215,23 @@ impl<H: FnMut(Event, &dyn Window) -> ControlFlow> Run<H> {
 }
 
 fn run<S: 'static>(app: App<S>) -> Run<impl FnMut(Event, &dyn Window) -> ControlFlow> {
-    let (_, handler) = app.into_handler();
+    run_opened(app).1
+}
+
+/// [`run`], with the attributes the primary window opened with.
+fn run_opened<S: 'static>(
+    app: App<S>,
+) -> (
+    WindowAttributes,
+    Run<impl FnMut(Event, &dyn Window) -> ControlFlow>,
+) {
+    let (attrs, handler) = app.into_handler();
     let mut run = Run {
         desk: Desk::new(),
         handler,
     };
     run.send(100, Event::RedrawRequested);
-    run
+    (attrs, run)
 }
 
 struct Doc {
@@ -247,8 +282,13 @@ fn windows_open_and_close_at_run_time() {
 
     // One view for any number of windows, told which it builds.
     let saw = seen.clone();
+    // (Builds counted from its first frame: no build before it opens to
+    // learn its size.)
     let id = handle.open_window(
-        WindowAttributes::new().title("Second").focus(false),
+        WindowAttributes::new()
+            .title("Second")
+            .focus(false)
+            .layout_limits(false),
         move |s: &Doc, cx: &mut Cx<Doc>| {
             saw.lock().unwrap().push(cx.window_id());
             cx.set_window_title(format!("second: {}", s.clicks));
@@ -811,4 +851,206 @@ fn a_window_opened_maximized_restores_to_the_bounds_it_was_opened_with() {
     assert!(info.maximized);
     assert_eq!(info.restored_position, Some(Point::new(30.0, 40.0)));
     assert_eq!(info.restored_size, Size::new(640.0, 480.0));
+}
+
+/// A box of a fixed size.
+fn fixed(w: f64, h: f64) -> Element {
+    Element::boxed(crate::core::BoxStyle::default())
+        .width(w)
+        .height(h)
+}
+
+/// A column of fixed boxes, `wide` wide at most, and a spacer that takes
+/// whatever height is left (so the window can grow taller).
+fn boxes(wide: f64) -> Element {
+    crate::widgets::column(vec![
+        fixed(120.0, 30.0),
+        fixed(wide, 40.0),
+        crate::widgets::spacer(),
+    ])
+    .gap(10.0)
+    .padding(crate::geometry::Insets::uniform(5.0))
+}
+
+#[test]
+fn the_window_is_no_smaller_than_a_column_of_fixed_widths() {
+    let app = App::new((), |_: &(), _: &mut Cx<()>| boxes(300.0))
+        .no_font()
+        .logical_size(Size::new(200.0, 60.0));
+    let (attrs, run) = run_opened(app);
+    // 300 + 2 × 5 wide; 30 + 10 + 40 + 10 + 2 × 5 tall (the spacer takes
+    // none); the window grew to it.
+    assert_eq!(attrs.min_size, Some(Size::new(310.0, 100.0)));
+    assert_eq!(attrs.logical_size, Size::new(310.0, 100.0));
+    // Every child fixed in width: no use for a wider window. The spacer
+    // lets it grow taller.
+    assert_eq!(attrs.max_size, Some(Size::new(310.0, f64::INFINITY)));
+    // It opened with them: nothing more to tell it.
+    assert!(run.desk.take_limits().is_empty());
+}
+
+#[test]
+fn the_callers_minimum_is_a_floor_and_its_maximum_a_ceiling() {
+    let app = App::new((), |_: &(), _: &mut Cx<()>| boxes(300.0))
+        .no_font()
+        .logical_size(Size::new(500.0, 300.0))
+        .min_size(Size::new(200.0, 250.0))
+        .max_size(Size::new(400.0, 280.0));
+    let (attrs, _run) = run_opened(app);
+    assert_eq!(attrs.min_size, Some(Size::new(310.0, 250.0)));
+    // The content has no use for more than 310 across, under the caller's
+    // 400; 280 down, under the content's none.
+    assert_eq!(attrs.max_size, Some(Size::new(310.0, 280.0)));
+    assert_eq!(attrs.logical_size, Size::new(310.0, 280.0));
+}
+
+#[test]
+fn the_window_grows_when_its_content_does_and_only_tells_it_on_a_change() {
+    struct Wide(f64);
+    let app = App::new(Wide(300.0), |s: &Wide, _: &mut Cx<Wide>| boxes(s.0))
+        .no_font()
+        .logical_size(Size::new(400.0, 200.0));
+    let handle = app.handle();
+    let (attrs, mut run) = run_opened(app);
+    assert_eq!(attrs.logical_size, Size::new(310.0, 200.0));
+    run.send(100, Event::Resized(PhysicalSize::new(310, 200)));
+    run.desk.take_log();
+    assert!(run.desk.take_limits().is_empty());
+
+    // Wider content: a wider minimum, and the window grows to it.
+    handle.update(|s| s.0 = 500.0);
+    run.wake();
+    assert_eq!(
+        run.desk.take_limits(),
+        ["min 100 510x100", "max 100 510xinf"]
+    );
+    assert!(
+        run.desk
+            .take_log()
+            .contains(&"size 100 510x200".to_string()),
+        "the window grows"
+    );
+    run.send(100, Event::Resized(PhysicalSize::new(510, 200)));
+    // The same content again: nothing to tell.
+    handle.update(|s| s.0 = 500.0);
+    run.wake();
+    assert!(run.desk.take_limits().is_empty());
+    assert!(!run.desk.take_log().iter().any(|l| l.starts_with("size")));
+
+    // A minimum asked for at run time is a floor under the content's.
+    handle.window(WindowRequest::MinSize(Some(Size::new(100.0, 300.0))));
+    run.wake();
+    assert_eq!(
+        run.desk.take_limits(),
+        ["min 100 510x300", "max 100 510xinf"]
+    );
+    assert!(
+        run.desk
+            .take_log()
+            .contains(&"size 100 510x300".to_string())
+    );
+}
+
+#[test]
+fn layout_limits_off_leaves_the_window_its_own() {
+    let app = App::new((), |_: &(), _: &mut Cx<()>| boxes(300.0))
+        .no_font()
+        .layout_limits(false)
+        .min_size(Size::new(50.0, 50.0))
+        .logical_size(Size::new(200.0, 60.0));
+    let handle = app.handle();
+    let (attrs, mut run) = run_opened(app);
+    assert_eq!(attrs.min_size, Some(Size::new(50.0, 50.0)));
+    assert_eq!(attrs.max_size, None);
+    assert_eq!(attrs.logical_size, Size::new(200.0, 60.0));
+    handle.update(|_| {});
+    run.wake();
+    assert!(run.desk.take_limits().is_empty());
+    // The caller's own still reach the window.
+    handle.window(WindowRequest::MaxSize(Some(Size::new(600.0, 400.0))));
+    run.wake();
+    assert_eq!(run.desk.take_limits(), ["min 100 50x50", "max 100 600x400"]);
+}
+
+#[test]
+fn a_window_can_open_at_its_contents_natural_size() {
+    let app = App::new((), |_: &(), _: &mut Cx<()>| boxes(300.0))
+        .no_font()
+        .natural_size(true)
+        .logical_size(Size::new(800.0, 600.0));
+    let (attrs, _run) = run_opened(app);
+    assert_eq!(attrs.logical_size, Size::new(310.0, 100.0));
+
+    // Within its limits: a floor bigger than the content.
+    let app = App::new((), |_: &(), _: &mut Cx<()>| boxes(300.0))
+        .no_font()
+        .natural_size(true)
+        .min_size(Size::new(100.0, 150.0));
+    assert_eq!(run_opened(app).0.logical_size, Size::new(310.0, 150.0));
+}
+
+#[test]
+fn every_window_follows_its_own_content() {
+    let mut app = App::new(doc(), titled).no_font();
+    app.open_window(
+        WindowAttributes::new()
+            .title("Second")
+            .logical_size(Size::new(100.0, 100.0)),
+        |_: &Doc, _: &mut Cx<Doc>| boxes(300.0),
+    );
+    let handle = app.handle();
+    let mut run = run(app);
+    let limits = run.desk.take_limits();
+    assert_eq!(limits, ["open 101 310x100 min 310x100 max 310xinf"]);
+    // One opened at run time, too, unless it says not to.
+    handle.open_window(
+        WindowAttributes::new()
+            .logical_size(Size::new(100.0, 100.0))
+            .layout_limits(false),
+        |_: &Doc, _: &mut Cx<Doc>| boxes(300.0),
+    );
+    run.wake();
+    assert_eq!(run.desk.take_limits(), ["open 102 100x100 min - max -"]);
+}
+
+#[test]
+fn a_window_squeezed_below_its_minimum_asks_for_it_back_once() {
+    let app = App::new((), |_: &(), _: &mut Cx<()>| boxes(300.0))
+        .no_font()
+        .logical_size(Size::new(400.0, 200.0));
+    let mut run = run(app);
+    run.send(100, Event::Resized(PhysicalSize::new(310, 200)));
+    run.desk.take_log();
+    // No window manager holds it to its limits: squeezed, it asks back.
+    run.send(100, Event::Resized(PhysicalSize::new(100, 50)));
+    assert!(
+        run.desk
+            .take_log()
+            .contains(&"size 100 310x100".to_string())
+    );
+    // Kept there (a tiling window manager): it doesn't ask again.
+    run.send(100, Event::Resized(PhysicalSize::new(100, 50)));
+    assert!(!run.desk.take_log().iter().any(|l| l.starts_with("size")));
+    // The limits weren't changed by any of it.
+    assert!(run.desk.take_limits().is_empty());
+}
+
+#[test]
+fn content_sized_from_the_window_gives_it_no_limits() {
+    // Fixed boxes as tall as the window: limits from them would chase the
+    // window, and it them.
+    let app = App::new((), |_: &(), cx: &mut Cx<()>| {
+        let h = cx.window_size().height;
+        crate::widgets::column(vec![fixed(300.0, h + 1.0)])
+    })
+    .no_font()
+    .min_size(Size::new(50.0, 50.0))
+    .logical_size(Size::new(200.0, 100.0));
+    let (attrs, mut run) = run_opened(app);
+    assert_eq!(attrs.min_size, Some(Size::new(50.0, 50.0)));
+    assert_eq!(attrs.max_size, None);
+    assert_eq!(attrs.logical_size, Size::new(200.0, 100.0));
+    run.send(100, Event::Resized(PhysicalSize::new(200, 150)));
+    assert!(run.desk.take_limits().is_empty());
+    assert!(!run.desk.take_log().iter().any(|l| l.starts_with("size")));
 }
