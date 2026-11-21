@@ -363,8 +363,22 @@ log.push_line("Finished");
 - **Find**: `find(query, FindOptions::default().case_sensitive(false))`
   highlights every match, in the lines appended later too; `find_next` and
   `find_previous` go to the next one (highlighted more) and scroll it into
-  view; `matches()` and `current_match()` read them. Regular expressions
-  aren't supported.
+  view; `matches()` and `current_match()` read them.
+- **Regex find**: with `FindOptions::default().regex(true)` the query is a
+  regular expression, matched within each line (case ignored unless
+  `case_sensitive(true)`): literals, `.`, classes `[a-z]` and `[^...]`,
+  `\d` `\w` `\s` and `\D` `\W` `\S`, anchors `^` `$` (the line's ends),
+  groups `(...)` / `(?:...)` with `|`, and `*` `+` `?` `{m}` `{m,}` `{m,n}`,
+  greedy or lazy (`*?`, `{m,n}?`). Matching is leftmost-first, as in Perl.
+  The engine is Stipple's own (`widgets/text_view/regex.rs`): a Pike VM, so
+  no backtracking, and a search takes time linear in the line's length times
+  the pattern's size whatever the pattern (`(a*)*b`, `(a|aa)+$` stay fast;
+  the program is capped at 20,000 instructions, counts at 1,000, nesting at
+  200 groups). As with most engines, listing every match of a line can
+  rescan the text after a match whose end needed a look further on, so a
+  pattern built to do that on a long line costs up to its length squared.
+  An invalid pattern finds nothing and `find_error()` says what's wrong and
+  where (a `RegexError`); `try_find` returns it as an error.
 - **Scrolling**: `stick_to_end` as for `virtual_list`; `scroll_to_line(i,
   ScrollAlign::Center)` and `scroll_to_end()` from any handler; Up/Down
   scroll a line and Home/End to the top and end while the view has the focus.

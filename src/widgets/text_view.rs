@@ -10,6 +10,11 @@
 use std::collections::VecDeque;
 use std::ops::Range;
 
+mod regex;
+
+use regex::Regex;
+pub use regex::RegexError;
+
 use super::virtual_list::{RowHeight, Rows, ScrollAlign, ScrollMemo, Viewport, Window};
 use crate::core::{Cx, Element, KeyInput, Role};
 use crate::geometry::Insets;
@@ -50,12 +55,39 @@ pub struct LineMatch {
 pub struct FindOptions {
     /// Match case exactly (by default, `Error` finds `error` and `ERROR`).
     pub case_sensitive: bool,
+    /// Read the query as a regular expression (see
+    /// [`regex`](Self::regex)).
+    pub regex: bool,
 }
 
 impl FindOptions {
     /// Match case exactly, or not.
     pub fn case_sensitive(mut self, case_sensitive: bool) -> Self {
         self.case_sensitive = case_sensitive;
+        self
+    }
+
+    /// Read the query as a regular expression (`true`), matched within each
+    /// line: literal characters, `.`, classes `[a-z]` and `[^...]`, `\d`
+    /// `\w` `\s` and their negations `\D` `\W` `\S`, anchors `^` and `$`
+    /// (the line's start and end), groups `(...)` with `|`, and `*`, `+`,
+    /// `?`, `{m}`, `{m,}`, `{m,n}`, greedy or (followed by `?`) lazy. Case
+    /// is ignored unless [`case_sensitive`](Self::case_sensitive). The
+    /// engine runs in time linear in the text whatever the pattern (no
+    /// backtracking). An invalid pattern finds nothing, and
+    /// [`TextView::find_error`] says why (or use [`TextView::try_find`]).
+    ///
+    /// ```
+    /// use stipple::widgets::{FindOptions, TextView};
+    /// let mut log = TextView::from_text("took 12ms\nerror: took 340ms\n");
+    /// let options = FindOptions::default().regex(true);
+    /// assert_eq!(log.find(r"\d+ms", options), 2);
+    /// assert_eq!(log.find("^error:.*?\\d", options), 1);
+    /// assert_eq!(log.matches()[0].range, 0..13);
+    /// assert!(log.try_find("(unclosed", options).is_err());
+    /// ```
+    pub fn regex(mut self, regex: bool) -> Self {
+        self.regex = regex;
         self
     }
 }
@@ -94,6 +126,10 @@ pub struct TextView {
     anchor: Option<LinePos>,
     caret: Option<LinePos>,
     query: Option<(String, FindOptions)>,
+    /// The query compiled, in regex mode.
+    pattern: Option<Regex>,
+    /// Why the query isn't a valid regex.
+    find_error: Option<RegexError>,
     matches: Vec<LineMatch>,
     current: Option<usize>,
     scroll: ScrollMemo,
@@ -407,20 +443,55 @@ impl TextView {
     /// Find `query` in every line (and in lines appended from now on, until
     /// [`clear_find`](Self::clear_find)), highlighting the matches; returns
     /// how many there are. Matches don't overlap, nor span lines. An empty
-    /// query finds nothing.
+    /// query finds nothing. With [`FindOptions::regex`] the query is a
+    /// regular expression; an invalid one finds nothing, and
+    /// [`find_error`](Self::find_error) says why.
     pub fn find(&mut self, query: &str, options: FindOptions) -> usize {
-        self.query = (!query.is_empty()).then(|| (query.to_string(), options));
+        self.query = None;
+        self.pattern = None;
+        self.find_error = None;
         self.matches.clear();
         self.current = None;
+        if query.is_empty() {
+            return 0;
+        }
+        if options.regex {
+            match Regex::new(query, options.case_sensitive) {
+                Ok(pattern) => self.pattern = Some(pattern),
+                Err(e) => {
+                    self.find_error = Some(e);
+                    return 0;
+                }
+            }
+        }
+        self.query = Some((query.to_string(), options));
         for i in 0..self.lines.len() {
             self.find_in_line(i);
         }
         self.matches.len()
     }
 
+    /// [`find`](Self::find), with an invalid regular expression as an error
+    /// (nothing is then found).
+    pub fn try_find(&mut self, query: &str, options: FindOptions) -> Result<usize, RegexError> {
+        let found = self.find(query, options);
+        match &self.find_error {
+            Some(e) => Err(e.clone()),
+            None => Ok(found),
+        }
+    }
+
+    /// Why the last [`find`](Self::find)'s regular expression isn't valid,
+    /// if it isn't: what to show next to the search field.
+    pub fn find_error(&self) -> Option<&RegexError> {
+        self.find_error.as_ref()
+    }
+
     /// Stop searching: no matches, none highlighted.
     pub fn clear_find(&mut self) {
         self.query = None;
+        self.pattern = None;
+        self.find_error = None;
         self.matches.clear();
         self.current = None;
     }
@@ -475,7 +546,11 @@ impl TextView {
         let Some((query, options)) = &self.query else {
             return;
         };
-        for range in find_in(&self.lines[i], query, options.case_sensitive) {
+        let found = match &self.pattern {
+            Some(pattern) => pattern.find_all(&self.lines[i]),
+            None => find_in(&self.lines[i], query, options.case_sensitive),
+        };
+        for range in found {
             self.matches.push(LineMatch { line: i, range });
         }
     }

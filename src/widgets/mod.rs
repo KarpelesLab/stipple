@@ -112,7 +112,9 @@ mod virtual_list_tests;
 pub use refresh::{PullToRefresh, REFRESH_THRESHOLD, RefreshState, pull_to_refresh};
 pub use swipe::{SWIPE_ACTION_WIDTH, SwipeAction, SwipeActions, SwipeRow, SwipeState, swipe_row};
 pub use table::{Column, SortOrder, TableSpec, TableState, table};
-pub use text_view::{FindOptions, LineMatch, LinePos, TextView, TextViewOptions, text_view};
+pub use text_view::{
+    FindOptions, LineMatch, LinePos, RegexError, TextView, TextViewOptions, text_view,
+};
 pub use tree::{TreeModel, TreeRow, TreeSpec, TreeState, tree};
 pub use virtual_list::{
     DEFAULT_OVERSCAN, ListState, RowHeight, RowInfo, ScrollAlign, SelectionMode, VirtualList,

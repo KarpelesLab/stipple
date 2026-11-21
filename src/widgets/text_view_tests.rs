@@ -235,3 +235,49 @@ fn matches_and_the_selection_are_painted_behind_the_text() {
     assert_ne!(selected, surface);
     assert_ne!(selected, found);
 }
+
+#[test]
+fn regex_find_goes_to_matches_and_reports_a_bad_pattern() {
+    let mut view = log(3_000);
+    view.push_line("GET /index.html 200 12ms");
+    view.append((0..3_000).map(|i| format!("more {i}")));
+    view.push_line("get /api/users 404 7ms");
+    let mut app = app(view, false, None);
+    app.render_once();
+    update(&mut app, |s| {
+        let options = FindOptions::default().regex(true);
+        // Case-insensitive by default, anchored within a line.
+        assert_eq!(s.view.find(r"^get /\S+ [45]\d\d", options), 1);
+        assert_eq!(s.view.matches()[0].line, 6_001);
+        assert_eq!(s.view.matches()[0].range, 0..18);
+        assert_eq!(s.view.find(r"^get\s+\S+", options), 2);
+        assert_eq!(s.view.find(r"^GET", options.case_sensitive(true)), 1);
+        // The first match is scrolled to.
+        assert_eq!(s.view.find(r"\d+ms$", options), 2);
+        s.view.find_next();
+    });
+    assert!(
+        shown(&app).contains(&"GET /index.html 200 12ms".to_string()),
+        "{:?}",
+        shown(&app)
+    );
+    // Lines appended later are searched too.
+    update(&mut app, |s| s.view.push_line("POST /x 201 3ms"));
+    assert_eq!(app.state().view.matches().len(), 3);
+    // A bad pattern finds nothing and says why; a good one clears it.
+    update(&mut app, |s| {
+        let options = FindOptions::default().regex(true);
+        assert_eq!(s.view.find("(ms", options), 0);
+        assert!(s.view.matches().is_empty());
+        assert_eq!(s.view.find_error().map(|e| e.offset), Some(0));
+        assert_eq!(
+            s.view.try_find("a{2,1}", options).unwrap_err().message,
+            "a repetition's {min,max} has max below min"
+        );
+        assert_eq!(s.view.try_find("ms", options), Ok(3));
+        assert_eq!(s.view.find_error(), None);
+        // Not a regex: the parenthesis is a parenthesis.
+        assert_eq!(s.view.find("(ms", FindOptions::default()), 0);
+        assert_eq!(s.view.find_error(), None);
+    });
+}

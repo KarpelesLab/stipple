@@ -2190,7 +2190,9 @@ Most input only works on X11 today.
   layout gives another), `plain` rows, `on_end_reached` paging and keyed
   scroll ids (#84, #98). `text_view` shows a `TextView` of lines on the
   same engine: selection across lines, copy, append with a cap, find with
-  `SpanStyle::background` highlights (#90).*
+  `SpanStyle::background` highlights (#90), and regex find
+  (`FindOptions::regex`: a hand-written Pike VM, linear in the text, invalid
+  patterns a `RegexError`).*
 - ✅ Scroll bars on every scroll container (`scroll`, `scroll_horizontal`,
   `virtual_list`, `table`'s body, `tree`), shown while the content overflows.
   *`core::scroll_bar` lays each bar out from the laid-out tree (viewport,

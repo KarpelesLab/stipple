@@ -872,7 +872,7 @@ they: use `open_file_contents` and `save_file_contents` there.
 - [Custom painting](canvas.md): `Element::canvas`, invalidating parts of it from any thread, paths, bitmaps and glyph runs
 - [Games](games.md): the game loop (`App::on_frame`), fixed time steps, polled input and rebindable actions
 - [Transforms and opacity](transforms.md): scaling, rotating and moving any element, group opacity, and hit-testing through them
-- [Text editing](text-editing.md): keyboard shortcuts, undo, double- and triple-click, selectable labels and paragraphs, a virtualized log view with find
+- [Text editing](text-editing.md): keyboard shortcuts, undo, double- and triple-click, selectable labels and paragraphs, a virtualized log view with find (plain or regex) and horizontal scrolling of long lines
 - [Rich text editing](rich-text-editing.md): `rich_editor`, a formatting toolbar, headings, lists, links and images, and Markdown and HTML out and in
 - [Fonts and text decorations](fonts.md): system fonts by name, bold and italic, fallbacks, metrics, underlines and strikethrough, rich text with inline icons, outlines and shadows
 - [Text flowing around shapes](text-flow.md): floats, shapes in the middle of a column, images whose transparent pixels text runs over, margins, wrap sides and "through" wrapping, for plain and rich text
