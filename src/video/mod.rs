@@ -40,19 +40,29 @@
 //! |---|---|---|---|
 //! | macOS, iOS | MP4, Matroska | H.264 and HEVC: VideoToolbox (hardware); MPEG-2: software | the decoder's `CVPixelBuffer` as an `IOSurface` (NV12), drawn by Metal without a copy |
 //! | Linux | MP4, Matroska | H.264: VA-API (hardware); MPEG-2: software | read back from the decoder's surface once, drawn as an image |
-//! | Windows, Android | MP4, Matroska | MPEG-2: software | an image |
+//! | Windows | MP4, Matroska | H.264 and HEVC: Media Foundation (DXVA on a GPU, else software); MPEG-2: software | a shared NV12 texture while Direct3D 11 draws, else an image |
+//! | Android | MP4, Matroska | H.264 and HEVC: `MediaCodec`; MPEG-2: software | the decoder's `AHardwareBuffer` while the GPU renderer imports it, else an image |
 //! | Web | what the browser plays | the browser, in a `<video>` | the `<video>` itself, imported by WebGPU or WebGL2 |
 //!
 //! Decoding natively needs the `video` feature (oxideav's MP4 and Matroska
-//! demuxers, its MPEG-1/2 decoder and its VA-API bridge); without it,
+//! demuxers, its MPEG-1/2 decoder and its VA-API bridge; VideoToolbox,
+//! Media Foundation and `MediaCodec` are loaded at run time); without it,
 //! [`Video::open`] says [`VideoError::Unsupported`] except on the web. There
 //! is no sound yet: the audio track is ignored (the web's `<video>` plays
 //! muted). See `docs/video.md`.
 
 mod view;
 
+#[cfg(all(feature = "video", target_os = "android"))]
+#[allow(unsafe_code)]
+mod mediacodec;
+#[cfg(all(feature = "video", target_os = "windows"))]
+#[allow(unsafe_code)]
+mod mf;
 #[cfg(all(feature = "video", not(target_arch = "wasm32")))]
 mod nal;
+#[cfg(all(feature = "video", not(target_arch = "wasm32")))]
+mod nv12;
 #[cfg(all(feature = "video", not(target_arch = "wasm32")))]
 mod player;
 #[cfg(all(feature = "video", not(target_arch = "wasm32")))]
@@ -87,8 +97,10 @@ pub struct VideoOptions {
     pub autoplay: bool,
     /// Start again from the beginning at the end (`false` by default).
     pub looping: bool,
-    /// Decode in hardware where the platform can (`true` by default);
-    /// `false` keeps to the software decoders, which only know MPEG-1/2.
+    /// Decode with the platform's decoder where it has one (`true` by
+    /// default): VideoToolbox, VA-API, Media Foundation (in hardware where
+    /// there's a GPU, else in software) or `MediaCodec`; `false` keeps to
+    /// Stipple's own software decoders, which only know MPEG-1/2.
     /// The web always plays through the browser.
     pub hardware: bool,
 }
@@ -121,7 +133,7 @@ impl VideoOptions {
         self
     }
 
-    /// Decode in hardware where the platform can.
+    /// Decode with the platform's decoder where it has one.
     pub fn hardware(mut self, hardware: bool) -> Self {
         self.hardware = hardware;
         self
@@ -133,8 +145,8 @@ impl VideoOptions {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum VideoError {
     /// A container or codec this build or platform can't decode (natively
-    /// everything needs the `video` feature; H.264 needs VideoToolbox or
-    /// VA-API).
+    /// everything needs the `video` feature; H.264 needs the platform's
+    /// decoder: VideoToolbox, VA-API, Media Foundation or `MediaCodec`).
     Unsupported(String),
     /// The file is damaged or not what it claims to be, or the decoder
     /// failed.
@@ -178,8 +190,9 @@ pub enum VideoStatus {
 pub struct VideoFrame {
     /// Its presentation time, from the start of the video.
     pub timestamp: Duration,
-    /// The decoder's buffer (an `IOSurface` from VideoToolbox, the page's
-    /// `<video>`) or the decoded pixels: draw it with
+    /// The decoder's buffer (an `IOSurface` from VideoToolbox, a shared NV12
+    /// texture from Media Foundation, an `AHardwareBuffer` from `MediaCodec`,
+    /// the page's `<video>`) or the decoded pixels: draw it with
     /// [`Scene::draw_external`](crate::render::Scene::draw_external).
     pub image: Arc<ExternalImage>,
 }
@@ -497,8 +510,9 @@ impl Video {
         self.inner.shared.lock().status.clone()
     }
 
-    /// What decodes it: `"VideoToolbox"`, `"VA-API"`, `"software"` (oxideav's
-    /// MPEG-1/2 decoder) or `"browser"`.
+    /// What decodes it: `"VideoToolbox"`, `"VA-API"`, `"Media Foundation"`,
+    /// `"MediaCodec"`, `"software"` (oxideav's MPEG-1/2 decoder) or
+    /// `"browser"`.
     pub fn decoder(&self) -> &'static str {
         self.inner.shared.lock().decoder
     }

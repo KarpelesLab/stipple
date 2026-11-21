@@ -8,10 +8,15 @@
 #   tools/gpu-mobile.sh ios-sim bench [ARGS...]    # bench --renderer metal ARGS
 #   tools/gpu-mobile.sh android corpus [gl|vk]     # GLES or Vulkan (default gl)
 #   tools/gpu-mobile.sh android bench [ARGS...]    # bench --renderer gpu ARGS
+#   tools/gpu-mobile.sh android video [FEATURES]   # video:: tests (MediaCodec)
 #
 # ARGS go to the benchmark (`--renderer software`, `--only transition`,
 # `--quick`, ...); its JSON (`--json FILE`, a path on this machine) comes
 # back here. The corpus's frames go to STIPPLE_GPU_DUMP when it's set.
+# `video` runs stipple::video's tests (src/video/tests.rs) with the `video`
+# feature and FEATURES (e.g. `gl`): the H.264 clip through MediaCodec, which
+# must be there (STIPPLE_REQUIRE_VIDEO), into an image reader and then into
+# its own buffers.
 #
 # iOS: the simulator STIPPLE_SIM names (a UDID), else the first booted
 # iPhone, else the first available iPhone simulator, booted for the run. A
@@ -39,7 +44,7 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
 usage() {
-  sed -n '7,10p' "$0" | sed 's/^# //' >&2
+  sed -n '7,11p' "$0" | sed 's/^# //' >&2
   exit 2
 }
 
@@ -172,6 +177,31 @@ android() {
       fi
       "$adb" shell "rm -rf $dir" || true
       check_corpus "$work/corpus.log"
+      ;;
+    video)
+      local features="video${1:+,$1}"
+      local exe
+      exe=$(build test --no-run --lib --features "$features" --target "$target")
+      [ -n "$exe" ] || { echo "gpu-mobile: no test executable" >&2; exit 1; }
+      "$adb" push "$exe" "$dir/stipple-tests" >/dev/null
+      "$adb" shell "cd $dir && chmod 755 stipple-tests && \
+        STIPPLE_REQUIRE_VIDEO=1 TMPDIR=$dir \
+        ./stipple-tests video:: --nocapture --test-threads 1" 2>&1 \
+        | tee "$work/video.log" || true
+      # Again into the decoder's own buffers (ByteBuffer mode), the
+      # fallback where there's no image reader.
+      "$adb" shell "cd $dir && STIPPLE_VIDEO_NO_SURFACE=1 STIPPLE_REQUIRE_VIDEO=1 TMPDIR=$dir \
+        ./stipple-tests video::tests::h264 --nocapture --test-threads 1" 2>&1 \
+        | tee "$work/video-buffers.log" || true
+      "$adb" shell "rm -rf $dir" || true
+      if ! grep -q '^test result: ok\.' "$work/video.log" \
+        || ! grep -q '^test result: ok\.' "$work/video-buffers.log"; then
+        echo "gpu-mobile: the video tests failed" >&2
+        return 1
+      fi
+      grep -q 'h264_decodes_through_the_platform_decoder \.\.\. ok' "$work/video.log" \
+        || { echo "gpu-mobile: the H.264 test didn't run" >&2; return 1; }
+      echo "gpu-mobile: video ok"
       ;;
     bench)
       local exe

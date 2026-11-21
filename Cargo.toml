@@ -50,7 +50,8 @@ audio = [
 # `stipple::video`'s native playback: oxideav's MP4 and Matroska demuxers,
 # its pure-Rust MPEG-1/2 decoder, and its VA-API bridge on Linux (libva
 # loaded at run time). H.264 and HEVC decode through VideoToolbox on macOS
-# and iOS (no crate). Off by default; the web plays video without it.
+# and iOS, Media Foundation on Windows and MediaCodec on Android (no crate:
+# each loaded at run time). Off by default; the web plays video without it.
 video = [
     "dep:oxideav-mp4",
     "dep:oxideav-mkv",

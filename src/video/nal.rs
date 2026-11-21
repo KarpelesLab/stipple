@@ -2,10 +2,6 @@
 //! `hvcC`) and their length-prefixed NAL units.
 
 /// The parameter sets and NAL length size of an `avcC` record.
-#[cfg_attr(
-    not(any(target_os = "macos", target_os = "ios", target_os = "linux")),
-    allow(dead_code)
-)]
 pub(super) fn parse_avcc(r: &[u8]) -> Option<(Vec<Vec<u8>>, i32)> {
     if r.len() < 7 || r[0] != 1 {
         return None;
@@ -27,7 +23,7 @@ pub(super) fn parse_avcc(r: &[u8]) -> Option<(Vec<Vec<u8>>, i32)> {
 
 /// The parameter sets (VPS, SPS, PPS) and NAL length size of an `hvcC`
 /// record.
-#[cfg_attr(not(any(target_os = "macos", target_os = "ios")), allow(dead_code))]
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 pub(super) fn parse_hvcc(r: &[u8]) -> Option<(Vec<Vec<u8>>, i32)> {
     if r.len() < 23 {
         return None;
@@ -56,7 +52,7 @@ pub(super) fn parse_hvcc(r: &[u8]) -> Option<(Vec<Vec<u8>>, i32)> {
 /// The NAL units of a packet whose units are each preceded by their
 /// length in `len_size` bytes (big-endian); a truncated last one is
 /// dropped.
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg_attr(any(target_os = "macos", target_os = "ios"), allow(dead_code))]
 pub(super) fn split_units(data: &[u8], len_size: usize) -> Vec<&[u8]> {
     let mut out = Vec::new();
     let mut at = 0;
@@ -70,6 +66,25 @@ pub(super) fn split_units(data: &[u8], len_size: usize) -> Vec<&[u8]> {
         };
         out.push(unit);
         at += len;
+    }
+    out
+}
+
+/// A packet of length-prefixed units as an Annex B stream (each unit after
+/// a `00 00 00 01` start code), led by the parameter sets `sets` (given
+/// before the first picture, and again after a seek): what Media Foundation
+/// and `MediaCodec` take.
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios", target_os = "linux"),
+    allow(dead_code)
+)]
+pub(super) fn annex_b(data: &[u8], len_size: usize, sets: &[Vec<u8>]) -> Vec<u8> {
+    let units = split_units(data, len_size);
+    let len: usize = sets.iter().map(|s| s.len() + 4).sum::<usize>() + data.len() + 4;
+    let mut out = Vec::with_capacity(len);
+    for unit in sets.iter().map(Vec::as_slice).chain(units) {
+        out.extend_from_slice(&[0, 0, 0, 1]);
+        out.extend_from_slice(unit);
     }
     out
 }
@@ -105,5 +120,18 @@ mod tests {
         let data = [0, 0, 0, 2, 0x65, 1, 0, 0, 0, 1, 0x41, 0, 0, 0, 9, 1];
         assert_eq!(split_units(&data, 4), vec![&[0x65, 1][..], &[0x41][..]]);
         assert_eq!(split_units(&[0, 1, 7], 2), vec![&[7][..]]);
+    }
+
+    #[test]
+    fn packets_become_annex_b_with_their_parameter_sets() {
+        let data = [0, 0, 0, 2, 0x65, 1, 0, 0, 0, 1, 0x41];
+        assert_eq!(
+            annex_b(&data, 4, &[]),
+            [0, 0, 0, 1, 0x65, 1, 0, 0, 0, 1, 0x41]
+        );
+        assert_eq!(
+            annex_b(&data[..6], 4, &[vec![0x67, 9], vec![0x68]]),
+            [0, 0, 0, 1, 0x67, 9, 0, 0, 0, 1, 0x68, 0, 0, 0, 1, 0x65, 1]
+        );
     }
 }

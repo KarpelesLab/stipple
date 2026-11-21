@@ -9,19 +9,16 @@
 //! is a reference, while the player holds a few frames ahead and the
 //! renderer the last ones; that needs surfaces the player can keep.
 
-use super::VideoError;
 use super::nal::{parse_avcc, split_units};
 use super::player::{Coded, Decoded, FrameDecoder};
+use super::{VideoError, nv12};
 use crate::geometry::PhysicalSize;
-use crate::render::external::YuvColorSpace;
-use crate::render::{ExternalFormat, ExternalImage};
 use oxideav_core::CodecParameters;
 use oxideav_vaapi::Display;
 use oxideav_vaapi::h264::{H264Decoder, H264Picture};
 use oxideav_vaapi::session::Planes;
 use std::collections::VecDeque;
 use std::path::Path;
-use std::sync::Arc;
 use std::time::Duration;
 
 pub(super) struct VaDecoder {
@@ -108,23 +105,10 @@ impl VaDecoder {
                 .read(&pic, &mut Planes::new(&mut luma, w, &mut chroma, cs))
                 .map_err(va_err)?;
             let size = PhysicalSize::new(w as u32, h as u32);
-            let color = if h > 576 {
-                YuvColorSpace::Bt709Limited
-            } else {
-                YuvColorSpace::Bt601Limited
-            };
-            let Some(pixels) = crate::platform::external::to_rgba(
-                ExternalFormat::Nv12,
-                size,
-                &[(&luma, w), (&chroma, cs)],
-                color,
-            ) else {
-                continue;
-            };
-            self.out.push(Decoded {
-                time,
-                image: Arc::new(ExternalImage::from_pixels(Arc::new(pixels))),
-            });
+            let color = nv12::default_color(size.height);
+            if let Some(image) = nv12::image(size, (&luma, w), (&chroma, cs), color) {
+                self.out.push(Decoded { time, image });
+            }
         }
         Ok(())
     }

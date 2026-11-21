@@ -2,7 +2,10 @@
 //! red on the left and blue on the right for half a second, then lime and
 //! yellow. `bars-mpeg2.mkv` (MPEG-2 in Matroska, closed GOPs, B-frames)
 //! decodes in software everywhere; `bars-h264.mp4` (H.264 Main with
-//! B-frames, in MP4) needs VideoToolbox or VA-API.
+//! B-frames, in MP4) needs the platform's decoder: VideoToolbox, VA-API,
+//! Media Foundation or `MediaCodec`. With `STIPPLE_REQUIRE_VIDEO` set, a
+//! platform decoder that isn't there fails the H.264 tests instead of
+//! skipping them (CI's Windows and Android runs).
 
 use super::player::Stream;
 use super::*;
@@ -89,6 +92,13 @@ fn an_mpeg2_stream_decodes_in_software_in_presentation_order() {
 fn a_video_shows_its_first_frame_plays_to_the_end_and_seeks() {
     let video = Video::open(MPEG2, VideoOptions::new()).unwrap();
     assert_eq!(video.decoder(), "software");
+    plays_to_the_end_and_seeks(video);
+}
+
+/// The player's part, whichever decoder: the first frame shown paused,
+/// played to the last frame in about the clip's time, in order, then a
+/// seek while ended.
+fn plays_to_the_end_and_seeks(video: Video) {
     assert_eq!(video.size(), PhysicalSize::new(160, 120));
     wait_until("the first frame", || video.frame().is_some());
     assert_eq!(video.status(), VideoStatus::Paused);
@@ -143,7 +153,7 @@ fn a_looping_video_starts_again() {
 }
 
 #[test]
-fn h264_needs_a_hardware_decoder() {
+fn h264_needs_a_platform_decoder() {
     match Video::open(H264, VideoOptions::new().hardware(false)) {
         Err(VideoError::Unsupported(_)) => {}
         other => panic!("{other:?}"),
@@ -152,42 +162,48 @@ fn h264_needs_a_hardware_decoder() {
     assert!(matches!(not_video, Err(VideoError::Unsupported(_))));
 }
 
-/// Elsewhere than Apple's platforms, H.264 plays through VA-API where
-/// there's a device that decodes it, else it's unsupported.
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
-#[test]
-fn h264_plays_through_va_api_or_says_unsupported() {
-    match Video::open(H264, VideoOptions::new()) {
-        Ok(video) => {
-            assert_eq!(video.decoder(), "VA-API");
-            wait_until("the first frame", || video.frame().is_some());
-            let f = video.frame().unwrap();
-            assert_halves(&on_cpu(&f.image), RED, BLUE, "VA-API's first frame");
+/// The platform's H.264 decoder here, and what it's called.
+fn platform_decoder() -> Option<&'static str> {
+    if cfg!(any(target_os = "macos", target_os = "ios")) {
+        Some("VideoToolbox")
+    } else if cfg!(target_os = "linux") {
+        Some("VA-API")
+    } else if cfg!(target_os = "windows") {
+        Some("Media Foundation")
+    } else if cfg!(target_os = "android") {
+        Some("MediaCodec")
+    } else {
+        None
+    }
+}
+
+/// The H.264 clip opened with the platform's decoder; `None` (the test
+/// skips) where there's none, unless `STIPPLE_REQUIRE_VIDEO` says there
+/// must be.
+fn open_h264_stream() -> Option<Stream> {
+    match Stream::open(Source::Bytes(H264.into()), true) {
+        Ok(s) => {
+            assert_eq!(Some(s.decoder_name()), platform_decoder());
+            Some(s)
         }
-        Err(VideoError::Unsupported(why)) => eprintln!("no hardware H.264 here: {why}"),
+        Err(VideoError::Unsupported(why))
+            if std::env::var_os("STIPPLE_REQUIRE_VIDEO").is_none() =>
+        {
+            // A Linux machine without VA-API, a Mac VM without the media
+            // engine, a Windows without Media Foundation.
+            eprintln!("skipping: no H.264 decoder here: {why}");
+            None
+        }
         Err(e) => panic!("{e}"),
     }
 }
 
-/// VideoToolbox decodes the H.264 clip into `IOSurface`s: NV12 buffers
-/// (no copy made), drawn by the software renderer from the locked surface.
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-#[test]
-fn h264_decodes_through_videotoolbox_into_io_surfaces() {
-    let mut s = match Stream::open(Source::Bytes(H264.into()), true) {
-        Ok(s) => s,
-        Err(VideoError::Unsupported(why)) => {
-            // A virtual machine without the media engine.
-            eprintln!("skipping: {why}");
-            return;
-        }
-        Err(e) => panic!("{e}"),
-    };
-    assert_eq!(s.decoder_name(), "VideoToolbox");
+/// Every frame of the H.264 clip in presentation order, at its time, the
+/// right colors (on the CPU), each checked by `each` too; then seeking.
+fn check_h264_stream(mut s: Stream, mut each: impl FnMut(&Arc<ExternalImage>)) {
     let mut times = Vec::new();
     while let Some(f) = s.next().unwrap() {
-        assert_eq!(f.image.format(), crate::render::ExternalFormat::Nv12);
-        assert!(format!("{:?}", f.image).contains("IOSurface"));
+        each(&f.image);
         let cpu = on_cpu(&f.image);
         if f.time < Duration::from_millis(500) {
             assert_halves(&cpu, RED, BLUE, "an early frame");
@@ -200,6 +216,166 @@ fn h264_decodes_through_videotoolbox_into_io_surfaces() {
     let f = s.seek(Duration::from_millis(600)).unwrap().unwrap();
     assert_eq!(f.time, Duration::from_millis(600));
     assert_halves(&on_cpu(&f.image), LIME, YELLOW, "after seeking");
+    let f = s.seek(Duration::from_millis(260)).unwrap().unwrap();
+    assert_eq!(f.time, Duration::from_millis(300));
+    assert_halves(&on_cpu(&f.image), RED, BLUE, "after seeking back");
+    // Past the end: the last frame.
+    let f = s.seek(Duration::from_secs(5)).unwrap().unwrap();
+    assert_eq!(f.time, Duration::from_millis(900));
+}
+
+/// Elsewhere than Apple's platforms (whose test below checks the
+/// surfaces), H.264 plays through the platform's decoder where there's
+/// one: every frame, in order, the right colors, seeking.
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[test]
+fn h264_decodes_through_the_platform_decoder() {
+    if let Some(s) = open_h264_stream() {
+        check_h264_stream(s, |_| {});
+    }
+}
+
+/// A `Video` of the H.264 clip plays as the MPEG-2 one does: its first
+/// frame, to the last frame in about its time, seeking after the end.
+#[test]
+fn an_h264_video_plays_to_the_end_and_seeks() {
+    if open_h264_stream().is_none() {
+        return;
+    }
+    let video = Video::open(H264, VideoOptions::new()).unwrap();
+    assert_eq!(Some(video.decoder()), platform_decoder());
+    plays_to_the_end_and_seeks(video);
+}
+
+/// While the renderer imports NV12 textures (Direct3D 11's), Media
+/// Foundation's pictures are DXGI shared textures: uploaded once from the
+/// software decoder's memory (or copied on the GPU from DXVA's) and drawn
+/// by Direct3D 11 straight from them, the picture as the CPU draws it.
+#[cfg(target_os = "windows")]
+#[test]
+fn media_foundation_hands_shared_textures_to_direct3d() {
+    use crate::platform::external::{NATIVE_TEST, note_native};
+    use crate::render::ExternalFormat;
+    let _lock = NATIVE_TEST.lock().unwrap_or_else(|e| e.into_inner());
+    note_native(&[ExternalFormat::Nv12]);
+    let Some(mut s) = open_h264_stream() else {
+        return;
+    };
+    #[cfg_attr(not(feature = "d3d"), allow(unused_mut))]
+    let mut drawn = 0;
+    loop {
+        note_native(&[ExternalFormat::Nv12]);
+        let Some(f) = s.next().unwrap() else {
+            break;
+        };
+        assert_eq!(f.image.format(), ExternalFormat::Nv12);
+        assert!(
+            format!("{:?}", f.image).contains("DXGI shared handle"),
+            "{:?}",
+            f.image
+        );
+        assert_eq!(f.image.size(), PhysicalSize::new(160, 120));
+        #[cfg(feature = "d3d")]
+        if f.time.as_millis() % 400 == 0 {
+            let scene = scene_of(&f.image);
+            let gpu = match crate::gpu::render_scene_scaled(
+                &scene,
+                Color::BLACK,
+                ScaleFactor::IDENTITY,
+            ) {
+                Ok(p) => p,
+                Err(e) if std::env::var_os("STIPPLE_REQUIRE_GPU").is_none() => {
+                    eprintln!("skipping the draw: no Direct3D 11 device: {e}");
+                    continue;
+                }
+                Err(e) => panic!("{e}"),
+            };
+            assert_eq!(
+                crate::gpu::stats().uploads,
+                0,
+                "the frame was uploaded, not imported"
+            );
+            let (left, right) = if f.time < Duration::from_millis(500) {
+                (RED, BLUE)
+            } else {
+                (LIME, YELLOW)
+            };
+            assert_halves(&gpu, left, right, "Direct3D 11's frame");
+            drawn += 1;
+        }
+    }
+    eprintln!("Media Foundation: shared textures, {drawn} drawn by Direct3D 11");
+    note_native(&[]);
+}
+
+/// While the renderer imports Android's YUV hardware buffers, MediaCodec's
+/// pictures are the `AImageReader`'s `AHardwareBuffer`s, read on the CPU
+/// here (their planes locked) with the right colors.
+#[cfg(target_os = "android")]
+#[test]
+fn media_codec_hands_hardware_buffers_over() {
+    use crate::platform::external::{NATIVE_TEST, note_native};
+    use crate::render::ExternalFormat;
+    let _lock = NATIVE_TEST.lock().unwrap_or_else(|e| e.into_inner());
+    note_native(&[ExternalFormat::Yuv420]);
+    let Some(mut s) = open_h264_stream() else {
+        return;
+    };
+    let (mut buffers, mut frames) = (0, 0);
+    #[cfg_attr(not(feature = "gl"), allow(unused_mut))]
+    let mut drawn = 0;
+    loop {
+        note_native(&[ExternalFormat::Yuv420]);
+        let Some(f) = s.next().unwrap() else {
+            break;
+        };
+        frames += 1;
+        if format!("{:?}", f.image).contains("AHardwareBuffer") {
+            buffers += 1;
+            assert_eq!(f.image.format(), ExternalFormat::Yuv420);
+            let (left, right) = if f.time < Duration::from_millis(500) {
+                (RED, BLUE)
+            } else {
+                (LIME, YELLOW)
+            };
+            assert_halves(&on_cpu(&f.image), left, right, "a hardware buffer");
+            // OpenGL ES samples it as an external texture.
+            #[cfg(feature = "gl")]
+            if f.time.as_millis() % 400 == 0 {
+                let scene = scene_of(&f.image);
+                match crate::gpu::render_scene_scaled(&scene, Color::BLACK, ScaleFactor::IDENTITY) {
+                    Ok(gpu) => {
+                        assert_eq!(crate::gpu::stats().uploads, 0, "uploaded, not imported");
+                        assert_halves(&gpu, left, right, "OpenGL ES's frame");
+                        drawn += 1;
+                    }
+                    Err(e) if std::env::var_os("STIPPLE_REQUIRE_GPU").is_none() => {
+                        eprintln!("skipping the draw: no OpenGL ES: {e}");
+                    }
+                    Err(e) => panic!("{e}"),
+                }
+            }
+        }
+    }
+    eprintln!(
+        "MediaCodec: {buffers} of {frames} frames as hardware buffers, {drawn} drawn on the GPU"
+    );
+    assert_eq!(frames, 10);
+    note_native(&[]);
+}
+
+/// VideoToolbox decodes the H.264 clip into `IOSurface`s: NV12 buffers
+/// (no copy made), drawn by the software renderer from the locked surface.
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[test]
+fn h264_decodes_through_videotoolbox_into_io_surfaces() {
+    let Some(s) = open_h264_stream() else {
+        return;
+    };
+    check_h264_stream(s, |image| {
+        assert_eq!(image.format(), crate::render::ExternalFormat::Nv12);
+        assert!(format!("{image:?}").contains("IOSurface"));
+    });
 }
 
 /// Metal draws VideoToolbox's buffers straight from their `IOSurface`s:

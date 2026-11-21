@@ -9,8 +9,9 @@
 //! ```
 //!
 //! The bundled clip is H.264 in MP4 (`clip.mp4`), which VideoToolbox decodes
-//! on macOS and iOS (its buffers drawn by Metal without a copy) and VA-API on
-//! Linux; where neither can, the same clip in MPEG-2 (`clip.mkv`) plays
+//! on macOS and iOS (its buffers drawn by Metal without a copy), VA-API on
+//! Linux, Media Foundation on Windows and `MediaCodec` on Android; where
+//! none can, the same clip in MPEG-2 (`clip.mkv`) plays
 //! through oxideav's software decoder. In the browser, the MP4 plays in a
 //! `<video>` the GPU renderer draws from.
 //!

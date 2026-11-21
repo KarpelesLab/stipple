@@ -3537,6 +3537,19 @@ jobs:
           mkdir -p visual_output/d3d-compare
           cargo test --features d3d --lib -- gpu:: app_gpu --nocapture --test-threads 1
           cargo test --release --features d3d --lib -- --ignored bench_cpu_against_gpu --nocapture
+      # stipple::video's H.264 clip through Media Foundation (src/video/mf.rs):
+      # the system's decoder as a hand-driven IMFTransform, in software on
+      # this WARP-only runner; every frame's colors and time, seeking, a
+      # Video played to its last frame; then, while Direct3D 11 imports
+      # NV12, each frame a shared NV12 texture drawn by D3D11 with nothing
+      # uploaded. STIPPLE_REQUIRE_VIDEO fails the tests where Media
+      # Foundation is missing instead of skipping. Not blocking yet.
+      - name: Decode H.264 through Media Foundation
+        continue-on-error: true
+        shell: bash
+        env:
+          STIPPLE_REQUIRE_VIDEO: "1"
+        run: "cargo test --features video,d3d --lib video:: -- --nocapture --test-threads 1"
       # The native theme on Direct3D 11: the gallery with the controls uxtheme
       # draws, through D3D11 against the CPU at scales 1, 1.5 and 2 (the
       # comparison above also has a native-themed screen; this is the whole
@@ -6739,7 +6752,12 @@ jobs:
           target: google_apis
           force-avd-creation: true
           disable-animations: true
+          # First stipple::video's H.264 clip through MediaCodec (src/video/
+          # mediacodec.rs): into an AImageReader, the frames' colors, times,
+          # seeking, the hardware buffers drawn by GLES; then into the
+          # decoder's own buffers. Not blocking yet.
           script: |
+            tools/gpu-mobile.sh android video gl || echo "::warning::H.264 through MediaCodec failed on the emulator (not blocking yet)"
             STIPPLE_GPU_DUMP=visual_output/android-gl-compare tools/gpu-mobile.sh android corpus gl
             STIPPLE_GPU_DUMP=visual_output/android-vk-compare tools/gpu-mobile.sh android corpus vk
             tools/gpu-mobile.sh android bench --quick --renderer gl --json android-gl.json

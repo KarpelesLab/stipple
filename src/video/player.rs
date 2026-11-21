@@ -1,6 +1,7 @@
 //! The native player: a thread per video that demuxes the file (oxideav's
 //! MP4 and Matroska demuxers), feeds the video stream's packets to a
-//! decoder (VideoToolbox, VA-API, or oxideav's MPEG-1/2 software decoder),
+//! decoder (VideoToolbox, VA-API, Media Foundation, `MediaCodec`, or
+//! oxideav's MPEG-1/2 software decoder),
 //! puts the frames back in presentation order and shows each when its time
 //! comes, against the clock, waking the views that draw it.
 
@@ -125,10 +126,6 @@ fn make_decoder(
     frame_time: Duration,
 ) -> Result<Box<dyn FrameDecoder>, VideoError> {
     let codec = params.codec_id.as_str();
-    #[cfg_attr(
-        not(any(target_os = "macos", target_os = "ios", target_os = "linux")),
-        allow(unused_mut)
-    )]
     let mut why = None;
     if hardware {
         #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -141,6 +138,20 @@ fn make_decoder(
         #[cfg(target_os = "linux")]
         if codec == "h264" {
             match super::vaapi::VaDecoder::new(params) {
+                Ok(d) => return Ok(Box::new(d)),
+                Err(e) => why = Some(e),
+            }
+        }
+        #[cfg(target_os = "windows")]
+        if matches!(codec, "h264" | "hevc" | "h265") {
+            match super::mf::MfDecoder::new(params, frame_time) {
+                Ok(d) => return Ok(Box::new(d)),
+                Err(e) => why = Some(e),
+            }
+        }
+        #[cfg(target_os = "android")]
+        if matches!(codec, "h264" | "hevc" | "h265") {
+            match super::mediacodec::CodecDecoder::new(params) {
                 Ok(d) => return Ok(Box::new(d)),
                 Err(e) => why = Some(e),
             }

@@ -1284,10 +1284,18 @@ CPU elsewhere, and the CPU is always the fallback.
   `CVPixelBuffer`s (H.264, HEVC) are `IOSurface` external images, drawn by
   Metal with nothing uploaded (run on an M5 Max, against the software
   renderer); VA-API's H.264 surfaces are read back once (exporting them
-  as `dma-buf`s needs surfaces `oxideav-vaapi` doesn't reuse;
-  compile-checked); MPEG-2 decodes in software (oxideav) as pixels; the
-  web's `<video>` is a web source. Left: sound, and H.264 without a
-  hardware decoder (Windows, Android).*
+  as `dma-buf`s needs surfaces `oxideav-vaapi` doesn't reuse; run on an
+  NVIDIA GPU through `nvidia-vaapi-driver`); Media Foundation's H.264 and
+  HEVC (Windows: a hand-driven `IMFTransform`, DXVA through an
+  `IMFDXGIDeviceManager` where there's a GPU, else software) are shared
+  NV12 textures while Direct3D 11 draws, else NV12 converted (run on CI's
+  WARP-only runner: software decoding, D3D11 drawing the textures);
+  `MediaCodec`'s (Android) are an `AImageReader`'s `AHardwareBuffer`s
+  while the GPU renderer imports them, else converted, with a `ByteBuffer`
+  fallback (run on the API 34 emulator, GLES drawing the buffers); MPEG-2
+  decodes in software (oxideav) as pixels; the web's `<video>` is a web
+  source. Left: sound; DXVA, a phone's hardware decoder and HEVC to run on
+  devices.*
 - 🚧 Natively drawn controls (`Theme::native()`) kept as cached textures, so
   the native theme works under the GPU renderers.
   *The bitmaps the OS draws, cached by control, value, state, appearance,
