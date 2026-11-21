@@ -115,6 +115,7 @@ class Manifest:
         d = dict(data)
         ios = d.pop("ios", {}) or {}
         android = d.pop("android", {}) or {}
+        linux = d.pop("linux", {}) or {}
         localized = d.pop("localized", {}) or {}
 
         self.id = self._req(d, "id")
@@ -164,6 +165,7 @@ class Manifest:
         self._links(d)
         self._ios(ios)
         self._android(android)
+        self._linux(linux)
         if d:
             raise ManifestError(f"unknown keys: {', '.join(sorted(d))}")
 
@@ -333,6 +335,38 @@ class Manifest:
         self.android_debuggable = bool(d.pop("debuggable", False))
         if d:
             raise ManifestError(f"unknown keys in android: {', '.join(sorted(d))}")
+
+    # --- Linux ---------------------------------------------------------------
+
+    def _linux(self, d):
+        d = dict(d)
+        self.linux_prefix = str(d.pop("prefix", "/usr"))
+        if not self.linux_prefix.startswith("/"):
+            raise ManifestError("linux.prefix: an absolute path (/usr, /opt/example)")
+        # The session bus starts the app for the desktop's
+        # org.freedesktop.Application calls (App::dbus_activatable).
+        self.linux_dbus_activatable = bool(d.pop("dbus-activatable", False))
+        self.linux_categories = list(d.pop("categories", ["Utility"]))
+        for c in self.linux_categories:
+            if not isinstance(c, str) or not re.match(r"^[A-Za-z0-9_-]+$", c):
+                raise ManifestError(f"linux.categories: {c!r} isn't a category (Utility, Development)")
+        self.linux_comment = d.pop("comment", None)
+        self.linux_mime_types = list(d.pop("mime-types", []))
+        for t in self.linux_mime_types:
+            if not isinstance(t, str) or not re.match(r"^[\w.+-]+/[\w.+-]+$", t):
+                raise ManifestError(f"linux.mime-types: {t!r} isn't a MIME type (text/plain)")
+        self.linux_actions = []
+        for a in d.pop("actions", []):
+            if not isinstance(a, dict) or not isinstance(a.get("id"), str) or not isinstance(a.get("name"), str):
+                raise ManifestError("linux.actions: tables with an id and a name")
+            if not re.match(r"^[A-Za-z0-9-]+$", a["id"]):
+                raise ManifestError(f"linux.actions: {a['id']!r} isn't an action id (new-window)")
+            extra = set(a) - {"id", "name"}
+            if extra:
+                raise ManifestError(f"linux.actions: unknown keys {', '.join(sorted(extra))}")
+            self.linux_actions.append({"id": a["id"], "name": a["name"]})
+        if d:
+            raise ManifestError(f"unknown keys in linux: {', '.join(sorted(d))}")
 
     def name_in(self, lang):
         return self.localized.get(lang, {}).get("name")

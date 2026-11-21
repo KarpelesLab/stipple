@@ -26,6 +26,11 @@ mod unix;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use unix as os;
 
+/// The session bus's `org.freedesktop.Application`, for an app that is
+/// [D-Bus activatable](crate::App::dbus_activatable).
+#[cfg(target_os = "linux")]
+mod dbus;
+
 #[cfg(target_os = "windows")]
 #[allow(unsafe_code)]
 mod windows;
@@ -59,6 +64,18 @@ pub struct Launch {
     /// [`WindowRequest::Activate`](crate::platform::WindowRequest::Activate)
     /// to the window that shows the launch.
     pub activation_token: Option<String>,
+    /// The desktop action asked for, when the launch came as D-Bus
+    /// activation's `ActivateAction` (a `.desktop` file's `[Desktop Action
+    /// new-window]`, picked from the dock or the app grid): its name. See
+    /// [`App::dbus_activatable`](crate::App::dbus_activatable).
+    pub action: Option<String>,
+    /// `ActivateAction`'s parameter, when it is a string.
+    pub action_target: Option<String>,
+    /// Whether this is the launch the session bus started the running
+    /// process for (D-Bus activation): the app's first window is already
+    /// up, so show the launch there (raise it with the token, open the
+    /// files in it) rather than in a new one.
+    pub started_app: bool,
 }
 
 impl Launch {
@@ -93,11 +110,17 @@ impl Launch {
                     .find(|(k, v)| k == name && !v.is_empty())
                     .map(|(_, v)| v.clone())
             });
+        #[allow(unused_mut)]
+        let mut args: Vec<String> = std::env::args_os().skip(1).map(lossy).collect();
+        // The switch a D-Bus `.service` file starts the app with.
+        #[cfg(target_os = "linux")]
+        args.retain(|a| a != dbus::SERVICE_SWITCH);
         Self {
-            args: std::env::args_os().skip(1).map(lossy).collect(),
+            args,
             cwd: std::env::current_dir().ok(),
             env,
             activation_token: token,
+            ..Self::default()
         }
     }
 
@@ -151,12 +174,31 @@ pub(crate) enum Claim {
 const PATIENCE: Duration = Duration::from_secs(3);
 
 /// Own `id`, listening for launches (each [`deliver`]ed), or hand this
-/// process's launch to the process that owns it.
+/// process's launch to the process that owns it. With `dbus` (Linux), on
+/// the session bus first, as `org.freedesktop.Application`; the Unix socket
+/// still listens beside it, and takes over without a bus.
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-pub(crate) fn claim(id: &str) -> Claim {
+pub(crate) fn claim(id: &str, dbus: bool) -> Claim {
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     {
         let launch = Launch::current();
+        #[cfg(target_os = "linux")]
+        if dbus {
+            match dbus::claim(id, &launch) {
+                Claim::Primary => {
+                    // `forward_launch` (and an app without a bus) reach it
+                    // through the socket.
+                    if let Ok(Some(owner)) = os::own(id) {
+                        os::listen(owner, Box::new(deliver));
+                    }
+                    return Claim::Primary;
+                }
+                Claim::Forwarded => return Claim::Forwarded,
+                Claim::Unavailable => {}
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        let _ = dbus;
         let deadline = std::time::Instant::now() + PATIENCE;
         loop {
             match os::own(id) {
@@ -183,7 +225,7 @@ pub(crate) fn claim(id: &str) -> Claim {
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {
-        let _ = id;
+        let _ = (id, dbus);
         Claim::Unavailable
     }
 }
@@ -384,6 +426,7 @@ mod tests {
                 ("EMPTY".into(), "".into()),
             ],
             activation_token: Some("tok-1".into()),
+            ..Launch::default()
         }
     }
 

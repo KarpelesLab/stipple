@@ -178,6 +178,7 @@ mod tests {
             cwd: Some("/tmp".into()),
             env: vec![("K".into(), "v".into())],
             activation_token: Some("t".into()),
+            ..Launch::default()
         };
         for _ in 0..2 {
             let stream = connect_in(&dir, id).unwrap();

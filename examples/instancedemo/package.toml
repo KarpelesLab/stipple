@@ -1,0 +1,20 @@
+# instancedemo's packaging manifest for cargo-stipple (tools/package): the
+# Linux staging root CI installs and starts through the session bus:
+#
+#   tools/package/cargo-stipple linux --example instancedemo \
+#       --config examples/instancedemo/package.toml
+#
+# An app keeps the same keys in its Cargo.toml, under
+# [package.metadata.stipple]. See docs/packaging.md.
+id = "org.stipple.InstanceDemo"
+name = "Instance Demo"
+version = "1.0.0"
+icon = "../../tools/package/stipple-icon.svg"
+
+[linux]
+# DBusActivatable=true in the .desktop file, and the session bus .service
+# file that starts the app (App::dbus_activatable).
+dbus-activatable = true
+categories = ["Utility"]
+comment = "One instance, started by the session bus"
+actions = [{ id = "new-window", name = "New Window" }]

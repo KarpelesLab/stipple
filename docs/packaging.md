@@ -1,4 +1,4 @@
-# Packaging for the App Store and Google Play
+# Packaging for the App Store, Google Play and Linux
 
 `cargo stipple` ([`tools/package`](../tools/package)) turns a Stipple app
 into what the stores take: a signed `.ipa` for App Store Connect (and a
@@ -22,6 +22,7 @@ cargo stipple check        # read the manifest
 cargo stipple android      # .aab + universal APK
 cargo stipple ios --simulator
 cargo stipple ios          # .app + .ipa
+cargo stipple linux        # a staging root (bin, .desktop, D-Bus .service, icons) + tarball
 ```
 
 The tool is Python scripts (3.11 or later, standard library only;
@@ -122,6 +123,14 @@ permissions = ["CAMERA", "POST_NOTIFICATIONS"]
 # java = "android/java"            # the app's own Java sources (javac + d8), or a list of directories
 # dex = ["android/vpn.dex"]        # prebuilt dex files, added as classes<N>.dex
 # manifest-fragment = "android/manifest-fragment.xml"   # merged into the manifest (see below)
+
+[package.metadata.stipple.linux]
+# prefix = "/usr"                  # where it installs (--prefix overrides)
+# dbus-activatable = true          # DBusActivatable=true + a session bus .service file
+# categories = ["Utility"]         # the .desktop file's Categories
+# comment = "Reads QR codes"
+# mime-types = ["image/png"]       # files it opens (url-schemes become x-scheme-handler/…)
+# actions = [{ id = "new-window", name = "New Window" }]   # [Desktop Action]s
 ```
 
 `cargo-stipple check` prints what it understood; unknown keys are errors.
@@ -529,6 +538,31 @@ px icon, the feature graphic), the content rating, the data safety form and
 the target audience are filled in there. The Play Developer API
 (`edits.bundles.upload`) uploads from CI with a service account.
 
+## Linux
+
+`cargo stipple linux` builds the binary for the host (or `--linux-target`)
+and installs it into a staging root, `target/stipple-package/linux/root/`,
+under the prefix (`/usr`, or `linux.prefix`, or `--prefix`), with a tarball
+of it beside (`<id>-<version>-<arch>.tar.gz`) for a distribution package's
+`DESTDIR` or a plain `cp -a`:
+
+| File | What it is |
+|---|---|
+| `bin/<name>` | the executable |
+| `share/applications/<id>.desktop` | `Name` (and its translations), `Exec=… %U`, `Icon=<id>`, `Categories`, `StartupWMClass=<id>` (with `AppInfo::new(id)`, the X11 class and the Wayland app id), `MimeType` (`x-scheme-handler/` for each of `url-schemes`, then `linux.mime-types`), `Actions` |
+| `share/dbus-1/services/<id>.service` | with `dbus-activatable`: `Name=<id>`, `Exec=… --gapplication-service` |
+| `share/icons/hicolor/<n>x<n>/apps/<id>.png` | 16 to 512 px, drawn from `icon` (and `scalable/apps/<id>.svg` for an SVG) |
+
+With `linux.dbus-activatable = true` the `.desktop` file says
+`DBusActivatable=true`, and desktops call the app's
+`org.freedesktop.Application` on the session bus instead of running `Exec`;
+the `.service` file lets the bus start it for the call. The app must turn
+on `App::dbus_activatable(true)` (with `App::single_instance` under the
+same id) to serve it; see [os-integration.md](os-integration.md#one-instance-reopening-and-the-dock).
+A desktop action is `ActivateAction(id)` then (`Launch::action`); a desktop
+that doesn't activate over D-Bus runs its `Exec`, which only starts or
+raises the app. `assets` aren't installed.
+
 ## In CI
 
 The `package-ios` and `package-android` jobs in
@@ -540,7 +574,10 @@ wrote), the device `.ipa` is checked (signature, icon catalog, plists, the
 `.appex`'s plist, both signatures and their app-group entitlements; in the
 simulator the extension's executable, run in its bundle, reads what the app
 wrote in the shared container; not blocking, passed in a CI trial run), and the bundle is validated and split by bundletool and
-the APK read back by `aapt2`, `apksigner` and `zipalign`. To sign for real
+the APK read back by `aapt2`, `apksigner` and `zipalign`. The
+`os-integration-linux` job packages `instancedemo` for Linux, validates its
+`.desktop` file, installs it, and lets a private session bus start it
+through the `.service` file it wrote. To sign for real
 in your own CI, decode the keystore or certificate and profile from secrets
 into files, and set the variables above. On macOS, import the `.p12` into a
 temporary keychain:
@@ -573,4 +610,5 @@ Connect key's `.p8` from a secret into a file, and set
 - Uploading itself: the tool stops at the signed files, except through
   Xcode (`STIPPLE_IOS_UPLOAD`).
 - macOS (`.app`/`.pkg` for the Mac App Store, notarization), Windows (MSIX)
-  and Linux (Flatpak, AppImage) packages.
+  and Linux Flatpak, AppImage, `.deb` and `.rpm` packages (Linux gets a
+  staging root and a tarball).

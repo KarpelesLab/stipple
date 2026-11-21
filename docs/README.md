@@ -19,7 +19,7 @@ How to build, package and run on each platform, and what works there today.
 - [iOS](platforms/ios.md)
 - [Android](platforms/android.md)
 - [Web](platforms/web.md): `wasm32` and a `<canvas>`
-- [Packaging for the App Store and Google Play](packaging.md): `cargo-stipple`, a signed `.ipa` and `.aab` from a manifest in `Cargo.toml`
+- [Packaging for the App Store, Google Play and Linux](packaging.md): `cargo-stipple`, a signed `.ipa` and `.aab` from a manifest in `Cargo.toml`, and a Linux staging root with its `.desktop` and D-Bus `.service` files
 
 ### What works where
 
@@ -76,6 +76,7 @@ How to build, package and run on each platform, and what works there today.
 | Notifications | ✅ ²⁶ | ✅ ²⁶ | ✅ ²⁶ | ✅ ⁵² | ✅ ⁶³ | ✅ ¹⁰ |
 | Tray icon with a menu | ✅ ²⁶ | ✅ ²⁶ | ✅ ²⁶ | — | — | — |
 | One running instance, later launches forwarded (`App::single_instance`) | ✅ ¹⁰ | ✅ ¹⁰ | ✅ | — | — | — |
+| D-Bus activation: `org.freedesktop.Application`, the bus starting the app (`App::dbus_activatable`) | ✅ ⁹⁶ | — | — | — | — | — |
 | Dock menu, reopening, files opened with the app, Window/Services/Help menus | — | — | ✅ | — | — | — |
 | Dropping files and text from other apps | ✅ ²⁸ | ✅ ²⁸ | ✅ ²⁸ | ✅ ⁷⁹ | ✅ ⁷⁹ | ❌ |
 | Dragging inside the app | ✅ ²⁹ | ✅ ²⁹ | ✅ ²⁹ | ✅ ²⁹ | ✅ ²⁹ | ✅ ²⁹ |
@@ -834,6 +835,15 @@ whatever the browser plays, in a `<video>` the GPU renderer imports. No
 sound yet. Run on macOS (VideoToolbox, Metal, the software decoder); CI runs
 the MPEG-2 tests on Linux; VA-API, iOS, Windows, Android and the web glue
 are compile-checked. See [video.md](video.md).
+
+⁹⁶ The single instance as a session bus name serving `Activate`, `Open`
+and `ActivateAction` with `platform_data`'s activation token, startup id and
+directory, as GApplication does; `cargo stipple linux` writes the
+`DBusActivatable=true` `.desktop` file and the `.service` file. Unit-tested,
+a second launch reaches the owner over a private `dbus-daemon` in `cargo
+test`, and CI (not blocking yet) packages and installs `instancedemo` and
+lets a private bus start it for `gdbus call` (passing locally under Xvfb).
+See [os-integration.md](os-integration.md#one-instance-reopening-and-the-dock).
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled;

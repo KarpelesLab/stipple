@@ -7,10 +7,18 @@
 //! (with the window list), a Services menu and a Help menu with a search
 //! field.
 //!
+//! On Linux it is also D-Bus activatable (`App::dbus_activatable`): it owns
+//! `org.stipple.InstanceDemo` on the session bus and serves
+//! `org.freedesktop.Application`, so `gdbus call` (or a desktop reading
+//! `DBusActivatable=true`) reaches it, and with a `.service` file the bus
+//! starts it; `ActivateAction("new-window")` opens a window.
+//!
 //! `--quit-after N` quits once N things were heard (launches, reopens,
 //! opened files and URLs, Dock menu picks), each printed on stdout as it
 //! comes, for CI: run it once with `--quit-after 1`, then again with
-//! arguments, which forwards them and exits at once. On macOS,
+//! arguments, which forwards them and exits at once (`--dbus-forward`: not
+//! through `forward_launch` first, so that `App::run` forwards it, over the
+//! session bus where there is one). On macOS,
 //! `STIPPLE_COCOA_APP_DELEGATE=1` makes the backend send the app delegate a
 //! reopen, a folder and a URL, and pick the Dock menu's first item.
 
@@ -65,13 +73,15 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
 
 fn describe(launch: &Launch) -> String {
     format!(
-        "launch args={:?} cwd={} token={:?}",
+        "launch args={:?} cwd={} token={:?} action={:?} started_app={}",
         launch.args,
         launch
             .cwd
             .as_ref()
             .map_or("?".into(), |p| p.display().to_string()),
-        launch.activation_token
+        launch.activation_token,
+        launch.action,
+        launch.started_app
     )
 }
 
@@ -91,13 +101,18 @@ fn new_window(s: &mut State) {
 fn main() {
     let mut args = std::env::args().skip(1);
     let mut quit_after = None;
+    let mut early = true;
     while let Some(a) = args.next() {
         if a == "--quit-after" {
             quit_after = args.next().and_then(|n| n.parse().ok());
         }
+        // Leave the forwarding to `App::run` (over the session bus).
+        if a == "--dbus-forward" {
+            early = false;
+        }
     }
     // Quit before building anything when another instance takes this launch.
-    if stipple::platform::forward_launch(ID) {
+    if early && stipple::platform::forward_launch(ID) {
         println!("instancedemo: forwarded to the running instance");
         return;
     }
@@ -123,9 +138,13 @@ fn main() {
     let activate = handle.clone();
     app.single_instance(ID, move |s, launch| {
         s.heard(describe(launch));
+        if launch.action.as_deref() == Some("new-window") {
+            new_window(s);
+        }
         // The window that shows the launch comes to the front.
         activate.window(WindowRequest::Activate(launch.activation_token.clone()));
     })
+    .dbus_activatable(true)
     .on_reopen(|s, visible| {
         s.heard(format!("reopen visible={visible}"));
         if !visible {

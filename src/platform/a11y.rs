@@ -169,6 +169,12 @@ impl DBus {
     /// (flags 0). Returns the reply code (1 = primary owner). Apps that export an
     /// accessibility tree own a name so clients can address them.
     pub fn request_name(&mut self, name: &str) -> Result<u32, String> {
+        self.request_name_flags(name, 0)
+    }
+
+    /// [`request_name`](Self::request_name) with `RequestName`'s `flags`
+    /// (4, `DO_NOT_QUEUE`: fail rather than wait for the owner to leave).
+    pub(crate) fn request_name_flags(&mut self, name: &str, flags: u32) -> Result<u32, String> {
         self.serial += 1;
         let serial = self.serial;
         let mut fields = Vec::new();
@@ -180,7 +186,7 @@ impl DBus {
         let mut body = Vec::new();
         put_string(&mut body, name);
         align(&mut body, 4);
-        body.extend_from_slice(&0u32.to_le_bytes()); // flags
+        body.extend_from_slice(&flags.to_le_bytes());
         let msg = build_message(1, serial, &fields, &body);
         self.stream.write_all(&msg).map_err(io)?;
         loop {

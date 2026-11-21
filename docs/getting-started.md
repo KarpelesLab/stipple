@@ -322,7 +322,7 @@ makes them snap, as it does for users who ask for it.
   [macOS](platforms/macos.md), [iOS](platforms/ios.md),
   [Android](platforms/android.md) and [the web](platforms/web.md): how to
   build, package and run on each.
-- [Packaging for the App Store and Google Play](packaging.md):
+- [Packaging for the App Store, Google Play and Linux](packaging.md):
   `cargo install stipple` gives `cargo stipple`, which makes the signed
   `.ipa` and `.aab` from a manifest in the app's `Cargo.toml`.
 - The [examples](../examples): `cargo run --example widgetsdemo` shows most

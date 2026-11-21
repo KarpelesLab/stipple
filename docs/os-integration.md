@@ -238,7 +238,7 @@ the foreground (`AllowSetForegroundWindow`).
 
 | | Who owns the id | How a launch travels |
 |---|---|---|
-| Linux | an `flock` on `$XDG_RUNTIME_DIR/<id>.instance.lock` (or a `stipple-<uid>` directory of the user's own under `/tmp`) | the Unix socket `<id>.instance` beside it |
+| Linux | an `flock` on `$XDG_RUNTIME_DIR/<id>.instance.lock` (or a `stipple-<uid>` directory of the user's own under `/tmp`); with `dbus_activatable`, the id as a session bus name too | the Unix socket `<id>.instance` beside it; with `dbus_activatable`, `org.freedesktop.Application` over the session bus (below) |
 | macOS | the same in the per-user `$TMPDIR` | the same; opening a bundled app again doesn't start a process at all: Launch Services reopens the running one (below) |
 | Windows | the named mutex `Local\stipple-instance-<id>` (per logon session) | the named pipe `\\.\pipe\stipple-instance-<id>-<session>`, remote clients refused |
 | iOS, Android, web | — the system keeps one instance; the hook never runs | |
@@ -248,6 +248,54 @@ which the next owner replaces. The second launch waits up to three seconds
 for the owner's answer; one that doesn't answer leaves the app to run as a
 second instance. The id is the app's reverse-DNS identifier, as in
 `AppInfo`.
+
+**D-Bus activation (Linux).** `App::dbus_activatable(true)` makes the single
+instance a GApplication-style one: the running instance owns the id as a
+name on the session bus and serves `org.freedesktop.Application` (the
+Desktop Entry spec's activation interface) at the id's object path
+(`org.example.Term` at `/org/example/Term`, `-` as `_`); a second launch
+calls it instead of the socket (which still listens, and takes over without
+a bus). Desktops that find `DBusActivatable=true` in the app's
+`<id>.desktop` file make the calls themselves, and with a session bus
+`.service` file the bus starts the app for them when it isn't running.
+`cargo stipple linux` writes both when the manifest says
+`linux.dbus-activatable = true` ([packaging.md](packaging.md#linux)).
+
+| Call | What the launch holds |
+|---|---|
+| `Activate(platform_data)` | no arguments (an icon clicked) |
+| `Open(uris, platform_data)` | the URIs as arguments, `file:` URIs as paths (files opened with the app, a scheme handler's URL, which also reaches `on_open_url`) |
+| `ActivateAction(name, parameter, platform_data)` | `Launch::action` (a `[Desktop Action]` picked from the dock), a string parameter as `action_target` |
+
+`platform_data`'s `activation-token` and `desktop-startup-id` become the
+launch's `activation_token` (and its `XDG_ACTIVATION_TOKEN` /
+`DESKTOP_STARTUP_ID`), and `cwd` its directory. A second launch of the app
+itself calls `Open` when its arguments are all files or URIs, else
+`Activate`, and sends its exact arguments too (as `stipple-args`), so the
+running instance sees the command line it would have over the socket; the
+environment doesn't travel over the bus. The process the bus starts runs
+the `.service` file's `Exec` with `--gapplication-service` (GLib's switch;
+`Launch::current()` drops it), and the call it was started for comes with
+`Launch::started_app`: the app's first window is already up, so show the
+launch there rather than in a new one.
+
+```rust
+app.single_instance("org.example.Term", move |s, launch: &Launch| {
+    if launch.action.as_deref() == Some("new-window") || !launch.started_app {
+        // a new window for it
+    }
+    handle.window(WindowRequest::Activate(launch.activation_token.clone()));
+})
+.dbus_activatable(true)
+.run();
+```
+
+Try it on a session bus by hand:
+
+```sh
+gdbus call --session --dest org.stipple.InstanceDemo --object-path /org/stipple/InstanceDemo \
+  --method org.freedesktop.Application.Open "['file:///tmp/notes.txt']" "{'activation-token': <'t'>}"
+```
 
 **Reopening (macOS).** Clicking the Dock icon, or opening the app from the
 Finder while it runs, is `applicationShouldHandleReopen:hasVisibleWindows:`,

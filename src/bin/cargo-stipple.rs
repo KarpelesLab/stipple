@@ -34,6 +34,7 @@ const FILES: &[(&str, &[u8])] = &[
     file!("tools/package/helper.rs"),
     file!("tools/package/ios.py"),
     file!("tools/package/ios_extensions.py"),
+    file!("tools/package/linux.py"),
     file!("tools/package/manifest.py"),
     file!("tools/android/billing.py"),
 ];

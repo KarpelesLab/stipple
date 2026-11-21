@@ -104,9 +104,21 @@ and presented through `wl_shm`. See [gpu.md](../gpu.md#wayland).
 A `.desktop` file with `MimeType=x-scheme-handler/myapp;` and `Exec=app %u`
 (made the default with `xdg-mime default app.desktop x-scheme-handler/myapp`)
 starts the app with the URL as its argument, which `App::on_open_url` hears
-as the loop starts. A URL while the app runs starts a second process: there
-is no single-instance forwarding yet. See
+as the loop starts. A URL while the app runs starts a second process, which
+a [single instance](../os-integration.md#one-instance-reopening-and-the-dock)
+hands to the running one. See
 [os-integration.md](../os-integration.md#urls-that-open-the-app).
+
+## Packaging and D-Bus activation
+
+`cargo stipple linux` stages the app under a prefix with its `.desktop`
+file and hicolor icons, and a tarball of it ([packaging.md](../packaging.md#linux)).
+With `linux.dbus-activatable = true` in the manifest and
+`App::dbus_activatable(true)` in the app, the `.desktop` file says
+`DBusActivatable=true` and a session bus `.service` file lets the bus start
+the app: desktops call its `org.freedesktop.Application` (`Activate`,
+`Open`, `ActivateAction`) with the launch's activation token, as for a
+GApplication.
 
 ## Known gaps
 

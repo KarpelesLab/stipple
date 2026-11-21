@@ -19,6 +19,8 @@ type DockFn<S> = Rc<dyn Fn(&S) -> Menu<S>>;
 pub(crate) struct Hooks<S> {
     /// The id the app runs once under, and what hears the launches after.
     single: Option<(String, LaunchFn<S>)>,
+    /// Whether the single instance goes over the session bus.
+    dbus: bool,
     reopen: Option<ReopenFn<S>>,
     open_files: Option<FilesFn<S>>,
     dock: Option<DockFn<S>>,
@@ -30,6 +32,7 @@ impl<S> Default for Hooks<S> {
     fn default() -> Self {
         Self {
             single: None,
+            dbus: false,
             reopen: None,
             open_files: None,
             dock: None,
@@ -85,6 +88,47 @@ impl<S: 'static> App<S> {
         self
     }
 
+    /// Make the [single instance](Self::single_instance) D-Bus activatable,
+    /// as GApplication apps are (Linux): the running instance owns its id
+    /// as a name on the session bus and serves `org.freedesktop.Application`
+    /// at the id's object path (`org.example.Term` at `/org/example/Term`),
+    /// and a second launch calls it: `Activate` without arguments, `Open`
+    /// with files or URIs, its exact arguments, directory and activation
+    /// token in `platform_data` either way. Desktops that read
+    /// `DBusActivatable=true` in the app's `.desktop` file call it
+    /// themselves, `ActivateAction` for its desktop actions (see
+    /// [`Launch::action`]); with the session bus `.service` file `cargo
+    /// stipple linux` writes, the bus starts the app for the call when it
+    /// isn't running, and that first launch says
+    /// [`started_app`](Launch::started_app). The `.service` file's `Exec`
+    /// passes `--gapplication-service`, which the app should ignore.
+    ///
+    /// The Unix socket of [`single_instance`](Self::single_instance) still
+    /// listens beside the name (for
+    /// [`platform::forward_launch`](crate::platform::forward_launch)), and is
+    /// the way when there's no session bus. A launch over the bus doesn't
+    /// carry the environment. Other platforms ignore it.
+    ///
+    /// ```no_run
+    /// use stipple::prelude::*;
+    /// use stipple::platform::{Launch, WindowRequest};
+    /// # fn view(_: &(), _: &mut Cx<()>) -> Element { spacer() }
+    /// let app = App::new((), view);
+    /// let handle = app.handle();
+    /// app.single_instance("org.example.Term", move |_, launch: &Launch| {
+    ///     if launch.action.as_deref() == Some("new-window") || !launch.started_app {
+    ///         // open a window for it
+    ///     }
+    ///     handle.window(WindowRequest::Activate(launch.activation_token.clone()));
+    /// })
+    /// .dbus_activatable(true)
+    /// .run();
+    /// ```
+    pub fn dbus_activatable(mut self, activatable: bool) -> Self {
+        self.instance.dbus = activatable;
+        self
+    }
+
     /// Claim the [`single_instance`](Self::single_instance) id, if there is
     /// one. Returns whether another process took this launch, so the app
     /// shouldn't run.
@@ -92,7 +136,8 @@ impl<S: 'static> App<S> {
         let Some((id, _)) = &self.instance.single else {
             return false;
         };
-        crate::platform::instance::claim(id) == crate::platform::instance::Claim::Forwarded
+        crate::platform::instance::claim(id, self.instance.dbus)
+            == crate::platform::instance::Claim::Forwarded
     }
 
     /// Run the launch hook for a launch another process handed over.

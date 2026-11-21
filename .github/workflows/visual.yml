@@ -5048,6 +5048,36 @@ jobs:
           cargo build --release --example instancedemo
           bash .github/scripts/single-instance.sh target/release/examples/instancedemo
 
+      # App::dbus_activatable: `cargo stipple linux` packages instancedemo
+      # (its .desktop file DBusActivatable, a session bus .service file),
+      # the job installs it, and a private session bus with that .service
+      # file starts the app for a `gdbus call` to
+      # org.freedesktop.Application.Open, which hands it the URI, the
+      # activation token and the startup id; ActivateAction and a launch
+      # from the command line reach the running one over the bus. Not
+      # blocking until it has passed on CI.
+      - name: D-Bus activation (instancedemo packaged, started by the bus)
+        continue-on-error: true
+        env:
+          DISPLAY: ":99"
+          OUT_DIR: visual_output
+        run: |
+          command -v gdbus || sudo apt-get install -y libglib2.0-bin
+          command -v desktop-file-validate || sudo apt-get install -y desktop-file-utils
+          prefix="$RUNNER_TEMP/inst"
+          tools/package/cargo-stipple linux --example instancedemo \
+            --config examples/instancedemo/package.toml --prefix "$prefix" --out "$RUNNER_TEMP/pkg"
+          cp -a "$RUNNER_TEMP/pkg/root$prefix" "$prefix"
+          desktop="$prefix/share/applications/org.stipple.InstanceDemo.desktop"
+          service="$prefix/share/dbus-1/services/org.stipple.InstanceDemo.service"
+          cat "$desktop" "$service"
+          cp "$desktop" "$service" visual_output/
+          desktop-file-validate "$desktop"
+          grep -qx "DBusActivatable=true" "$desktop"
+          grep -qx "Exec=$prefix/bin/instancedemo --gapplication-service" "$service"
+          cargo build --release --example instancedemo
+          bash .github/scripts/dbus-activation.sh target/release/examples/instancedemo "$service"
+
       # platform::network end to end: netstatus in a user and network
       # namespace of its own, while the script adds and removes links and
       # default routes (docs/network.md). Ubuntu's AppArmor keeps

@@ -1847,8 +1847,23 @@ Most input only works on X11 today.
   arguments, directory, environment and activation token to the running one
   over a Unix socket beside an `flock` (Linux, macOS) or a named pipe behind a
   named mutex (Windows), and exits; its URLs reach `on_open_url`. Two launches
-  pass on macOS; Linux (Xvfb) and Windows run non-blocking in CI. D-Bus
-  `org.freedesktop.Application` activation isn't there.*
+  pass on macOS; Linux (Xvfb) and Windows run non-blocking in CI.*
+- ✅ D-Bus activation (`App::dbus_activatable`, `Launch::action` /
+  `action_target` / `started_app`, `cargo stipple linux`, #88): *the single
+  instance owns its id on the session bus and serves
+  `org.freedesktop.Application` (`Activate`, `Open`, `ActivateAction`,
+  `platform_data`'s `activation-token`, `desktop-startup-id` and `cwd`), as
+  GApplication does, over the hand-written D-Bus client; a second launch
+  calls it (its exact arguments in `stipple-args`), the socket still beside
+  it. `cargo stipple linux` stages bin, `.desktop` (`DBusActivatable=true`,
+  actions, scheme handlers), the session bus `.service` file and hicolor
+  icons, and a tarball. The wire format is unit-tested, a second launch
+  reaches the owner over a private `dbus-daemon` in `cargo test`, and CI
+  (non-blocking) packages and installs instancedemo, lets a private bus start
+  it for `gdbus call … Open`, then sends `ActivateAction` and a command-line
+  launch over the bus (passing locally under Xvfb). The environment doesn't
+  travel over the bus, and `org.gtk.Application`'s `CommandLine` isn't
+  served.*
 - ✅ macOS's Dock and system menus (`App::on_reopen`, `on_open_files`,
   `dock_menu`, `Menu::role(MenuRole::Window | Services | Help)`, #89):
   *`applicationShouldHandleReopen:hasVisibleWindows:`, `applicationDockMenu:`,

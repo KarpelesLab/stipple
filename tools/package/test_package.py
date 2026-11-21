@@ -1,6 +1,7 @@
 """Tests for cargo-stipple's pure parts (the manifest, the Android manifest
 and bundle config, the Info.plist): `python3 -m unittest discover tools/package`."""
 
+import os
 import plistlib
 import xml.etree.ElementTree as ET
 import struct
@@ -15,6 +16,7 @@ import android_code  # noqa: E402
 from common import PackageError  # noqa: E402
 import ios  # noqa: E402
 import ios_extensions  # noqa: E402
+import linux  # noqa: E402
 from common import Target  # noqa: E402
 from manifest import ANDROID_TARGET_SDK, Manifest, ManifestError, android_qualifier  # noqa: E402
 
@@ -640,6 +642,91 @@ class XcodeSigningTests(unittest.TestCase):
             self.assertEqual(props["CFBundleVersion"], "7")
             self.assertEqual(props["Team"], "ABCDE12345")
             self.assertEqual(info["ArchiveVersion"], 2)
+
+
+class LinuxTests(unittest.TestCase):
+    def test_manifest(self):
+        m = manifest()
+        self.assertEqual(m.linux_prefix, "/usr")
+        self.assertFalse(m.linux_dbus_activatable)
+        self.assertEqual(m.linux_categories, ["Utility"])
+        for bad in (
+            {"prefix": "usr"},
+            {"categories": ["Not a category"]},
+            {"mime-types": ["text"]},
+            {"actions": [{"id": "new window", "name": "x"}]},
+            {"actions": [{"id": "a"}]},
+            {"nope": 1},
+        ):
+            with self.subTest(bad=bad), self.assertRaises(ManifestError):
+                manifest(linux=bad)
+
+    def test_desktop_entry_and_service(self):
+        m = manifest(
+            name="My App",
+            languages=["fr"],
+            localized={"fr": {"name": "Mon appli"}},
+            **{"url-schemes": ["myapp"]},
+            linux={
+                "dbus-activatable": True,
+                "categories": ["Development", "IDE"],
+                "comment": "Edits\nthings",
+                "mime-types": ["text/plain"],
+                "actions": [{"id": "new-window", "name": "New Window"}],
+            },
+        )
+        entry = linux.desktop_entry(m, "/usr/bin/my-app")
+        lines = entry.splitlines()
+        self.assertEqual(lines[0], "[Desktop Entry]")
+        for line in (
+            "Name=My App",
+            "Name[fr]=Mon appli",
+            "Comment=Edits\\nthings",
+            "Exec=/usr/bin/my-app %U",
+            "Icon=com.example.app",
+            "Categories=Development;IDE;",
+            "StartupWMClass=com.example.app",
+            "MimeType=x-scheme-handler/myapp;text/plain;",
+            "DBusActivatable=true",
+            "Actions=new-window;",
+            "[Desktop Action new-window]",
+            "Name=New Window",
+        ):
+            self.assertIn(line, lines)
+        self.assertEqual(
+            linux.dbus_service(m, "/usr/bin/my-app"),
+            "[D-BUS Service]\nName=com.example.app\nExec=/usr/bin/my-app --gapplication-service\n",
+        )
+        plain = linux.desktop_entry(manifest(), "/usr/bin/x")
+        self.assertNotIn("DBusActivatable", plain)
+        self.assertNotIn("MimeType", plain)
+
+    def test_exec_quoting(self):
+        self.assertEqual(linux.exec_quote("/usr/bin/app"), "/usr/bin/app")
+        self.assertEqual(linux.exec_quote("/opt/My App/app"), '"/opt/My App/app"')
+        self.assertEqual(linux.exec_quote('/a"$b'), '"/a\\"\\$b"')
+        self.assertEqual(linux.exec_quote("50%"), "50%%")
+
+    def test_stage(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            exe = d / "built"
+            exe.write_bytes(b"\x7fELF")
+            m = manifest(linux={"dbus-activatable": True, "prefix": "/opt/ex"})
+            files = linux.stage(m, d / "root", exe, "my-app")
+            self.assertEqual(
+                sorted(files),
+                [
+                    "opt/ex/bin/my-app",
+                    "opt/ex/share/applications/com.example.app.desktop",
+                    "opt/ex/share/dbus-1/services/com.example.app.service",
+                ],
+            )
+            self.assertTrue(os.access(d / "root/opt/ex/bin/my-app", os.X_OK))
+            service = (d / "root/opt/ex/share/dbus-1/services/com.example.app.service").read_text()
+            self.assertIn("Exec=/opt/ex/bin/my-app --gapplication-service", service)
+            without = linux.stage(manifest(), d / "root2", exe, "my-app")
+            self.assertFalse(any("dbus-1" in f for f in without))
 
 
 class InstalledToolTests(unittest.TestCase):
