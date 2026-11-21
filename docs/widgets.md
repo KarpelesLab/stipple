@@ -165,6 +165,19 @@ suggestion takes it, and the ▾ at the field's end lists them all.
 `.on_change` runs after the text changes, by typing or by taking a
 suggestion. Long lists scroll and build only the rows in view.
 
+`ComboBox::new().inline_completion(true)` types ahead, as an address bar
+does: when the typed text starts the first suggestion listed (ignoring case),
+the rest of that suggestion follows it in the field, selected. Typing on
+replaces it and completes again; Backspace or Delete removes it (and a
+deletion doesn't complete); Tab, End or Right takes it, Enter takes and
+submits it, and Escape removes it. `completion()` is the part typed ahead
+while it shows, and `typed()` the text without it; the list matches the typed
+text only. Nothing is typed ahead while an input method composes (the
+composition replaces the completion; its commit completes again) or with the
+caret before the end. Screen readers read the field's text with the
+completion as its selection, which is how the platforms' own autocompleting
+combo boxes announce it.
+
 ## Number input
 
 An editable field with ▴ and ▾ stepper buttons.

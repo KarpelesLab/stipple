@@ -39,6 +39,11 @@ pub struct ComboBox {
     shown: Memo<Shown>,
     /// The list just opened: it scrolls to the highlighted suggestion.
     reveal: Cell<bool>,
+    /// Type the rest of the first suggestion ahead, selected.
+    inline: bool,
+    /// Where the inline completion starts in the text, while it shows: the
+    /// text from there to its end is typed ahead, and selected.
+    completion: Option<usize>,
 }
 
 impl ComboBox {
@@ -55,9 +60,103 @@ impl ComboBox {
         }
     }
 
-    /// The text: typed, or a suggestion taken.
+    /// Type ahead (`true`): when what is typed starts the first suggestion
+    /// listed, the rest of that suggestion follows it in the field,
+    /// selected, as the address bars and file dialogs of the desktop
+    /// platforms do. Typing on replaces it (and completes again), Backspace
+    /// or Delete removes it, and Tab, End or Right (or Enter, which then
+    /// submits it) takes it; Escape removes it. Nothing is typed ahead while
+    /// an input method is composing, after a deletion, or with the caret
+    /// before the end. Off by default.
+    ///
+    /// ```
+    /// use stipple::core::KeyInput;
+    /// use stipple::widgets::ComboBox;
+    /// let hosts = ["example.com", "example.org"];
+    /// let mut host = ComboBox::new().inline_completion(true);
+    /// host.handle_key(&KeyInput::Text("ex".into()), &hosts);
+    /// assert_eq!(host.text(), "example.com");
+    /// assert_eq!(host.completion(), Some("ample.com")); // selected
+    /// host.handle_key(&KeyInput::Backspace, &hosts); // removes it
+    /// assert_eq!(host.text(), "ex");
+    /// host.handle_key(&KeyInput::Text("ample.o".into()), &hosts);
+    /// host.handle_key(&KeyInput::End, &hosts); // takes it
+    /// assert_eq!((host.text(), host.completion()), ("example.org", None));
+    /// ```
+    pub fn inline_completion(mut self, on: bool) -> Self {
+        self.set_inline_completion(on);
+        self
+    }
+
+    /// Turn [inline completion](Self::inline_completion) on or off.
+    pub fn set_inline_completion(&mut self, on: bool) {
+        self.inline = on;
+        if !on {
+            self.completion = None;
+        }
+    }
+
+    /// The text: typed, or a suggestion taken, with any inline completion.
     pub fn text(&self) -> &str {
         self.input.text()
+    }
+
+    /// The text typed ahead by [inline
+    /// completion](Self::inline_completion), selected at the end of the
+    /// field, while it shows.
+    pub fn completion(&self) -> Option<&str> {
+        self.completion_start().map(|at| &self.input.text()[at..])
+    }
+
+    /// The text as typed: without an inline completion showing.
+    pub fn typed(&self) -> &str {
+        let text = self.input.text();
+        self.completion_start().map_or(text, |at| &text[..at])
+    }
+
+    /// Where the inline completion starts, if it still shows: selected from
+    /// there to the end, the caret at the end, no composition.
+    fn completion_start(&self) -> Option<usize> {
+        let at = self.completion?;
+        let b = self.input.buffer();
+        let end = b.text().len();
+        (b.selection() == Some((at, end)) && b.caret() == end && b.preedit().is_none())
+            .then_some(at)
+    }
+
+    /// Take the inline completion: the caret goes to the end of the text.
+    fn take_completion(&mut self) {
+        if self.completion_start().is_some() {
+            let end = self.input.text().len();
+            self.input.buffer_mut().place_caret(end);
+        }
+        self.completion = None;
+    }
+
+    /// Type ahead the rest of the first suggestion matching the text, if it
+    /// starts with what was typed (ignoring case).
+    fn complete<T: AsRef<str>>(&mut self, suggestions: &[T]) {
+        self.completion = None;
+        let b = self.input.buffer();
+        let typed = b.text();
+        if typed.is_empty()
+            || b.preedit().is_some()
+            || b.selection().is_some()
+            || b.caret() != typed.len()
+        {
+            return;
+        }
+        let Some(&first) = self.matches(suggestions).first() else {
+            return;
+        };
+        let Some(rest) = rest_after_prefix(suggestions[first].as_ref(), typed) else {
+            return;
+        };
+        let at = typed.len();
+        let rest = rest.to_string();
+        if self.input.type_ahead(&rest) {
+            self.completion = Some(at);
+        }
     }
 
     /// Replace the text (the suggestions stay as they are).
@@ -113,10 +212,11 @@ impl ComboBox {
     }
 
     /// The suggestions the list shows, by index: those containing the text
-    /// (ignoring case; the ones starting with it first), or all of them
+    /// as typed (ignoring case; the ones starting with it first; an inline
+    /// completion showing isn't part of it), or all of them
     /// while the text is empty or the list was opened to browse.
     pub fn matches<T: AsRef<str>>(&self, suggestions: &[T]) -> Vec<usize> {
-        let typed = self.input.text().to_lowercase();
+        let typed = self.typed().to_lowercase();
         if self.browsing || typed.is_empty() {
             return (0..suggestions.len()).collect();
         }
@@ -135,6 +235,7 @@ impl ComboBox {
         if let Some(s) = suggestions.get(index) {
             self.input.set_text(s.as_ref());
         }
+        self.completion = None;
         self.close();
     }
 
@@ -155,6 +256,10 @@ impl ComboBox {
 
     /// [`handle_key`](Self::handle_key), saying whether the field submits.
     fn key<T: AsRef<str>>(&mut self, key: &KeyInput, suggestions: &[T]) -> FieldKey {
+        let completing = self.completion_start().is_some();
+        if !completing {
+            self.completion = None;
+        }
         let matches = self.matches(suggestions);
         let at = self
             .highlighted
@@ -183,26 +288,35 @@ impl ComboBox {
                 };
                 FieldKey::Kept
             }
-            KeyInput::Enter if self.open => match self.highlighted {
+            KeyInput::Enter if self.open || completing => match self.highlighted {
                 Some(i) if at.is_some() => {
                     self.accept(i, suggestions);
                     FieldKey::Changed
                 }
                 _ => {
+                    self.take_completion();
                     self.close();
                     FieldKey::Submit
                 }
             },
-            KeyInput::Text(t) if t == "\t" && self.open => match self.highlighted {
+            KeyInput::Text(t) if t == "\t" && (self.open || completing) => match self.highlighted {
                 Some(i) if at.is_some() => {
                     self.accept(i, suggestions);
                     FieldKey::Changed
                 }
                 _ => {
+                    self.take_completion();
                     self.close();
                     FieldKey::Kept
                 }
             },
+            // Escape takes back what was typed ahead, and closes the list.
+            KeyInput::Escape if completing => {
+                self.input.buffer_mut().backspace();
+                self.completion = None;
+                self.close();
+                FieldKey::Changed
+            }
             KeyInput::Escape if self.open => {
                 self.close();
                 FieldKey::Kept
@@ -213,12 +327,33 @@ impl ComboBox {
                     // Typing shows what matches it; the typed text stands.
                     self.browsing = false;
                     self.highlighted = None;
+                    self.completion = None;
+                    // Typed text (not a deletion, nor a composition: the
+                    // input method's text isn't the field's yet) types the
+                    // rest of the first suggestion ahead.
+                    if self.inline && matches!(key, KeyInput::Text(_)) {
+                        self.complete(suggestions);
+                    }
                     self.open = !self.input.is_empty() && !self.matches(suggestions).is_empty();
                 }
                 edited
             }
         }
     }
+}
+
+/// The rest of `suggestion` after its first characters match `typed`
+/// (ignoring case), if they do and there is a rest.
+fn rest_after_prefix<'a>(suggestion: &'a str, typed: &str) -> Option<&'a str> {
+    let mut rest = suggestion.char_indices();
+    for t in typed.chars() {
+        let (_, s) = rest.next()?;
+        if s != t && !s.to_lowercase().eq(t.to_lowercase()) {
+            return None;
+        }
+    }
+    let at = rest.next().map(|(i, _)| i)?;
+    Some(&suggestion[at..])
 }
 
 /// An editable combo box: a text field editing the text of `state` (the
@@ -325,8 +460,9 @@ pub fn combo_box<S: 'static, T: AsRef<str>>(
     };
     let mut el = keyed_text_field(cx, &state.input, move |s| &mut field(s).input, hooks, keys)
         .autocorrect(false)
-        // Tab takes the highlighted suggestion while the list shows.
-        .captures_tab(open);
+        // Tab takes the highlighted suggestion while the list shows, and
+        // an inline completion.
+        .captures_tab(open || state.completion().is_some());
     // The button at its end: every suggestion, whatever the text.
     if super::field_deco(&theme).is_none()
         && !labels.is_empty()
@@ -386,6 +522,27 @@ mod tests {
         })
         .no_font()
         .logical_size(Size::new(300.0, 400.0))
+    }
+
+    /// [`app`] with inline completion on.
+    fn inline_app() -> App<Connect> {
+        let mut app = app();
+        app.state_mut().host = ComboBox::new().inline_completion(true);
+        app
+    }
+
+    /// The field as assistive technologies see it: its text, and what of it
+    /// is selected.
+    fn field_node(app: &mut App<Connect>) -> (String, Option<(usize, usize)>) {
+        app.render_once();
+        let tree = app.accessibility_tree().unwrap();
+        let node = tree
+            .descendants()
+            .into_iter()
+            .find(|n| n.role == Role::TextField)
+            .expect("the field")
+            .clone();
+        (node.name, node.text_selection)
     }
 
     fn shown(app: &mut App<Connect>) -> Vec<String> {
@@ -490,5 +647,148 @@ mod tests {
         app.press_key(KeyInput::Down);
         assert_eq!(shown(&mut app).len(), HOSTS.len());
         assert_eq!(app.state().host.highlighted(), Some(0));
+    }
+
+    #[test]
+    fn inline_completion_types_the_first_suggestion_ahead_selected() {
+        let mut app = inline_app();
+        focus_field(&mut app);
+        app.type_text("ex");
+        assert_eq!(app.state().host.text(), "example.com");
+        assert_eq!(app.state().host.completion(), Some("ample.com"));
+        assert_eq!(app.state().host.typed(), "ex");
+        // Screen readers read the field's text and its selection: the
+        // completion, selected after the typed text.
+        assert_eq!(field_node(&mut app), ("example.com".into(), Some((2, 11))));
+        // The list matches what was typed, not the completion.
+        assert_eq!(
+            shown(&mut app),
+            vec!["example.com", "example.org", "files.example.org"]
+        );
+        // Typing on replaces it, and completes again (keeping the case
+        // typed).
+        app.type_text("AMPLE.O");
+        assert_eq!(app.state().host.text(), "exAMPLE.Org");
+        assert_eq!(app.state().host.completion(), Some("rg"));
+        // Typing what matches no suggestion's start removes it.
+        app.type_text("x");
+        assert_eq!(app.state().host.text(), "exAMPLE.Ox");
+        assert_eq!(app.state().host.completion(), None);
+        assert_eq!(field_node(&mut app).1, None);
+    }
+
+    #[test]
+    fn backspace_removes_the_completion_and_end_right_tab_take_it() {
+        let mut app = inline_app();
+        focus_field(&mut app);
+        app.type_text("bu");
+        assert_eq!(app.state().host.text(), "build-01");
+        app.press_key(KeyInput::Backspace);
+        assert_eq!(app.state().host.text(), "bu", "the completion went");
+        assert_eq!(app.state().host.completion(), None);
+        // A deletion doesn't complete again.
+        app.press_key(KeyInput::Backspace);
+        assert_eq!(app.state().host.text(), "b");
+
+        app.type_text("u");
+        app.press_key(KeyInput::End);
+        assert_eq!(app.state().host.text(), "build-01");
+        assert_eq!(app.state().host.completion(), None);
+        assert_eq!(field_node(&mut app), ("build-01".into(), None));
+        assert_eq!(app.state().host.input().buffer().caret(), 8);
+
+        let mut app = inline_app();
+        focus_field(&mut app);
+        app.type_text("files");
+        app.press_key(KeyInput::Right);
+        assert_eq!(app.state().host.text(), "files.example.org");
+        assert_eq!(app.state().host.input().buffer().caret(), 17);
+
+        // Tab takes it too, without leaving the field.
+        let mut app = inline_app();
+        focus_field(&mut app);
+        app.type_text("example.o");
+        app.render_once();
+        app.press_key_code(crate::platform::KeyCode::Tab, Default::default());
+        assert_eq!(app.state().host.text(), "example.org");
+        assert_eq!(app.state().host.completion(), None);
+        assert!(!app.state().host.is_open());
+        assert_eq!(app.state().host.input().buffer().caret(), 11);
+    }
+
+    #[test]
+    fn enter_submits_the_completion_and_escape_takes_it_back() {
+        let mut app = inline_app();
+        focus_field(&mut app);
+        app.type_text("example.c");
+        app.press_key(KeyInput::Enter);
+        assert_eq!(app.state().submitted, vec!["example.com"]);
+        assert_eq!(app.state().host.completion(), None);
+
+        let mut app = inline_app();
+        focus_field(&mut app);
+        app.type_text("build-0");
+        assert_eq!(app.state().host.text(), "build-01");
+        let changes = app.state().changes;
+        app.press_key(KeyInput::Escape);
+        assert_eq!(app.state().host.text(), "build-0");
+        assert!(!app.state().host.is_open());
+        assert_eq!(app.state().changes, changes + 1, "removing it is a change");
+        // A highlighted suggestion still wins over the completion.
+        app.press_key(KeyInput::Down);
+        app.press_key(KeyInput::Down);
+        app.press_key(KeyInput::Enter);
+        assert_eq!(app.state().host.text(), "build-02");
+    }
+
+    #[test]
+    fn no_completion_while_an_input_method_composes() {
+        let mut app = inline_app();
+        focus_field(&mut app);
+        app.type_text("ex");
+        assert_eq!(app.state().host.completion(), Some("ample.com"));
+        // Composition starts: the completion goes, and none comes while the
+        // preedit shows.
+        app.press_key(KeyInput::Preedit {
+            text: "a".into(),
+            cursor: Some((1, 1)),
+        });
+        assert_eq!(app.state().host.text(), "ex");
+        assert_eq!(app.state().host.completion(), None);
+        app.press_key(KeyInput::Preedit {
+            text: "am".into(),
+            cursor: Some((2, 2)),
+        });
+        assert_eq!(app.state().host.text(), "ex");
+        assert_eq!(app.state().host.input().buffer().preedit(), Some("am"));
+        // The commit is typed text: it completes.
+        app.press_key(KeyInput::Text("am".into()));
+        assert_eq!(app.state().host.text(), "example.com");
+        assert_eq!(app.state().host.completion(), Some("ple.com"));
+        assert_eq!(app.state().host.input().buffer().preedit(), None);
+    }
+
+    #[test]
+    fn off_by_default_and_caret_inside_the_text_types_nothing_ahead() {
+        let mut app = app();
+        focus_field(&mut app);
+        app.type_text("ex");
+        assert_eq!(app.state().host.text(), "ex");
+        assert_eq!(app.state().host.completion(), None);
+
+        let mut combo = ComboBox::from_text("eample").inline_completion(true);
+        combo.input_mut().buffer_mut().place_caret(1);
+        combo.handle_key(&KeyInput::Text("x".into()), &HOSTS);
+        assert_eq!(combo.text(), "example");
+        assert_eq!(combo.completion(), None);
+        // The length limit cuts the completion short.
+        let mut combo = ComboBox::new().inline_completion(true);
+        *combo.input_mut() = TextInput::new().max_length(5);
+        combo.handle_key(&KeyInput::Text("ex".into()), &HOSTS);
+        assert_eq!(combo.text(), "examp");
+        assert_eq!(combo.completion(), Some("amp"));
+        assert_eq!(rest_after_prefix("Ünïcode", "üNÏ"), Some("code"));
+        assert_eq!(rest_after_prefix("abc", "abc"), None);
+        assert_eq!(rest_after_prefix("abc", "abd"), None);
     }
 }

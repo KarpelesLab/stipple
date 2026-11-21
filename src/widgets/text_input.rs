@@ -154,6 +154,24 @@ impl TextInput {
         self.buffer.revision != revision
     }
 
+    /// Type `rest` ahead at the caret (as much as fits in the length limit),
+    /// selected so the next key typed replaces it: a combo box's inline
+    /// completion. Its own undo step. Returns whether anything was added.
+    pub(crate) fn type_ahead(&mut self, rest: &str) -> bool {
+        if self.read_only || self.buffer.selection().is_some() {
+            return false;
+        }
+        let rest = self.fit(rest);
+        if rest.is_empty() {
+            return false;
+        }
+        let at = self.buffer.caret();
+        self.buffer.insert_as(&rest, EditKind::Other);
+        let end = at + rest.len();
+        self.buffer.set_selection(at, end);
+        true
+    }
+
     /// As much of `text` as fits in the length limit, in place of the
     /// selection.
     fn fit(&self, text: &str) -> String {

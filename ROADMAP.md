@@ -2211,7 +2211,10 @@ Most input only works on X11 today.
   a gutter for scrolling grids, scroll-bar accessibility roles, skins.*
 - ✅ Combo box and searchable select (#85, #97): `combo_box` + `ComboBox`
   (free text with the matching suggestions below, Up/Down/Enter/Tab/Escape, a
-  ▾ listing them all), `Select::searchable` (a search field atop the list),
+  ▾ listing them all), `ComboBox::inline_completion` (the first
+  suggestion's rest typed ahead, selected: typing replaces it, Backspace
+  removes it, Tab/End/Right take it; none while an IME composes; read as the
+  field's selection), `Select::searchable` (a search field atop the list),
   `select(..).on_change`, and a select as wide as its column. *Both lists
   build only the rows in view and follow the highlight; a searchable select
   isn't the OS's pop-up button under `Theme::native()`.*
