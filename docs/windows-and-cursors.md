@@ -149,7 +149,7 @@ handle.open_window(
 | | Belonging to a window | Modal |
 |---|---|---|
 | X11 | `WM_TRANSIENT_FOR` and `_NET_WM_WINDOW_TYPE_DIALOG`: the window manager keeps it above and usually centers it | `_NET_WM_STATE_MODAL` |
-| Wayland | `xdg_toplevel.set_parent` | the app only (`xdg-dialog-v1` isn't spoken yet) |
+| Wayland | `xdg_toplevel.set_parent`, and an `xdg_dialog_v1` where the compositor has `xdg-dialog-v1` (Mutter 46+, KWin 6.1+) | `xdg_dialog_v1.set_modal` (the compositor may dim and attach it); the app drops the parent's input either way |
 | Windows | the owner window (`CreateWindowExW`'s parent): above it, minimized with it, no taskbar button; centered on it | the owner disabled (`EnableWindow`) until it closes |
 | macOS | a child window (`addChildWindow:ordered:`), centered on it | `.sheet(true)`: `beginSheet:completionHandler:`; else the app only |
 

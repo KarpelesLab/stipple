@@ -2,8 +2,9 @@
 //! ([`WindowAttributes::parent`](crate::platform::WindowAttributes::parent))
 //! names the parent's toplevel with `xdg_toplevel.set_parent`, so the
 //! compositor keeps it above the parent (and may center it there, or move
-//! and minimize the two together). A modal one is the app's to enforce: the
-//! `xdg-dialog-v1` protocol that would tell the compositor isn't spoken yet.
+//! and minimize the two together). It is also a dialog, modal or not, where
+//! the compositor has `xdg-dialog-v1` (`dialog.rs`); the app enforces a
+//! modal one itself either way.
 
 use std::cell::RefCell;
 use std::io;

@@ -7019,6 +7019,172 @@ jobs:
             weston.log
           if-no-files-found: warn
 
+  # A modal window owned by another, under headless Mutter and KWin: the
+  # owned window names its parent (xdg_toplevel.set_parent) and, where the
+  # compositor advertises xdg_wm_dialog_v1 (Mutter 46+, KWin 6.1+), gets an
+  # xdg_dialog_v1 marked modal. The compositor's own protocol log
+  # (WAYLAND_DEBUG=server) shows it took the requests, and the app ran on
+  # with no wl_display.error; on KWin, a script reads back that it made the
+  # window a modal transient. Not blocking yet.
+  dialog-wayland-desktops:
+    name: Modal dialog (Wayland, ${{ matrix.compositor }})
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        compositor: [mutter, kwin]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install ${{ matrix.compositor }}, Mesa, wayland-utils, D-Bus, a font
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fonts-dejavu-core wayland-utils dbus dbus-x11 \
+            libegl-mesa0 libgl1-mesa-dri libglib2.0-bin
+          if [ "${{ matrix.compositor }}" = mutter ]; then
+            sudo apt-get install -y mutter
+            mutter --version || true
+          else
+            sudo apt-get install -y kwin-wayland
+            sudo apt-get install -y kwin-wayland-backend-virtual 2>/dev/null || true
+            kwin_wayland --version || true
+          fi
+
+      - name: Build the owned windows example
+        run: cargo build --release --example ownedwindows
+
+      - name: Start ${{ matrix.compositor }} headless, logging its protocol
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          GALLIUM_DRIVER: llvmpipe
+        run: |
+          mkdir -p visual_output
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/xdgrt-dialog"
+          mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
+          echo "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR" >> "$GITHUB_ENV"
+          eval "$(dbus-launch --sh-syntax)"
+          echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" >> "$GITHUB_ENV"
+          echo "DBUS_PID=$DBUS_SESSION_BUS_PID" >> "$GITHUB_ENV"
+          LOG=visual_output/${{ matrix.compositor }}.log
+          if [ "${{ matrix.compositor }}" = mutter ]; then
+            HELP=$(mutter --help-all 2>&1 || true)
+            ARGS="--headless"
+            for f in --wayland --no-x11; do
+              echo "$HELP" | grep -qE -- "$f([^-a-z]|$)" && ARGS="$ARGS $f"
+            done
+            echo "$HELP" | grep -q -- "--virtual-monitor" && ARGS="$ARGS --virtual-monitor 1280x800"
+            echo "$HELP" | grep -q -- "--wayland-display" && ARGS="$ARGS --wayland-display wayland-dialog"
+            echo "mutter $ARGS"
+            WAYLAND_DEBUG=server mutter $ARGS > "$LOG" 2>&1 &
+          else
+            HELP=$(kwin_wayland --help-all 2>&1 || kwin_wayland --help 2>&1 || true)
+            ARGS="--virtual --socket wayland-dialog"
+            echo "$HELP" | grep -q -- "--width" && ARGS="$ARGS --width 1280 --height 800"
+            for f in --no-lockscreen --no-global-shortcuts --no-kactivities; do
+              echo "$HELP" | grep -q -- "$f" && ARGS="$ARGS $f"
+            done
+            echo "kwin_wayland $ARGS"
+            QT_LOGGING_RULES="kwin_scripting.debug=true;js.debug=true" WAYLAND_DEBUG=server kwin_wayland $ARGS > "$LOG" 2>&1 &
+          fi
+          echo "COMP_PID=$!" >> "$GITHUB_ENV"
+          for _ in $(seq 1 30); do
+            [ -S "$XDG_RUNTIME_DIR/wayland-dialog" ] && break
+            sleep 1
+          done
+          SOCK=wayland-dialog
+          [ -S "$XDG_RUNTIME_DIR/$SOCK" ] || SOCK=$(ls "$XDG_RUNTIME_DIR" | grep -m1 '^wayland-[0-9]*$' || true)
+          if [ -z "$SOCK" ] || [ ! -S "$XDG_RUNTIME_DIR/$SOCK" ]; then
+            echo "::error::${{ matrix.compositor }} made no Wayland socket"
+            tail -60 "$LOG"
+            exit 1
+          fi
+          echo "WAYLAND_DISPLAY=$SOCK" >> "$GITHUB_ENV"
+          sleep 3
+          WAYLAND_DISPLAY=$SOCK wayland-info > visual_output/${{ matrix.compositor }}-info.txt 2>&1 || true
+          grep -E "xdg_wm_base|xdg_wm_dialog_v1" visual_output/${{ matrix.compositor }}-info.txt || true
+
+      - name: Open a modal window owned by the main one
+        run: |
+          INFO=visual_output/${{ matrix.compositor }}-info.txt
+          COMP=visual_output/${{ matrix.compositor }}.log
+          LOG=visual_output/ownedwindows.log
+          # The compositor's log from here on is the app's.
+          START=$(wc -l < "$COMP")
+          STIPPLE_WAYLAND_DEBUG=1 timeout 30 ./target/release/examples/ownedwindows --selftest > "$LOG" 2>&1 &
+          APP=$!
+          # The modal window is up from 1.2 s to 2.4 s: KWin's scripting
+          # reads back what the compositor made of it.
+          for _ in $(seq 50); do grep -q "ownedwindows: opened" "$LOG" && break; sleep 0.1; done
+          sleep 0.3
+          if [ "${{ matrix.compositor }}" = kwin ]; then
+            cat > "$RUNNER_TEMP/modal.js" <<'JS'
+          const list = workspace.windowList ? workspace.windowList() : workspace.clientList();
+          for (const w of list) {
+            print("stipple-readback caption=" + w.caption + " modal=" + w.modal + " transient=" + w.transient);
+          }
+          JS
+            n=$(gdbus call --session --dest org.kde.KWin --object-path /Scripting \
+              --method org.kde.kwin.Scripting.loadScript "$RUNNER_TEMP/modal.js" stipple-modal 2>&1 \
+              | grep -o '[0-9]\+' | head -n1 || true)
+            echo "script $n"
+            if [ -n "$n" ]; then
+              gdbus call --session --dest org.kde.KWin --object-path "/Scripting/Script$n" \
+                --method org.kde.kwin.Script.run || true
+            fi
+            sleep 0.3
+          fi
+          st=0
+          wait "$APP" || st=$?
+          tail -n +"$((START + 1))" "$COMP" > visual_output/compositor-app.log
+          grep -v "raw key\|frame" "$LOG" | head -60 || true
+          echo "--- what the compositor received"
+          grep -E "set_parent|xdg_wm_dialog_v1|xdg_dialog_v1|wl_display[@#]1\.error|stipple-readback" visual_output/compositor-app.log | head -40 || true
+          [ "$st" -eq 0 ] || { echo "::error::ownedwindows exited with $st"; exit 1; }
+          grep -q "ownedwindows: windows=2" "$LOG"
+          grep -q "ownedwindows: windows=1" "$LOG"
+          grep -q "ownedwindows: event loop exited" "$LOG"
+          if grep -q "wl_display error\|wl_display[@#]1\.error" "$LOG" visual_output/compositor-app.log; then
+            echo "::error::a protocol error"
+            exit 1
+          fi
+          # The owned window names its parent (libwayland logs objects as
+          # iface@id, or iface#id in newer releases).
+          grep -q "xdg_toplevel[@#][0-9]*\.set_parent(xdg_toplevel[@#]" visual_output/compositor-app.log
+          if grep -q xdg_wm_dialog_v1 "$INFO"; then
+            grep -q "xdg_dialog_v1 [0-9]* for toplevel [0-9]*: modal=true" "$LOG"
+            grep -q "xdg_wm_dialog_v1[@#][0-9]*\.get_xdg_dialog(new id xdg_dialog_v1[@#][0-9]*, xdg_toplevel[@#]" visual_output/compositor-app.log
+            grep -q "xdg_dialog_v1[@#][0-9]*\.set_modal()" visual_output/compositor-app.log
+            grep -q "xdg_dialog_v1[@#][0-9]*\.destroy()" visual_output/compositor-app.log
+            echo "${{ matrix.compositor }} took the modal xdg_dialog_v1"
+          else
+            echo "::warning::this ${{ matrix.compositor }} has no xdg_wm_dialog_v1: only set_parent was checked"
+            grep -q "xdg_wm_dialog_v1=None" "$LOG"
+          fi
+          # KWin's own view of the window, where its script printed it.
+          if grep -q "stipple-readback caption=Preferences" visual_output/compositor-app.log; then
+            grep -q "stipple-readback caption=Preferences modal=true transient=true" visual_output/compositor-app.log
+            echo "KWin treats Preferences as a modal transient"
+          elif [ "${{ matrix.compositor }}" = kwin ]; then
+            echo "::warning::KWin's script printed nothing to read back"
+          fi
+
+      - name: Stop ${{ matrix.compositor }}
+        if: always()
+        run: |
+          [ -n "$COMP_PID" ] && kill "$COMP_PID" 2>/dev/null || true
+          [ -n "$DBUS_PID" ] && kill "$DBUS_PID" 2>/dev/null || true
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stipple-dialog-wayland-${{ matrix.compositor }}
+          path: visual_output/*
+          if-no-files-found: warn
+
   # Close and session end on Windows: WM_QUERYENDSESSION is refused while the
   # app asks, WM_CLOSE is confirmed, and the app closes its window itself.
   lifecycle-windows:

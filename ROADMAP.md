@@ -1952,12 +1952,19 @@ Most input only works on X11 today.
   `ChooseColorW` on Windows. See [docs/os-integration.md](docs/os-integration.md#message-boxes).
 - ✅ Owned and modal windows (#81): `WindowAttributes::parent`, `.modal`,
   `.sheet` and `MessageBox::window`. _`WM_TRANSIENT_FOR`, the dialog type and
-  `_NET_WM_STATE_MODAL` on X11, `xdg_toplevel.set_parent` on Wayland, an owner
+  `_NET_WM_STATE_MODAL` on X11, `xdg_toplevel.set_parent` and an
+  `xdg-dialog-v1` dialog (`set_modal` when modal) on Wayland, an owner
   `HWND` disabled while modal on Windows, child windows and
   `beginSheet:` on macOS; the app drops a blocked parent's input and closes a
   parent's windows with it. A drawn message box goes in its window. Run on
   macOS (the sheet) and through a pretend backend in unit tests; X11, Wayland
-  and Windows compile-checked only. `xdg-dialog-v1` is still to do._
+  and Windows compile-checked only; the xdg-dialog-v1 encoding is
+  unit-tested, and CI opens a modal window under headless Mutter and KWin
+  and reads the compositor's protocol log (`WAYLAND_DEBUG=server`) for
+  `set_parent`, `get_xdg_dialog` and `set_modal` with no protocol error, and
+  a KWin script reads back the window as `modal` and `transient` (not
+  blocking yet; passed on Mutter 50 and KWin 6 in a CI trial run). There's
+  no way to change a window's modality once open._
 - ✅ Programmatic focus (#82): `Element::autofocus`, `Cx::focus`/`blur` and
   `AppHandle::focus`/`blur` by element key. _Applied after the next build's
   layout, inside the modal layers; an autofocus element that leaves with

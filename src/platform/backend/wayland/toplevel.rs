@@ -113,6 +113,9 @@ pub(super) fn create(
     super::owned::note(surface, toplevel);
     if let Some(parent) = attrs.parent {
         super::owned::set_parent(conn, toplevel, parent.0 as u32)?;
+        // ...as a dialog, modal or not, where the compositor has
+        // xdg-dialog-v1.
+        super::dialog::mark(conn, toplevel, attrs.blocks_parent())?;
     }
     // The id the app gave (`App::app_info`), which the compositor matches to
     // its `.desktop` file; without one, the compositor picks.
@@ -221,6 +224,7 @@ pub(super) fn destroy(conn: &mut WlConn, objects: Objects) {
     super::syncobj::forget(conn, objects.surface);
     super::fractional::forget(conn, objects.surface);
     super::backdrop::forget(conn, objects.surface);
+    super::dialog::forget(conn, objects.toplevel);
     let _ = conn.send(objects.toplevel, XDG_TOPLEVEL_DESTROY, &[]);
     let _ = conn.send(objects.xdg_surface, XDG_SURFACE_DESTROY, &[]);
     let _ = conn.send(objects.surface, WL_SURFACE_DESTROY, &[]);

@@ -39,6 +39,8 @@ mod clipboard;
 mod content;
 /// Server-side decorations, or a title bar and borders drawn by Stipple.
 mod decor;
+/// Dialog and modal windows (`xdg-dialog-v1`).
+mod dialog;
 /// GPU frames as `dma-buf`s (`zwp_linux_dmabuf_v1`).
 #[cfg_attr(not(any(feature = "gl", feature = "vk")), allow(dead_code))]
 mod dmabuf;
@@ -753,6 +755,8 @@ struct WlConn {
     decors: Vec<decor::Decor>,
     /// Activation (attention) requests and the bell.
     attention: attention::Attention,
+    /// `xdg_wm_dialog_v1`, and the owned windows' `xdg_dialog_v1`s.
+    dialogs: dialog::Dialogs,
     /// The pointer lock's globals and, while locked, objects.
     lock: pointer::Lock,
     /// `zwp_linux_dmabuf_v1`: the formats, and the GPU frames' buffers.
@@ -802,6 +806,7 @@ impl WlConn {
             decor: decor::Decor::default(),
             decors: Vec::new(),
             attention: attention::Attention::default(),
+            dialogs: dialog::Dialogs::default(),
             lock: pointer::Lock::default(),
             dmabuf: dmabuf::Dmabuf::default(),
             syncobj: syncobj::Syncobj::default(),
@@ -1942,6 +1947,7 @@ where
     let mut viewporter_name = None;
     let mut effect_name = None;
     let mut kde_blur_name = None;
+    let mut dialog_name = None;
     loop {
         let (object, opcode, args) = conn.recv().map_err(os)?;
         if object == registry && opcode == WL_REGISTRY_GLOBAL {
@@ -1981,6 +1987,7 @@ where
                     dmabuf::MANAGER => dmabuf_name = Some((name, version.min(dmabuf::VERSION))),
                     syncobj::MANAGER => syncobj_name = Some(name),
                     content::SUBCOMPOSITOR => subcompositor_name = Some(name),
+                    dialog::MANAGER => dialog_name = Some(name),
                     _ => {}
                 }
             }
@@ -2059,6 +2066,10 @@ where
     let activation = activation_name.map(|name| bind(&mut conn, name, attention::ACTIVATION, 1));
     let bell = bell_name.map(|name| bind(&mut conn, name, attention::SYSTEM_BELL, 1));
     attention::setup(&mut conn, activation, bell);
+    // Owned windows are dialogs, and modal ones say so.
+    let dialogs = dialog_name.map(|name| bind(&mut conn, name, dialog::MANAGER, 1));
+    dbg(format_args!("xdg_wm_dialog_v1={dialogs:?}"));
+    dialog::setup(&mut conn, dialogs);
     conn.attention.seat = seat;
     // The pointer lock, when the compositor has both halves.
     if let (Some(c), Some(r)) = (constraints_name, relative_name) {
