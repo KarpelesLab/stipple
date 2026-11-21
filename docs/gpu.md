@@ -12,7 +12,7 @@ OS's own driver through hand-written FFI:
 | `mtl` | Metal (macOS, iOS) | Renders whole scenes and presents them straight to the window through a `CAMetalLayer`; `IOSurface` export and import |
 | `vk` | Vulkan (Linux, Android) | Renders whole scenes and presents them straight to the window through a swapchain (X11, Android) or as `dma-buf`s (Wayland); `dma-buf` import (Linux) |
 | `gl` | OpenGL ES 2 over EGL (Linux, Android) | Renders whole scenes and presents them straight to an EGL window surface (X11, Android) or as `dma-buf`s (Wayland) where there's no Vulkan; `dma-buf` export and import (Linux) |
-| `d3d` | Direct3D 11 (Windows) | Renders whole scenes and presents them straight to the window through a flip-model DXGI swap chain; shared-handle export and import |
+| `d3d` | Direct3D 11 (Windows) | Renders whole scenes and presents them straight to the window through a flip-model DXGI swap chain (a transparent window's through DirectComposition); shared-handle export and import |
 | `gpu` on the web | WebGPU, else WebGL2, through `web/gpu.js` | Renders whole scenes straight into the page's canvas |
 
 ## Choosing the renderer
@@ -86,6 +86,17 @@ caches) is shared by every window on the thread.
 
 A renderer set with `App::render_with` (below) takes precedence over both
 `App::renderer` and `STIPPLE_RENDERER`.
+
+A transparent window (`App::transparent`) is presented straight too, with
+its frame's premultiplied alpha, the target cleared to the theme's
+(translucent) background: through a `CAMetalLayer` that isn't opaque, a
+Direct3D 11 swap chain made for composition (`DXGI_ALPHA_MODE_PREMULTIPLIED`)
+that DirectComposition shows over the window, a Vulkan swapchain with a
+premultiplied `compositeAlpha` (or `INHERIT`), an EGL window surface whose
+config has alpha, or Wayland `dma-buf`s of a format with alpha. Where the
+window's surface can't keep the alpha, that window alone goes through its
+bitmap (read back), which does. See
+[windows-and-cursors.md](windows-and-cursors.md#translucent-windows).
 
 What the GPU path doesn't do yet: the theme cross-fade (a theme switch is
 instant on the GPU), and embedded viewport content given as a `Pixmap` is

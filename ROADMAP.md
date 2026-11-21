@@ -603,8 +603,15 @@ the buffer onto the screen, and the declarative UI toolkit itself.
 - ✅ **Translucent windows** (#77): _`App::transparent` / `blur`: macOS (run
   by hand, Metal too), X11's ARGB visual and KDE blur, Wayland's ARGB
   buffers and `ext-background-effect` / KWin blur (CI, non-blocking), Windows'
-  DWM frame and acrylic (build-checked); GPU renderers elsewhere fall back to
-  the CPU for such windows._
+  DWM frame and acrylic, Android's translucent window over the wallpaper.
+  The GPU renderers keep the alpha too: Direct3D 11 through a premultiplied
+  composition swap chain and DirectComposition, Vulkan swapchains with a
+  premultiplied `compositeAlpha`, EGL configs with alpha, `dma-buf`s with
+  alpha on Wayland; a surface that can't falls back to the window's bitmap.
+  CI compares them with the CPU's frame on X11 (xcompmgr), Wayland (sway),
+  Windows (WARP, over a window behind) and Android's emulator, non-blocking;
+  OpenGL ES on X11 was checked locally under Xvfb with a compositing
+  manager._
 - ✅ **iOS** runs full-screen in the safe area, with touch input (or edge to
   edge, with the safe area reported; it follows rotations).
 - ✅ **Title bars** match the content's light or dark on Windows and macOS.

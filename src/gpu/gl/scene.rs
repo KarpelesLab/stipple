@@ -47,6 +47,8 @@ use std::sync::{Arc, Weak};
 // Presenting to Wayland windows through dma-bufs.
 #[cfg(target_os = "linux")]
 mod dmabuf;
+// Transparent windows' surfaces.
+mod alpha;
 
 const GL_SCISSOR_TEST: GLenum = 0x0C11;
 const GL_STENCIL_TEST: GLenum = 0x0B90;
@@ -455,7 +457,7 @@ impl Native {
 /// The key of a window's EGL surface.
 fn layer_key(layer: &GpuLayer) -> Option<usize> {
     match *layer {
-        GpuLayer::X11 { window } => Some(window as usize),
+        GpuLayer::X11 { window, .. } => Some(window as usize),
         GpuLayer::Android { window, .. } => Some(window as usize),
         _ => None,
     }
@@ -467,6 +469,9 @@ struct State {
     native: Native,
     /// The context's config (window-capable unless `Offscreen`).
     config: EGLConfig,
+    /// The configs that make window surfaces, for opaque windows and for
+    /// transparent ones (see `alpha`), once found.
+    window_configs: [Option<EGLConfig>; 2],
     /// The 1×1 pbuffer the context is current on when it draws to no
     /// window, where EGL takes no context without a surface (else null).
     idle: EGLSurface,
@@ -578,31 +583,13 @@ impl State {
                 &[EGL_WINDOW_BIT | EGL_PBUFFER_BIT, EGL_WINDOW_BIT]
             };
             // The first config the window takes (on X11, the one of the
-            // window's visual).
+            // window's visual), with an alpha channel for a transparent
+            // window.
+            let transparent = alpha::layer_alpha(layer);
             let mut found = None;
             for &kind in kinds {
-                let attribs: [EGLint; 11] = [
-                    EGL_SURFACE_TYPE,
-                    kind,
-                    EGL_RENDERABLE_TYPE,
-                    EGL_OPENGL_ES2_BIT,
-                    EGL_RED_SIZE,
-                    8,
-                    EGL_GREEN_SIZE,
-                    8,
-                    EGL_BLUE_SIZE,
-                    8,
-                    EGL_NONE,
-                ];
-                let mut configs = [core::ptr::null_mut(); 64];
-                let mut n: EGLint = 0;
-                if eglChooseConfig(dpy, attribs.as_ptr(), configs.as_mut_ptr(), 64, &mut n) == 0 {
-                    return Err(format!("eglChooseConfig failed: {:#x}", eglGetError()));
-                }
-                found = configs[..n.max(0) as usize].iter().find_map(|&c| {
-                    let s = create_window_surface(dpy, c, layer);
-                    (!s.is_null()).then_some((c, s))
-                });
+                let configs = alpha::window_configs(dpy, kind, transparent)?;
+                found = alpha::first_surface(dpy, &configs, layer);
                 if found.is_some() {
                     break;
                 }
@@ -621,7 +608,10 @@ impl State {
                 return Err(format!("no context on the window's display: {e:#x}"));
             }
             match Self::build(dpy, ctx, native, config) {
-                Ok(s) => Ok((s, surface)),
+                Ok(mut s) => {
+                    s.window_configs[transparent as usize] = Some(config);
+                    Ok((s, surface))
+                }
                 Err(e) => {
                     eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
                     eglDestroySurface(dpy, surface);
@@ -718,6 +708,7 @@ impl State {
                 ctx,
                 native,
                 config,
+                window_configs: [None; 2],
                 idle: core::ptr::null_mut(),
                 windows: HashMap::new(),
                 swapped: std::collections::HashSet::new(),
@@ -1686,7 +1677,7 @@ unsafe fn create_window_surface(
     unsafe {
         match *layer {
             #[cfg(target_os = "linux")]
-            GpuLayer::X11 { window } => {
+            GpuLayer::X11 { window, .. } => {
                 // The XCB platform takes a pointer to the `xcb_window_t`.
                 let mut id = window;
                 eglCreatePlatformWindowSurface(
@@ -1746,8 +1737,13 @@ fn with_window<T>(
                 if let Some(old) = slot.take() {
                     old.destroy();
                 }
-                let (mut state, surface) =
-                    State::on_window(layer).map_err(GpuError::Unavailable)?;
+                let (mut state, surface) = State::on_window(layer).map_err(|e| {
+                    if alpha::layer_alpha(layer) {
+                        alpha::refuse(layer, &e)
+                    } else {
+                        GpuError::Unavailable(e)
+                    }
+                })?;
                 state.windows.insert(key, surface);
                 *slot = Some(state);
             }
@@ -1755,7 +1751,10 @@ fn with_window<T>(
             let surface = match state.windows.get(&key) {
                 Some(&s) => s,
                 None => {
-                    let s = create_window_surface(state.dpy, state.config, layer);
+                    let s = state.window_surface(layer);
+                    if s.is_null() && alpha::layer_alpha(layer) {
+                        return Err(alpha::refuse(layer, "no EGL config with alpha"));
+                    }
                     if s.is_null() {
                         return Err(GpuError::Unavailable(format!(
                             "no EGL surface on the window: {:#x}",
@@ -1773,6 +1772,10 @@ fn with_window<T>(
                 state.windows.remove(&key);
                 state.make_current_offscreen();
                 eglDestroySurface(state.dpy, surface);
+                // A surface with alpha the context can't draw into.
+                if alpha::layer_alpha(layer) {
+                    return Err(alpha::refuse(layer, &format!("eglMakeCurrent: {e:#x}")));
+                }
                 return Err(GpuError::Lost(format!("eglMakeCurrent failed: {e:#x}")));
             }
             f(state, surface)
@@ -1795,7 +1798,7 @@ impl Executor for GlExecutor {
             return with_state(|state| Ok(unsafe { state.can_present_dmabuf(sink) }))
                 .unwrap_or(false);
         }
-        can_present_to(layer)
+        can_present_to(layer) && !alpha::refused(layer)
     }
 
     fn present(
@@ -1829,6 +1832,7 @@ impl Executor for GlExecutor {
             });
             return;
         }
+        alpha::forget(layer);
         let Some(key) = layer_key(layer) else {
             return;
         };

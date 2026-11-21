@@ -10,6 +10,11 @@
 //! (`DWMSBT_TRANSIENTWINDOW`) blurs what is behind the window; without blur
 //! it asks for none, so what shows through is plain. Earlier Windows have no
 //! documented blur and show the desktop through unblurred.
+//!
+//! Under a GPU renderer the frames go to a premultiplied swap chain that
+//! DirectComposition shows over the window (`gpu::d3d`'s `dcomp`); the
+//! window's own surface under it is cleared to transparent, so only the
+//! swap chain's frames show.
 
 use core::ffi::c_void;
 
@@ -28,6 +33,19 @@ struct Margins {
     right: i32,
     top: i32,
     bottom: i32,
+}
+
+/// `BLACK_BRUSH`: black is fully transparent over DWM's frame.
+const BLACK_BRUSH: i32 = 4;
+
+#[link(name = "user32")]
+unsafe extern "system" {
+    fn FillRect(hdc: *mut c_void, rect: *const super::Rect, brush: *mut c_void) -> i32;
+}
+
+#[link(name = "gdi32")]
+unsafe extern "system" {
+    fn GetStockObject(which: i32) -> *mut c_void;
 }
 
 #[link(name = "dwmapi")]
@@ -61,4 +79,14 @@ pub(super) fn make_transparent(hwnd: *mut c_void, blur: bool) {
             4,
         );
     }
+}
+
+/// Clear `rect` of a transparent window's surface (`hdc`, being painted) to
+/// transparent: under GPU frames, which DirectComposition shows over it, so
+/// a CPU frame painted before doesn't show through them.
+///
+/// # Safety
+/// `hdc` is the device context `BeginPaint` gave.
+pub(super) unsafe fn clear(hdc: *mut c_void, rect: &super::Rect) {
+    unsafe { FillRect(hdc, rect, GetStockObject(BLACK_BRUSH)) };
 }

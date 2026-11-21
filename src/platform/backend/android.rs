@@ -103,6 +103,8 @@ mod screen;
 pub(crate) mod secure_store;
 /// The share sheet: `ACTION_SEND` through the chooser.
 mod share;
+/// Translucent windows.
+mod translucent;
 
 pub(crate) use alarm::{cancel_scheduled, pending_scheduled, schedule};
 pub(crate) use notify::notify;
@@ -1333,6 +1335,9 @@ struct View {
     soft_input: Cell<bool>,
     /// Whether a frame has reached the screen yet (logged once, for CI).
     presented: Cell<bool>,
+    /// The window is translucent (see `translucent`): its buffers keep the
+    /// frames' alpha.
+    transparent: bool,
 }
 
 impl View {
@@ -1421,7 +1426,7 @@ impl View {
         let content = self.content_rect();
         let new_background = pixmap
             .pixel(0, 0)
-            .is_some_and(|[r, g, b, _]| self.set_background([r, g, b, 255]));
+            .is_some_and(|p| self.set_background(translucent::margin_color(p, self.transparent)));
         if self.edge_to_edge {
             // The bars are see-through: their icons go dark over light
             // content, light over dark.
@@ -1562,7 +1567,9 @@ impl View {
             // The bars are see-through (see `present`).
             return true;
         }
-        let [r, g, b, _] = rgba.map(u32::from);
+        // (A translucent window's color is premultiplied; the bars are
+        // opaque, in its straight color.)
+        let [r, g, b, _] = translucent::straight(rgba).map(u32::from);
         let argb = 0xff00_0000 | (r << 16) | (g << 8) | b;
         let light = 299 * r + 587 * g + 114 * b > 128_000;
         self.instance
@@ -1582,6 +1589,7 @@ fn release_gpu(window: *mut c_void) {
         window,
         size: (0, 0),
         content: [0; 4],
+        alpha: false,
     });
 }
 
@@ -1697,6 +1705,7 @@ impl Window for AndroidWindow {
             window,
             size: self.view.window_size.get(),
             content: [r.left, r.top, r.right, r.bottom],
+            alpha: self.view.transparent,
         })
     }
     fn create_surface(&self) -> Box<dyn Surface> {
@@ -1792,7 +1801,12 @@ impl Loop<'_> {
                     release_gpu(old);
                     unsafe { ANativeWindow_release(old) };
                 }
-                unsafe { ANativeWindow_setBuffersGeometry(window, 0, 0, WINDOW_FORMAT_RGBX_8888) };
+                let format = if self.view.transparent {
+                    translucent::WINDOW_FORMAT_RGBA_8888
+                } else {
+                    WINDOW_FORMAT_RGBX_8888
+                };
+                unsafe { ANativeWindow_setBuffersGeometry(window, 0, 0, format) };
                 self.view.update_size();
                 self.view.presented.set(false);
                 self.resized();
@@ -2478,6 +2492,7 @@ where
         text_input: Cell::new(false),
         soft_input: Cell::new(false),
         presented: Cell::new(false),
+        transparent: attrs.is_transparent(),
     });
     let mut lp = Loop {
         instance: instance.clone(),
@@ -2502,6 +2517,19 @@ where
     // A new activity has no back callback yet: give it the app's last word.
     instance.request(|r| r.back_callback = Some(crate::platform::back_enabled()));
     let sdk = activity.sdk_version;
+    if attrs.is_transparent() {
+        // The wallpaper shows through, and the window composes with its
+        // alpha.
+        unsafe {
+            ANativeActivity_setWindowFlags(instance.activity, translucent::FLAG_SHOW_WALLPAPER, 0)
+        };
+        let blur = attrs.blur;
+        run_on_main(move |jni, activity| {
+            if translucent::make_translucent(jni, activity, blur, sdk).is_none() {
+                log("stipple: can't make the window translucent");
+            }
+        });
+    }
     if attrs.edge_to_edge {
         run_on_main(move |jni, activity| {
             if screen::draw_edge_to_edge(jni, activity, sdk).is_none() {

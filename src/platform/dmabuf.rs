@@ -142,6 +142,11 @@ pub(crate) trait Present {
     /// Whether the window can show a buffer yet (Wayland: after its first
     /// configure).
     fn ready(&self) -> bool;
+    /// Whether the window is transparent: its buffers must keep the frames'
+    /// (premultiplied) alpha, in a format with alpha.
+    fn alpha(&self) -> bool {
+        false
+    }
     /// Wrap `buffer` for the compositor (once per buffer; the fds may be
     /// closed after).
     fn import(&self, buffer: &Buffer) -> Result<BufferId, String>;

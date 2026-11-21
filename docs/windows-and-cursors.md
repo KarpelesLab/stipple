@@ -334,10 +334,25 @@ each platform does it:
 | Windows | DWM's frame extended over the whole client area, the frame blitted premultiplied | the acrylic system backdrop (`DWMSBT_TRANSIENTWINDOW`), Windows 11 22H2 and later; none before |
 | X11 | a 32-bit ARGB visual and its colormap, when a compositing manager runs (`_NET_WM_CM_S0`); opaque otherwise | `_KDE_NET_WM_BLUR_BEHIND_REGION` (KWin, picom) |
 | Wayland | `ARGB8888` buffers with no opaque region | `ext-background-effect-v1` where the compositor can blur, else KWin's `org_kde_kwin_blur` |
+| Android | the activity's window in a translucent format (`PixelFormat.TRANSLUCENT`), its buffers `RGBA_8888`, over the wallpaper (`FLAG_SHOW_WALLPAPER`; under a translucent theme, `android:windowIsTranslucent`, the app below shows instead) | `Window.setBackgroundBlurRadius`, Android 12 and later, where the device blurs across windows |
 
-A transparent window is drawn on the CPU except on macOS, where Metal draws
-it too: the other GPU renderers present opaque swap chains. iOS, Android and
-the web ignore both settings.
+The GPU renderers keep the alpha too, the frame premultiplied:
+
+| Renderer | How |
+|---|---|
+| Metal (macOS) | a `CAMetalLayer` that isn't opaque |
+| Direct3D 11 (Windows) | a premultiplied swap chain made for composition (`CreateSwapChainForComposition`, `DXGI_ALPHA_MODE_PREMULTIPLIED`) and shown over the window through DirectComposition (a flip-model swap chain on a window is always opaque); the window's own surface under it is cleared to transparent |
+| Vulkan (X11, Android) | a swapchain with `compositeAlpha` `PRE_MULTIPLIED`, else `INHERIT` (the window's own: premultiplied on X11's ARGB visual and on Android) |
+| OpenGL ES (X11, Android) | an EGL window surface whose config has an alpha channel (on X11, that of the window's ARGB visual) |
+| Vulkan, OpenGL ES (Wayland) | `dma-buf`s of a format with alpha (`ABGR8888`, `ARGB8888`) instead of `XBGR8888` |
+
+Where the surface can't keep the alpha (a Vulkan driver offering only an
+opaque `compositeAlpha`, as NVIDIA's on an X server without its driver
+does; no EGL config with alpha; a compositor taking no format with alpha),
+that window's frames go through its bitmap instead, which keeps it (read
+back from the GPU, or drawn on the CPU), and the app says so once on
+stderr; other windows still present straight. iOS and the web ignore both
+settings.
 
 `cargo run --example glass` opens a translucent window whose slider sets the
 background's opacity (`--blur` blurs what is behind, `--opacity N` starts at

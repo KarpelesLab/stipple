@@ -1,6 +1,7 @@
 //! The Direct3D 11 scene executor: draws a lowered [`Plan`] with D3D11,
 //! offscreen (and read back) or into a window's flip-model DXGI swap chain
-//! (and presented).
+//! (and presented); a transparent window's is a premultiplied one shown
+//! through DirectComposition (`dcomp`).
 //!
 //! It is the Metal executor (`metal_scene.rs`) translated: the same shaders
 //! in HLSL (`shaders/scene.hlsl`), compiled with `D3DCompile` when the
@@ -90,6 +91,8 @@ macro_rules! com {
 
 // DXGI shared handles opened as textures; after `com!`, which it uses.
 mod external;
+// Transparent windows' swap chains, through DirectComposition.
+mod dcomp;
 
 /// Vertex buffers are allocated at least this big.
 const ARENA: usize = 1024 * 1024;
@@ -188,6 +191,8 @@ struct Chain {
     w: i32,
     h: i32,
     stencil: Option<Stencil>,
+    /// A transparent window's: what shows its (composition) swap chain.
+    composition: Option<dcomp::Composition>,
     /// Frames presented since it was made or resized (see
     /// [`back_buffer_age`]), and what they changed.
     presents: u64,
@@ -1531,8 +1536,16 @@ impl D3dExecutor {
     }
 
     /// A swap chain for `hwnd`, `w`×`h`: flip-discard where there is one,
-    /// with a frame-latency waitable object where there is one.
-    unsafe fn create_chain(&self, hwnd: *mut c_void, w: i32, h: i32) -> Result<Chain, GpuError> {
+    /// with a frame-latency waitable object where there is one. With `alpha`
+    /// (a transparent window) a premultiplied one for composition, shown
+    /// over the window through DirectComposition.
+    unsafe fn create_chain(
+        &self,
+        hwnd: *mut c_void,
+        w: i32,
+        h: i32,
+        alpha: bool,
+    ) -> Result<Chain, GpuError> {
         unsafe {
             // The factory that made the device's adapter.
             let mut dxgi = std::ptr::null_mut();
@@ -1561,21 +1574,35 @@ impl D3dExecutor {
             let factory = Com(factory);
             let mut last = 0;
             for (effect, flags) in SWAP_CHAIN_LADDER {
-                let desc = swap_chain_desc(w as u32, h as u32, effect, flags);
                 let mut swap = std::ptr::null_mut();
-                let hr = com!(factory.ptr(), VT_FACTORY2_CREATE_SWAP_CHAIN_FOR_HWND,
-                    (*mut c_void, *mut c_void, *const SwapChainDesc1, *const c_void, *mut c_void,
-                        *mut *mut c_void) -> Hresult,
-                    self.device.ptr(), hwnd, &desc, std::ptr::null(), std::ptr::null_mut(),
-                    &mut swap);
+                let hr = if alpha {
+                    let desc = dcomp::composition_desc(w as u32, h as u32, effect, flags);
+                    com!(factory.ptr(), dcomp::VT_FACTORY2_CREATE_SWAP_CHAIN_FOR_COMPOSITION,
+                        (*mut c_void, *const SwapChainDesc1, *mut c_void, *mut *mut c_void)
+                            -> Hresult,
+                        self.device.ptr(), &desc, std::ptr::null_mut(), &mut swap)
+                } else {
+                    let desc = swap_chain_desc(w as u32, h as u32, effect, flags);
+                    com!(factory.ptr(), VT_FACTORY2_CREATE_SWAP_CHAIN_FOR_HWND,
+                        (*mut c_void, *mut c_void, *const SwapChainDesc1, *const c_void,
+                            *mut c_void, *mut *mut c_void) -> Hresult,
+                        self.device.ptr(), hwnd, &desc, std::ptr::null(), std::ptr::null_mut(),
+                        &mut swap)
+                };
                 if hr < 0 || swap.is_null() {
                     last = hr;
                     continue;
                 }
                 let swap = Com(swap);
-                // Alt+Enter doesn't take the window fullscreen: the app does that.
-                com!(factory.ptr(), VT_FACTORY_MAKE_WINDOW_ASSOCIATION,
-                    (*mut c_void, u32) -> Hresult, hwnd, DXGI_MWA_NO_ALT_ENTER);
+                let composition = if alpha {
+                    Some(dcomp::compose(dxgi.ptr(), hwnd, swap.ptr())?)
+                } else {
+                    // Alt+Enter doesn't take the window fullscreen: the app
+                    // does that.
+                    com!(factory.ptr(), VT_FACTORY_MAKE_WINDOW_ASSOCIATION,
+                        (*mut c_void, u32) -> Hresult, hwnd, DXGI_MWA_NO_ALT_ENTER);
+                    None
+                };
                 let mut waitable = std::ptr::null_mut();
                 if flags & DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT != 0 {
                     let mut swap2 = std::ptr::null_mut();
@@ -1601,12 +1628,18 @@ impl D3dExecutor {
                     w,
                     h,
                     stencil: None,
+                    composition,
                     presents: 0,
                     log: DamageLog::default(),
                 });
             }
             Err(GpuError::Unavailable(format!(
-                "CreateSwapChainForHwnd failed (0x{:08x})",
+                "{} failed (0x{:08x})",
+                if alpha {
+                    "CreateSwapChainForComposition"
+                } else {
+                    "CreateSwapChainForHwnd"
+                },
                 last as u32
             )))
         }
@@ -1625,6 +1658,7 @@ impl D3dExecutor {
         &mut self,
         plan: &mut Plan,
         hwnd: *mut c_void,
+        alpha: bool,
         dirty: Option<[i32; 4]>,
     ) -> Result<(), GpuError> {
         unsafe {
@@ -1637,8 +1671,18 @@ impl D3dExecutor {
                 self.settle();
             }
             let key = hwnd as usize;
+            // A window that turned transparent (or opaque) needs the other
+            // kind of swap chain.
+            if self
+                .chains
+                .get(&key)
+                .is_some_and(|c| c.composition.is_some() != alpha)
+            {
+                self.chains.remove(&key);
+                self.settle();
+            }
             if !self.chains.contains_key(&key) {
-                let chain = self.create_chain(hwnd, w, h)?;
+                let chain = self.create_chain(hwnd, w, h, alpha)?;
                 self.chains.insert(key, chain);
             }
             let (resize, flags) = {
@@ -1907,7 +1951,7 @@ impl Executor for D3dExecutor {
     }
 
     fn can_present(&self, layer: &GpuLayer) -> bool {
-        matches!(layer, GpuLayer::Hwnd(h) if !h.is_null())
+        matches!(layer, GpuLayer::Hwnd { hwnd, .. } if !hwnd.is_null())
     }
 
     fn present(
@@ -1918,8 +1962,8 @@ impl Executor for D3dExecutor {
         dirty: Option<[i32; 4]>,
     ) -> Result<(), GpuError> {
         match *layer {
-            GpuLayer::Hwnd(hwnd) if !hwnd.is_null() => unsafe {
-                self.present_to(plan, hwnd, dirty)
+            GpuLayer::Hwnd { hwnd, alpha } if !hwnd.is_null() => unsafe {
+                self.present_to(plan, hwnd, alpha, dirty)
             },
             _ => Err(GpuError::Unavailable("no window to present to".into())),
         }

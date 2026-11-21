@@ -52,6 +52,7 @@ How to build, package and run on each platform, and what works there today.
 | Accessibility | AT-SPI ⁶⁶ | UI Automation ⁶⁷ | NSAccessibility ⁶⁸ | UIAccessibility ⁴⁹ | node provider ⁵⁶ | ARIA ²² |
 | Window size limits, maximize, fullscreen | ✅ ⁹ | ✅ ¹⁰ | ✅ ¹⁰ | — | fullscreen ¹⁰ | ❌ |
 | Window icon | ✅ ⁹ | ✅ ¹⁰ | Dock icon ¹⁰ | — | — | ❌ |
+| Translucent windows, blur behind (`App::transparent`, `App::blur`) | ✅ ⁹⁶ | ✅ ⁹⁶ | ✅ ⁹⁶ | — | ✅ ⁹⁶ | — |
 | Several windows, opened and closed at run time | ✅ ⁴⁵ | ✅ ⁴⁵ | ✅ ⁴⁵ | — | — | — |
 | Window titles at run time | ✅ ⁴⁵ | ✅ ⁴⁵ | ✅ ⁴⁵ | — | — | ❌ |
 | Window position, size, resize increments, state | X11 ⁴⁵, Wayland: size and state | ✅ ⁴⁵ | ✅ ⁴⁵ | — | — | ❌ |
@@ -834,6 +835,20 @@ whatever the browser plays, in a `<video>` the GPU renderer imports. No
 sound yet. Run on macOS (VideoToolbox, Metal, the software decoder); CI runs
 the MPEG-2 tests on Linux; VA-API, iOS, Windows, Android and the web glue
 are compile-checked. See [video.md](video.md).
+
+⁹⁶ What is behind the window shows through wherever the app paints with
+less than full alpha (a translucent theme background), on the CPU and the
+GPU renderers alike: X11's ARGB visual under a compositing manager (a
+Vulkan swapchain with a premultiplied `compositeAlpha`, an EGL config with
+alpha), Wayland's ARGB buffers (`dma-buf`s of a format with alpha), DWM's
+frame on Windows (Direct3D 11 through a premultiplied composition swap chain
+and DirectComposition), a non-opaque window and Metal layer on macOS, a
+translucent window over the wallpaper on Android. Blur where the system has
+one (vibrancy, acrylic, KWin's and `ext-background-effect`, Android 12's
+background blur). CI checks X11 (xcompmgr) and Wayland (sway) against the
+CPU's frame for Vulkan and OpenGL ES, Windows over a window behind for
+Direct3D 11 (WARP), and Android's emulator, all non-blocking; macOS was run
+by hand. See [windows-and-cursors.md](windows-and-cursors.md#translucent-windows).
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled;

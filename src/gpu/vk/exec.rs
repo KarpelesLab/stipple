@@ -32,6 +32,8 @@
 mod external;
 // Android hardware buffers imported as images (the camera's YUV frames).
 mod ahb;
+// Swapchains of transparent windows.
+mod alpha;
 
 use super::alloc::Ranges;
 use super::record::{self, Cmd, Draw, Pipe, Recording, Target, Texture};
@@ -201,6 +203,8 @@ struct Swap {
     /// Frames presented since the swapchain was made (the first shows all
     /// of it).
     presents: u64,
+    /// The window is transparent: its images keep their premultiplied alpha.
+    alpha: bool,
 }
 
 /// The Vulkan executor: instance, device, pipelines, targets and caches.
@@ -250,6 +254,9 @@ pub(crate) struct VkExecutor {
     staging: Option<HostBuffer>,
     readback: Option<HostBuffer>,
     swaps: HashMap<usize, Swap>,
+    /// Transparent windows whose surface can't keep the frames' alpha:
+    /// presented to through the window's `Surface` instead.
+    no_alpha: std::collections::HashSet<usize>,
     /// Which window's frame `frame` holds.
     kept: KeptFrame,
     count: u64,
@@ -579,6 +586,7 @@ impl VkExecutor {
                 staging: None,
                 readback: None,
                 swaps: HashMap::new(),
+                no_alpha: Default::default(),
                 kept: KeptFrame::default(),
                 count: 0,
                 uploads: 0,
@@ -2383,10 +2391,18 @@ unsafe fn pick_device(vk: &Fns, instance: VkInstance) -> Result<(VkPhysicalDevic
 /// The key of a window's swapchain.
 fn layer_key(layer: &GpuLayer) -> Option<usize> {
     match *layer {
-        GpuLayer::X11 { window } => Some(window as usize),
+        GpuLayer::X11 { window, .. } => Some(window as usize),
         GpuLayer::Android { window, .. } => Some(window as usize),
         GpuLayer::Metal(layer) => Some(layer as usize),
         _ => None,
+    }
+}
+
+/// Whether `layer`'s window is transparent.
+fn layer_alpha(layer: &GpuLayer) -> bool {
+    match *layer {
+        GpuLayer::X11 { alpha, .. } | GpuLayer::Android { alpha, .. } => alpha,
+        _ => false,
     }
 }
 
@@ -2397,7 +2413,7 @@ impl VkExecutor {
             let mut surface = NULL;
             let r = match *layer {
                 #[cfg(target_os = "linux")]
-                GpuLayer::X11 { window } => {
+                GpuLayer::X11 { window, .. } => {
                     let (conn, _) = crate::gpu::xcb::connection().map_err(GpuError::Unavailable)?;
                     let create = self
                         .vk
@@ -2461,6 +2477,18 @@ impl VkExecutor {
             }
             Ok(surface)
         }
+    }
+
+    /// The `compositeAlpha` modes a swapchain on `surface` takes, if the
+    /// driver says.
+    unsafe fn composite_modes(&self, surface: VkSurfaceKHR) -> Option<u32> {
+        let mut caps = VkSurfaceCapabilitiesKHR::default();
+        let r = unsafe {
+            (self.vk.vkGetPhysicalDeviceSurfaceCapabilitiesKHR.unwrap())(
+                self.phys, surface, &mut caps,
+            )
+        };
+        (r == VK_SUCCESS).then_some(caps.supportedCompositeAlpha)
     }
 
     /// (Re)build `swap`'s swapchain at the surface's size (or `want` where
@@ -2527,15 +2555,9 @@ impl VkExecutor {
             if caps.maxImageCount > 0 {
                 images = images.min(caps.maxImageCount);
             }
-            let alpha = [
-                COMPOSITE_OPAQUE,
-                COMPOSITE_INHERIT,
-                COMPOSITE_PRE_MULTIPLIED,
-                COMPOSITE_POST_MULTIPLIED,
-            ]
-            .into_iter()
-            .find(|a| caps.supportedCompositeAlpha & a != 0)
-            .unwrap_or(COMPOSITE_OPAQUE);
+            // (A transparent window's surface was checked to keep alpha.)
+            let alpha = alpha::composite_alpha(caps.supportedCompositeAlpha, swap.alpha)
+                .unwrap_or(COMPOSITE_OPAQUE);
             let transform = if caps.supportedTransforms & TRANSFORM_IDENTITY != 0 {
                 TRANSFORM_IDENTITY
             } else {
@@ -2668,6 +2690,26 @@ impl VkExecutor {
             };
             if !self.swaps.contains_key(&key) {
                 let surface = self.create_surface(layer)?;
+                let alpha = layer_alpha(layer);
+                let modes = self.composite_modes(surface).unwrap_or(0);
+                if alpha && alpha::composite_alpha(modes, true).is_none() {
+                    // Through the window's `Surface`, which keeps it.
+                    (self.vk.vkDestroySurfaceKHR.unwrap())(
+                        self.instance,
+                        surface,
+                        std::ptr::null(),
+                    );
+                    self.no_alpha.insert(key);
+                    static SAID: std::sync::Once = std::sync::Once::new();
+                    SAID.call_once(|| {
+                        eprintln!(
+                            "stipple: Vulkan can't keep a transparent window's alpha \
+                             (compositeAlpha {modes:#x}, none premultiplied); its frames \
+                             are shown through the window's bitmap"
+                        )
+                    });
+                    return Err(GpuError::Skipped);
+                }
                 self.swaps.insert(
                     key,
                     Swap {
@@ -2680,6 +2722,7 @@ impl VkExecutor {
                         format: 0,
                         stale: true,
                         presents: 0,
+                        alpha,
                     },
                 );
             }
@@ -2962,8 +3005,16 @@ impl Executor for VkExecutor {
         self.has_swapchain
             && match *layer {
                 #[cfg(target_os = "linux")]
-                GpuLayer::X11 { .. } => self.has_surface && crate::gpu::xcb::connection().is_ok(),
-                GpuLayer::Android { window, .. } => self.has_surface && !window.is_null(),
+                GpuLayer::X11 { window, alpha } => {
+                    self.has_surface
+                        && !(alpha && self.no_alpha.contains(&(window as usize)))
+                        && crate::gpu::xcb::connection().is_ok()
+                }
+                GpuLayer::Android { window, alpha, .. } => {
+                    self.has_surface
+                        && !window.is_null()
+                        && !(alpha && self.no_alpha.contains(&(window as usize)))
+                }
                 #[cfg(target_os = "macos")]
                 GpuLayer::Metal(layer) => self.has_surface && !layer.is_null(),
                 _ => false,
@@ -2989,6 +3040,9 @@ impl Executor for VkExecutor {
         if let Some((surface, sink)) = crate::gpu::dmabuf_present::sink_of(layer) {
             unsafe { self.release_dmabuf(surface, sink) };
             return;
+        }
+        if let Some(key) = layer_key(layer) {
+            self.no_alpha.remove(&key);
         }
         if let Some(swap) = layer_key(layer).and_then(|k| self.swaps.remove(&k)) {
             unsafe { self.drop_swap(swap) };

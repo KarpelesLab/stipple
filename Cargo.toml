@@ -267,6 +267,14 @@ name = "cameraview_android"
 path = "examples/cameraview/android.rs"
 crate-type = ["cdylib"]
 
+# examples/glass as an Android app: libglass_android.so, which
+# `STIPPLE_APK_EXAMPLE=glass_android examples/androiddemo/build-apk.sh`
+# packages with examples/glass/AndroidManifest.xml.
+[[example]]
+name = "glass_android"
+path = "examples/glass/android.rs"
+crate-type = ["cdylib"]
+
 # An Android app starting an activity for a result through
 # stipple::platform::android (VpnService.prepare's consent dialog):
 # libintentresult.so, which

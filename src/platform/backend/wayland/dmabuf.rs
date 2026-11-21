@@ -446,6 +446,8 @@ pub(super) struct WindowSink {
     pub made: std::cell::RefCell<Vec<u32>>,
     /// Whether frames go with explicit sync, decided the first time asked.
     pub explicit: std::cell::Cell<Option<bool>>,
+    /// The window is transparent: its buffers keep their alpha.
+    pub alpha: bool,
 }
 
 impl WindowSink {
@@ -471,6 +473,10 @@ impl Present for WindowSink {
 
     fn ready(&self) -> bool {
         self.configured.get()
+    }
+
+    fn alpha(&self) -> bool {
+        self.alpha
     }
 
     fn import(&self, buffer: &Buffer) -> Result<BufferId, String> {

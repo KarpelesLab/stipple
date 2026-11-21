@@ -8,6 +8,10 @@
 //!   vibrancy view on macOS, acrylic on Windows 11, KWin's blur or
 //!   `ext-background-effect` on Wayland, KDE's blur on X11).
 //! - `--opacity N` starts the background at `N` percent (default 70).
+//!
+//! The GPU renderers keep the window's alpha too (`STIPPLE_RENDERER=vulkan`,
+//! `gl`, `d3d11` or `metal`, built with that feature). On Android it's the
+//! `glass_android` example (`android.rs`), over the wallpaper.
 
 use stipple::prelude::*;
 
@@ -45,7 +49,7 @@ fn view(state: &Glass, cx: &mut Cx<Glass>) -> Element {
         .align(Align::Center, Align::Center)
 }
 
-fn main() {
+pub fn main() {
     let args: Vec<String> = std::env::args().collect();
     let blur = args.iter().any(|a| a == "--blur");
     let opacity = args
