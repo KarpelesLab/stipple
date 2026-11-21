@@ -114,6 +114,7 @@ fn visuals_equal(a: &LayoutNode, b: &LayoutNode) -> bool {
         && a.selection == b.selection
         && a.preedit == b.preedit
         && a.scroll_bar == b.scroll_bar
+        && a.scroll_bar_x == b.scroll_bar_x
 }
 
 /// `outer_old` / `outer_new` map the parents' layout coordinates to the
@@ -295,6 +296,7 @@ mod tests {
             native_live: None,
             native_a11y: None,
             scroll: None,
+            scroll_x: None,
             scroll_horizontal: false,
             clip: false,
             cursor: None,
@@ -307,6 +309,7 @@ mod tests {
             offstage: false,
             hit_through: false,
             scroll_bar: None,
+            scroll_bar_x: None,
             indicator: false,
             children,
         }
@@ -345,6 +348,7 @@ mod tests {
             native_live: None,
             native_a11y: None,
             scroll: None,
+            scroll_x: None,
             scroll_horizontal: false,
             clip: false,
             cursor: None,
@@ -357,6 +361,7 @@ mod tests {
             offstage: false,
             hit_through: false,
             scroll_bar: None,
+            scroll_bar_x: None,
             indicator: false,
             children: Vec::new(),
         }

@@ -2846,9 +2846,9 @@ impl<S: 'static> Pane<S> {
     /// `dx` / `dy` logical pixels (positive = reveal content further right /
     /// down): a vertical wheel scrolls the innermost vertical container under
     /// the pointer (or a sideways one, when there is none), a mostly
-    /// horizontal one the innermost sideways container. Returns whether
-    /// anything scrolled (the offset is re-clamped to the content during the
-    /// next build).
+    /// horizontal one (or a vertical one with Shift held) the innermost
+    /// sideways container. Returns whether anything scrolled (the offset is
+    /// re-clamped to the content during the next build).
     fn scroll_by(
         &mut self,
         state: &S,
@@ -2865,7 +2865,12 @@ impl<S: 'static> Pane<S> {
         else {
             return false;
         };
-        let (id, mut delta) = if dx.abs() > dy.abs() {
+        // Shift turns a vertical wheel sideways, as on Windows and Linux
+        // (macOS's own events come sideways already).
+        let shifted = crate::platform::pointer_modifiers().shift && dx == 0.0;
+        let (id, mut delta) = if shifted && let Some(h) = targets.horizontal {
+            (h, dy)
+        } else if dx.abs() > dy.abs() {
             match (targets.horizontal, targets.vertical) {
                 (Some(h), _) => (h, dx),
                 (None, Some(v)) => (v, dy),
@@ -2924,7 +2929,7 @@ impl<S: 'static> Pane<S> {
         // The tree was laid out at the current offset, which shifted the
         // content by it (see `apply_scroll`).
         let off = self.scroll_offsets.get(&id).copied().unwrap_or(0.0);
-        let max = crate::core::scroll_range(node, off);
+        let max = crate::core::scroll_range_for(node, id, off);
         let delta = if node.scroll_horizontal && node.rtl {
             -delta
         } else {

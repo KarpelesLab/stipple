@@ -1186,6 +1186,16 @@ impl<'a, S> Cx<'a, S> {
         h
     }
 
+    /// The size scroll container `id` was laid out at in the last frame, if
+    /// it was asked about then too (asking keeps it known for the next
+    /// frame; nothing is built again when this one's differs).
+    pub(crate) fn last_scroll_viewport(&mut self, id: ScrollId) -> Option<Size> {
+        // A NaN guess never differs from the laid-out height, so it asks
+        // for the size without asking for a rebuild.
+        self.scroll_fits.push((id, f64::NAN));
+        self.scroll_viewports.get(&id).copied()
+    }
+
     /// Seed the viewport sizes of last frame's scroll containers that
     /// [`fit_scroll_height`](Self::fit_scroll_height) asks about.
     pub(crate) fn set_scroll_viewports(&mut self, viewports: HashMap<ScrollId, Size>) {
@@ -1690,6 +1700,10 @@ pub struct LayoutNode {
     /// Scroll container handle: wheel events over this node adjust the app's
     /// offset for `id`, and its children are laid out at natural size + shifted.
     pub(crate) scroll: Option<ScrollId>,
+    /// A vertical scroll container's sideways scrolling, if it has one (see
+    /// [`Element::scrollable_x`](crate::core::Element::scrollable_x)): its
+    /// children are shifted left by this id's offset too.
+    pub(crate) scroll_x: Option<ScrollId>,
     /// Whether the scroll container scrolls sideways: a horizontal stack made
     /// [`scrollable`](crate::core::Element::scrollable) (its offset then
     /// counts from the left, or from the right when laid out right to left).
@@ -1750,6 +1764,9 @@ pub struct LayoutNode {
     /// content (see [`core::scroll_bar`](crate::core::scroll_bar)); `None`
     /// when its content fits, or for any other node.
     pub(crate) scroll_bar: Option<Box<crate::core::scroll_bar::BarPaint>>,
+    /// The bar of its sideways scrolling ([`scroll_x`](Self::scroll_x)),
+    /// along its bottom.
+    pub(crate) scroll_bar_x: Option<Box<crate::core::scroll_bar::BarPaint>>,
     pub(crate) children: Vec<LayoutNode>,
 }
 
@@ -1780,6 +1797,7 @@ impl LayoutNode {
             native_live: None,
             native_a11y: None,
             scroll: None,
+            scroll_x: None,
             scroll_horizontal: false,
             clip: false,
             cursor: None,
@@ -1792,6 +1810,7 @@ impl LayoutNode {
             offstage: false,
             hit_through: false,
             scroll_bar: None,
+            scroll_bar_x: None,
             indicator: false,
             children,
         }
@@ -2245,13 +2264,17 @@ pub(crate) fn scroll_targets_at(node: &LayoutNode, point: Point) -> ScrollTarget
             &mut found.vertical
         };
         slot.get_or_insert(id);
+        if let Some(x) = node.scroll_x {
+            found.horizontal.get_or_insert(x);
+        }
     }
     found
 }
 
-/// Find the scroll-container node carrying `id`, if present.
+/// Find the scroll-container node carrying `id` (as its scroll, or its
+/// sideways [`scroll_x`](LayoutNode::scroll_x)), if present.
 pub(crate) fn find_scroll(node: &LayoutNode, id: ScrollId) -> Option<&LayoutNode> {
-    if node.scroll == Some(id) {
+    if node.scroll == Some(id) || node.scroll_x == Some(id) {
         return Some(node);
     }
     node.children.iter().find_map(|c| find_scroll(c, id))
@@ -2383,6 +2406,7 @@ mod tests {
             native_live: None,
             native_a11y: None,
             scroll: None,
+            scroll_x: None,
             scroll_horizontal: false,
             clip: false,
             cursor: None,
@@ -2395,6 +2419,7 @@ mod tests {
             offstage: false,
             hit_through: false,
             scroll_bar: None,
+            scroll_bar_x: None,
             indicator: false,
             children: Vec::new(),
         }
@@ -2452,6 +2477,7 @@ mod tests {
             native_live: None,
             native_a11y: None,
             scroll: None,
+            scroll_x: None,
             scroll_horizontal: false,
             clip: false,
             cursor: None,
@@ -2464,6 +2490,7 @@ mod tests {
             offstage: false,
             hit_through: false,
             scroll_bar: None,
+            scroll_bar_x: None,
             indicator: false,
             children: vec![
                 leaf(

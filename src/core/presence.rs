@@ -259,8 +259,12 @@ fn content_origin(node: &LayoutNode, offsets: &HashMap<ScrollId, f64>) -> Point 
         .and_then(|id| offsets.get(&id).copied())
         .unwrap_or(0.0);
     let shift = crate::core::render::scroll_shift(node, off);
+    let sideways = node
+        .scroll_x
+        .and_then(|id| offsets.get(&id).copied())
+        .unwrap_or(0.0);
     Point::new(
-        node.bounds.origin.x + shift.dx,
+        node.bounds.origin.x + shift.dx - sideways,
         node.bounds.origin.y + shift.dy,
     )
 }

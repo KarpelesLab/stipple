@@ -404,6 +404,9 @@ pub struct Element {
     /// natural size (overflowing its bounds), clips them, and routes wheel events
     /// to the app's offset for this id. Set via [`Element::scrollable`].
     pub(crate) scroll: Option<ScrollId>,
+    /// A vertical scroll container that also scrolls sideways, by this id
+    /// (see [`scrollable_x`](Element::scrollable_x)).
+    pub(crate) scroll_x: Option<ScrollId>,
     /// When `true`, children are clipped to this element's painted bounds. Set
     /// implicitly by [`Element::scrollable`] and via [`Element::clip`].
     pub(crate) clip: bool,
@@ -475,6 +478,7 @@ impl Element {
             wrap: false,
             native: None,
             scroll: None,
+            scroll_x: None,
             clip: false,
             cursor: None,
             semantics: None,
@@ -510,6 +514,7 @@ impl Element {
             wrap: false,
             native: None,
             scroll: None,
+            scroll_x: None,
             clip: false,
             cursor: None,
             semantics: None,
@@ -583,6 +588,7 @@ impl Element {
             wrap: false,
             native: None,
             scroll: None,
+            scroll_x: None,
             clip: false,
             cursor: None,
             semantics: None,
@@ -620,6 +626,7 @@ impl Element {
             wrap: false,
             native: None,
             scroll: None,
+            scroll_x: None,
             clip: false,
             cursor: None,
             semantics: None,
@@ -665,6 +672,7 @@ impl Element {
             wrap: false,
             native: None,
             scroll: None,
+            scroll_x: None,
             clip: false,
             cursor: None,
             semantics: None,
@@ -1835,6 +1843,19 @@ impl Element {
     /// describes.
     pub fn scrollable(mut self, id: ScrollId) -> Self {
         self.scroll = Some(id);
+        self.clip = true;
+        self
+    }
+
+    /// Make a vertical [`scrollable`](Element::scrollable) container scroll
+    /// sideways too, by `id` (its own offset): content wider than the
+    /// container (a child with a [`min_width`](Element::min_width) past it)
+    /// moves left by that offset, a horizontal wheel or trackpad swipe (or
+    /// Shift+wheel) over it scrolls it, and a second bar along its bottom
+    /// shows it. The container's own width doesn't follow the wide
+    /// content. For a log view's long lines.
+    pub(crate) fn scrollable_x(mut self, id: ScrollId) -> Self {
+        self.scroll_x = Some(id);
         self.clip = true;
         self
     }

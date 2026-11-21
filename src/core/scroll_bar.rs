@@ -196,12 +196,79 @@ impl Geometry {
 pub(crate) fn geometry(node: &LayoutNode, offset: f64, look: &ScrollBarLook) -> Option<Geometry> {
     node.scroll?;
     let max = crate::core::scroll_range(node, offset);
-    let b = node.bounds;
     let horizontal = node.scroll_horizontal;
-    let (viewport, length) = if horizontal {
-        (b.width(), b.width())
+    strip_geometry(
+        node,
+        horizontal,
+        horizontal && node.rtl,
+        max,
+        offset,
+        look,
+        0.0,
+    )
+}
+
+/// The bars of scroll container `node` at `offsets`, with the id each
+/// scrolls: its own, and the sideways one of a container that also
+/// [scrolls sideways](LayoutNode::scroll_x) (both shortened to leave the
+/// corner between them when both show).
+pub(crate) fn bars(
+    node: &LayoutNode,
+    offsets: &HashMap<ScrollId, f64>,
+    look: &ScrollBarLook,
+) -> [Option<(ScrollId, Geometry)>; 2] {
+    let Some(id) = node.scroll else {
+        return [None, None];
+    };
+    let off = offsets.get(&id).copied().unwrap_or(0.0);
+    let Some(x) = node.scroll_x else {
+        return [geometry(node, off, look).map(|g| (id, g)), None];
+    };
+    let x_off = offsets.get(&x).copied().unwrap_or(0.0);
+    let max = crate::core::scroll_range(node, off);
+    let max_x = crate::core::render::scroll_range_x(node, x_off);
+    let corner = if max >= 0.5 && max_x >= 0.5 {
+        look.width.max(0.0)
     } else {
-        (b.height(), b.height())
+        0.0
+    };
+    [
+        strip_geometry(node, false, false, max, off, look, corner).map(|g| (id, g)),
+        strip_geometry(node, true, false, max_x, x_off, look, corner).map(|g| (x, g)),
+    ]
+}
+
+/// The bar of `node` that scrolls `id`.
+pub(crate) fn geometry_for(
+    node: &LayoutNode,
+    id: ScrollId,
+    offsets: &HashMap<ScrollId, f64>,
+    look: &ScrollBarLook,
+) -> Option<Geometry> {
+    bars(node, offsets, look)
+        .into_iter()
+        .flatten()
+        .find(|(i, _)| *i == id)
+        .map(|(_, g)| g)
+}
+
+/// A bar along `node`'s bottom (`horizontal`) or trailing edge, for
+/// content `max` past the viewport at `offset`, its strip `corner` short
+/// of the end.
+fn strip_geometry(
+    node: &LayoutNode,
+    horizontal: bool,
+    reversed: bool,
+    max: f64,
+    offset: f64,
+    look: &ScrollBarLook,
+    corner: f64,
+) -> Option<Geometry> {
+    let b = node.bounds;
+    let (viewport, length) = if horizontal {
+        (b.width(), (b.width() - corner).max(0.0))
+    } else {
+        (b.height(), (b.height() - corner).max(0.0))
     };
     if max < 0.5 || viewport <= 0.0 {
         return None;
@@ -211,11 +278,11 @@ pub(crate) fn geometry(node: &LayoutNode, offset: f64, look: &ScrollBarLook) -> 
         .max(0.0)
         .min(if horizontal { b.height() } else { b.width() });
     let strip = if horizontal {
-        Rect::from_xywh(b.min_x(), b.max_y() - w, b.width(), w)
+        Rect::from_xywh(b.min_x(), b.max_y() - w, length, w)
     } else if node.rtl {
-        Rect::from_xywh(b.min_x(), b.min_y(), w, b.height())
+        Rect::from_xywh(b.min_x(), b.min_y(), w, length)
     } else {
-        Rect::from_xywh(b.max_x() - w, b.min_y(), w, b.height())
+        Rect::from_xywh(b.max_x() - w, b.min_y(), w, length)
     };
     // The thumb's ends stay as far in from the strip's as its sides.
     let margin = ((w - look.thumb) / 2.0).clamp(0.0, length / 4.0);
@@ -228,7 +295,7 @@ pub(crate) fn geometry(node: &LayoutNode, offset: f64, look: &ScrollBarLook) -> 
     Some(Geometry {
         strip,
         horizontal,
-        reversed: horizontal && node.rtl,
+        reversed,
         viewport,
         max,
         offset: offset.clamp(0.0, max),
@@ -257,9 +324,9 @@ pub(crate) struct Stamp<'a> {
 /// bar changed, the container's box (in window coordinates, `outer` mapping
 /// `node`'s parent's to the window's) goes in `changed`.
 pub(crate) fn stamp(node: &mut LayoutNode, s: &Stamp<'_>, outer: Affine, changed: &mut Vec<Rect>) {
-    let bar = node.scroll.and_then(|id| {
-        let offset = s.offsets.get(&id).copied().unwrap_or(0.0);
-        let g = geometry(node, offset, &s.look)?;
+    let [main, sideways] = bars(node, s.offsets, &s.look);
+    let paint = |bar: Option<(ScrollId, Geometry)>| {
+        let (id, g) = bar?;
         let level = (s.level)(id).clamp(0.0, 1.0);
         if level <= 0.0 {
             return None;
@@ -286,20 +353,29 @@ pub(crate) fn stamp(node: &mut LayoutNode, s: &Stamp<'_>, outer: Affine, changed
             thumb: g.thumb(thickness),
             thumb_color: fade(thumb),
         }))
-    });
+    };
+    let (bar, bar_x) = (paint(main), paint(sideways));
     let m = crate::core::diff::to_window(node, outer);
-    if bar != node.scroll_bar {
-        // What either bar covers, a pixel wider for anti-aliasing.
-        let covers = |b: &Option<Box<BarPaint>>| {
-            b.as_ref()
-                .map(|b| b.track.map_or(b.thumb, |(t, _)| t.union(b.thumb)))
-        };
-        let area = match (covers(&node.scroll_bar), covers(&bar)) {
+    // What either bar covers, a pixel wider for anti-aliasing.
+    let covers = |b: &Option<Box<BarPaint>>| {
+        b.as_ref()
+            .map(|b| b.track.map_or(b.thumb, |(t, _)| t.union(b.thumb)))
+    };
+    let bounds = node.bounds;
+    let mut repaint = |old: &Option<Box<BarPaint>>, new: &Option<Box<BarPaint>>| {
+        let area = match (covers(old), covers(new)) {
             (Some(a), Some(b)) => a.union(b),
-            (a, b) => a.or(b).unwrap_or(node.bounds),
+            (a, b) => a.or(b).unwrap_or(bounds),
         };
         changed.push(m.map_rect(area.inset(Insets::uniform(-1.0))));
+    };
+    if bar != node.scroll_bar {
+        repaint(&node.scroll_bar, &bar);
         node.scroll_bar = bar;
+    }
+    if bar_x != node.scroll_bar_x {
+        repaint(&node.scroll_bar_x, &bar_x);
+        node.scroll_bar_x = bar_x;
     }
     for child in &mut node.children {
         stamp(child, s, m, changed);
@@ -332,12 +408,11 @@ pub(crate) fn bar_at(
         if clipped_out(node, local) || node.ghost {
             return Found::Nothing;
         }
-        // The bar is drawn over the container's children.
-        if let Some(id) = node.scroll
-            && let Some(g) = geometry(node, offsets.get(&id).copied().unwrap_or(0.0), look)
-            && let Some(part) = g.part_at(local)
-        {
-            return Found::Bar(id, part);
+        // The bars are drawn over the container's children.
+        for (id, g) in bars(node, offsets, look).into_iter().flatten() {
+            if let Some(part) = g.part_at(local) {
+                return Found::Bar(id, part);
+            }
         }
         for child in node.children.iter().rev() {
             match walk(child, local, look, offsets) {
@@ -521,6 +596,60 @@ mod tests {
         assert_eq!(
             overlay_level(OVERLAY_HOLD + 0.01, crate::anim::Motion::Instant),
             0.0
+        );
+    }
+
+    #[test]
+    fn a_container_scrolling_both_ways_has_two_bars_and_a_corner() {
+        let look = ScrollBarLook::CLASSIC;
+        let (down, across) = (ScrollId(0), ScrollId(1));
+        // A 200×100 container over 500×1000 px of content.
+        let content = Element::boxed(Default::default())
+            .height(1000.0)
+            .min_width(500.0);
+        let el = Element::stack(Axis::Vertical, vec![content])
+            .scrollable(down)
+            .scrollable_x(across)
+            .height(100.0);
+        // Its width follows the space there is, not the content.
+        let size = crate::core::measure(&el, Size::new(200.0, 400.0), None);
+        assert_eq!(size, Size::new(200.0, 100.0));
+        let mut node = crate::core::layout(&el, Rect::from_xywh(0.0, 0.0, 200.0, 100.0), None);
+        assert_eq!(node.scroll_x, Some(across));
+        let mut offsets = HashMap::from([(down, 40.0), (across, 1_000.0)]);
+        crate::core::apply_scroll(&mut node, &mut offsets);
+        // Clamped sideways to the content, and both offsets applied.
+        assert_eq!(offsets[&across], 300.0);
+        assert_eq!(node.children[0].bounds.origin, Point::new(-300.0, -40.0));
+        assert_eq!(crate::core::render::scroll_range_x(&node, 300.0), 300.0);
+        assert_eq!(crate::core::scroll_range_for(&node, across, 300.0), 300.0);
+        assert_eq!(crate::core::scroll_range_for(&node, down, 40.0), 900.0);
+        // Two bars, each short of the corner the other leaves.
+        let [v, h] = bars(&node, &offsets, &look);
+        let (v, h) = (v.unwrap(), h.unwrap());
+        assert_eq!((v.0, h.0), (down, across));
+        assert_eq!(v.1.strip, Rect::from_xywh(188.0, 0.0, 12.0, 88.0));
+        assert_eq!(h.1.strip, Rect::from_xywh(0.0, 88.0, 188.0, 12.0));
+        assert!(h.1.horizontal && !h.1.reversed);
+        assert_eq!(h.1.max, 300.0);
+        assert_eq!(geometry_for(&node, across, &offsets, &look), Some(h.1));
+        // A press on the bottom bar is that bar's.
+        let thumb = h.1.thumb(6.0);
+        assert_eq!(
+            bar_at(
+                &node,
+                Point::new(thumb.max_x() - 2.0, 94.0),
+                &look,
+                &offsets
+            ),
+            Some((across, Part::Thumb))
+        );
+        // The wheel finds both ways under the pointer.
+        let t = crate::core::scroll_targets_at(&node, Point::new(50.0, 50.0));
+        assert_eq!((t.vertical, t.horizontal), (Some(down), Some(across)));
+        assert_eq!(
+            crate::core::find_scroll(&node, across).map(|n| n.bounds),
+            Some(node.bounds)
         );
     }
 }

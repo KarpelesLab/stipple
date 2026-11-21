@@ -251,7 +251,13 @@ fn measure_element(el: &Element, avail: Size, font: Option<&Font>) -> Size {
         content.width + pad.horizontal(),
         content.height + pad.vertical(),
     );
-    let w = el.layout.size.width.unwrap_or(natural.width);
+    // A container that scrolls sideways is no wider than the space there
+    // is, however wide its content.
+    let natural_width = match el.scroll_x {
+        Some(_) if avail.width.is_finite() => natural.width.min(avail.width),
+        _ => natural.width,
+    };
+    let w = el.layout.size.width.unwrap_or(natural_width);
     let h = el.layout.size.height.unwrap_or(natural.height);
     let mut size = Size::new(
         clamp_len(w, min.width, max.width),
@@ -820,6 +826,7 @@ fn layout_element(
         native_live: None,
         native_a11y: None,
         scroll: el.scroll,
+        scroll_x: el.scroll_x.filter(|_| el.scroll.is_some()),
         scroll_horizontal: el.scroll.is_some()
             && matches!(
                 el.kind,
@@ -839,6 +846,7 @@ fn layout_element(
         offstage: el.offstage,
         hit_through: el.hit_through,
         scroll_bar: None,
+        scroll_bar_x: None,
         indicator: el.indicator,
         children: Vec::new(),
     };
@@ -1728,6 +1736,9 @@ fn paint_node(node: &LayoutNode, scene: &mut Scene, font: Option<&Font>, visible
     if let Some(bar) = &node.scroll_bar {
         crate::core::scroll_bar::paint(bar, scene);
     }
+    if let Some(bar) = &node.scroll_bar_x {
+        crate::core::scroll_bar::paint(bar, scene);
+    }
 }
 
 /// Apply scroll offsets to a laid-out tree: for each scroll container, clamp its
@@ -1744,7 +1755,13 @@ pub(crate) fn apply_scroll(
         let max_off = scroll_range(node, 0.0);
         let off = offsets.entry(id).or_insert(0.0);
         *off = off.clamp(0.0, max_off);
-        let shift = scroll_shift(node, *off);
+        let mut shift = scroll_shift(node, *off);
+        if let Some(x) = node.scroll_x {
+            let max_x = scroll_range_x(node, 0.0);
+            let off = offsets.entry(x).or_insert(0.0);
+            *off = off.clamp(0.0, max_x);
+            shift.dx -= *off;
+        }
         if shift != Vec2::ZERO {
             for child in &mut node.children {
                 translate(child, shift);
@@ -1791,6 +1808,29 @@ pub(crate) fn scroll_range(node: &LayoutNode, applied: f64) -> f64 {
         b.height()
     };
     (content - viewport).max(0.0)
+}
+
+/// How far the sideways scrolling ([`scroll_x`](LayoutNode::scroll_x)) of
+/// vertical scroll container `node` can go, its children shifted left by
+/// `applied`: how far they reach past its right edge.
+pub(crate) fn scroll_range_x(node: &LayoutNode, applied: f64) -> f64 {
+    let b = node.bounds;
+    let right = node
+        .children
+        .iter()
+        .map(|c| c.bounds.max_x())
+        .fold(b.min_x(), f64::max);
+    (right + applied - b.max_x()).max(0.0)
+}
+
+/// How far `node` can scroll by `id`: along its axis for its scroll, or
+/// sideways for its [`scroll_x`](LayoutNode::scroll_x).
+pub(crate) fn scroll_range_for(node: &LayoutNode, id: ScrollId, applied: f64) -> f64 {
+    if node.scroll_x == Some(id) {
+        scroll_range_x(node, applied)
+    } else {
+        scroll_range(node, applied)
+    }
 }
 
 /// How scroll container `node`'s children move at offset `off`: up, left, or

@@ -102,7 +102,9 @@ element's coordinates, `window_position` and `modifiers`.
   carries no delta.
 
 Horizontal scrolling arrives as `dx`: a tilting wheel, a trackpad, Shift+wheel
-on some platforms, and buttons 6 and 7 on X11.
+on some platforms, and buttons 6 and 7 on X11. Over a scroll container that
+scrolls sideways, a vertical wheel with Shift held scrolls it sideways
+wherever the platform sends it as a vertical one (Windows, X11, Wayland).
 
 An element with `on_wheel` takes the wheel over itself instead of the scroll
 container it is in; a scroll container inside it still takes the wheel over

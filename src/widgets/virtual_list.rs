@@ -220,6 +220,10 @@ pub(crate) struct Viewport {
     /// How many rows have ever been dropped off the top (the window scrolls
     /// up by the ones it hasn't seen dropped yet, so the rows on screen stay).
     pub(crate) dropped: u64,
+    /// Room kept below the last row, which the viewport's bottom edge covers
+    /// (a sideways scroll bar's gutter): the rows scroll that much further,
+    /// and are revealed above it.
+    pub(crate) tail: f64,
 }
 
 /// A scroll viewport over [`Rows`] for this frame: its container id, the
@@ -229,6 +233,8 @@ pub(crate) struct Window {
     pub(crate) id: ScrollId,
     pub(crate) offset: f64,
     pub(crate) height: f64,
+    /// The room below the rows (see [`Viewport::tail`]).
+    tail: f64,
     /// Whether the height is fixed (else the container fills its parent).
     fixed: bool,
     pub(crate) rows: Rows,
@@ -246,6 +252,7 @@ impl Window {
             id,
             offset,
             height,
+            tail: 0.0,
             fixed: true,
             range,
             rows,
@@ -267,6 +274,9 @@ impl Window {
         };
         let requests = cx.scroll_requests();
         let stored = cx.scroll_offset(id);
+        let full = height;
+        // The rows show above the tail.
+        let height = (height - view.tail).max(0.0);
         // Rows dropped off the top since the last build: what was on screen
         // moved up by their height.
         let gone = view
@@ -292,7 +302,7 @@ impl Window {
             // To the end the layout finds (the height may be a guess, which
             // the next build corrects).
             if stored < max - 0.5 {
-                requests.scroll_to(id, rows.total());
+                requests.scroll_to(id, rows.total() + view.tail);
             }
         } else if (offset - stored).abs() > f64::EPSILON {
             requests.scroll_to(id, offset);
@@ -302,7 +312,8 @@ impl Window {
         Window {
             id,
             offset,
-            height,
+            height: full,
+            tail: view.tail,
             fixed: view.height.is_some(),
             range,
             rows,
@@ -328,7 +339,7 @@ impl Window {
         if i >= self.rows.count() {
             return;
         }
-        let to = self.rows.reveal(i, self.offset, self.height);
+        let to = self.rows.reveal(i, self.offset, self.height - self.tail);
         if (to - self.offset).abs() > f64::EPSILON {
             self.requests.scroll_to(self.id, to);
         }
@@ -349,7 +360,7 @@ impl Window {
     /// The content of the scroll container: the built `rows` between spacers.
     pub(crate) fn content(&self, rows: Vec<Element>) -> Element {
         let above = self.rows.top(self.range.start);
-        let below = self.rows.total() - self.rows.top(self.range.end);
+        let below = self.rows.total() - self.rows.top(self.range.end) + self.tail;
         let mut children = Vec::with_capacity(rows.len() + 2);
         children.push(Element::boxed(BoxStyle::default()).height(above));
         children.extend(rows);
@@ -813,6 +824,7 @@ pub fn virtual_list<S: 'static>(
         stick_to_end: spec.stick_to_end,
         key: spec.scroll_key,
         dropped: 0,
+        tail: 0.0,
     };
     let window = Window::open(cx, spec.geometry(), &view, &state.scroll);
     if let Some((distance, hook)) = &spec.end_reached

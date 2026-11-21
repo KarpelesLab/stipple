@@ -103,6 +103,8 @@ mod swipe_tests;
 mod table;
 mod text_view;
 #[cfg(test)]
+mod text_view_sideways_tests;
+#[cfg(test)]
 mod text_view_tests;
 mod tree;
 mod virtual_list;

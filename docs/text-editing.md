@@ -352,7 +352,8 @@ log.push_line("Finished");
 ```
 
 - **Lines** are shown unwrapped in the system's monospaced font
-  (`TextViewOptions::font` for another), clipped when wider than the view.
+  (`TextViewOptions::font` for another); the view scrolls sideways when one
+  is wider than it (see *Long lines* below).
   `max_lines` drops the oldest as new ones come; what's on screen stays put
   while you read, and `dropped()` counts the lines gone.
 - **Selection** spans any lines, scrolled out of view or not: drag (past the
@@ -382,6 +383,21 @@ log.push_line("Finished");
 - **Scrolling**: `stick_to_end` as for `virtual_list`; `scroll_to_line(i,
   ScrollAlign::Center)` and `scroll_to_end()` from any handler; Up/Down
   scroll a line and Home/End to the top and end while the view has the focus.
+- **Long lines** scroll sideways: a horizontal wheel or trackpad swipe, a
+  vertical wheel with Shift held, Left/Right (four characters) while the
+  view has the focus, a sideways finger drag, or the bar along the bottom
+  (dragged or paged, beside the vertical one with the corner between them).
+  The scroll width is the longest line's (counted in characters at the
+  font's advance, exact in a monospaced font, or the lines on screen
+  measured when wider), kept from the bottom by its own count of lines per
+  length, so a megabyte log costs no measuring. `find_next` and
+  `find_previous` scroll the match into view sideways too, as Shift+arrows
+  and a drag past the left or right edge do with the selection's end, and
+  `scroll_to(LinePos)` does from any handler. With the classic bars, the
+  last line scrolls clear of the sideways bar and line ends clear of the
+  vertical one. Underneath, the view is a vertical scroll container that
+  also scrolls sideways (one container, two offsets, two bars), not two
+  nested ones, so each bar stays at the viewport's edge.
 - **Screen readers** read it as text named by the lines on screen.
 
 The highlights are rich text backgrounds, which any text can have:

@@ -7,7 +7,8 @@
 //! viewport are laid out, so a 10,000-line, megabyte log costs what a
 //! screenful does, and appending a line doesn't lay the others out again.
 
-use std::collections::VecDeque;
+use std::cell::Cell;
+use std::collections::{BTreeMap, VecDeque};
 use std::ops::Range;
 
 mod regex;
@@ -133,7 +134,33 @@ pub struct TextView {
     matches: Vec<LineMatch>,
     current: Option<usize>,
     scroll: ScrollMemo,
+    /// How many lines have each length, in characters: the widest sets how
+    /// far the view scrolls sideways.
+    widths: BTreeMap<usize, usize>,
+    /// The sideways scrolling's bookkeeping.
+    sideways: Sideways,
 }
+
+/// What a [`text_view`]'s builds keep about its sideways scrolling, behind
+/// a shared reference. Bookkeeping, as [`ScrollMemo`] is: any two compare
+/// equal.
+#[derive(Clone, Debug, Default)]
+struct Sideways {
+    /// A part of a line (its index, and a byte range in it) for the next
+    /// build to scroll into view.
+    reveal: Cell<Option<(usize, usize, usize)>>,
+    /// Whether the last build found the lines wider than the view: the rows
+    /// then keep room below them for the sideways bar's gutter.
+    overflows: Cell<bool>,
+}
+
+impl PartialEq for Sideways {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for Sideways {}
 
 impl TextView {
     /// An empty view.
@@ -211,7 +238,9 @@ impl TextView {
         if let Some(first) = parts.next() {
             match self.lines.back_mut() {
                 Some(last) if self.open => {
+                    let before = char_count(last);
                     last.push_str(first);
+                    self.resize_width(before, before + char_count(first));
                     let i = self.lines.len() - 1;
                     self.refind_line(i);
                 }
@@ -222,7 +251,10 @@ impl TextView {
         // open line.
         while let Some(part) = parts.next() {
             let i = self.lines.len() - 1;
-            strip_cr(&mut self.lines[i]);
+            if strip_cr(&mut self.lines[i]) {
+                let after = char_count(&self.lines[i]);
+                self.resize_width(after + 1, after);
+            }
             self.refind_line(i);
             if parts.peek().is_none() && part.is_empty() {
                 self.open = false;
@@ -263,13 +295,26 @@ impl TextView {
         self.caret = None;
         self.matches.clear();
         self.current = None;
+        self.widths.clear();
         self.scroll.reset();
     }
 
     fn push_raw(&mut self, line: String) {
+        *self.widths.entry(char_count(&line)).or_default() += 1;
         self.lines.push_back(line);
         let i = self.lines.len() - 1;
         self.find_in_line(i);
+    }
+
+    /// A line went from `before` characters to `after`.
+    fn resize_width(&mut self, before: usize, after: usize) {
+        remove_width(&mut self.widths, before);
+        *self.widths.entry(after).or_default() += 1;
+    }
+
+    /// The length of the longest line, in characters.
+    pub(crate) fn widest(&self) -> usize {
+        self.widths.keys().next_back().copied().unwrap_or(0)
     }
 
     /// Drop the oldest lines over the cap, moving what refers to lines.
@@ -279,7 +324,9 @@ impl TextView {
         if n == 0 {
             return;
         }
-        self.lines.drain(..n);
+        for line in self.lines.drain(..n) {
+            remove_width(&mut self.widths, char_count(&line));
+        }
         self.dropped += n as u64;
         let shift = |p: Option<LinePos>| {
             p.map(|p| {
@@ -436,6 +483,7 @@ impl TextView {
         let to = self.clamp(to);
         self.caret = Some(to);
         self.scroll.scroll_to(to.line, ScrollAlign::Nearest);
+        self.sideways.reveal.set(Some((to.line, to.byte, to.byte)));
     }
 
     // --- Find --------------------------------------------------------------
@@ -537,6 +585,9 @@ impl TextView {
         let m = self.matches.get(i)?.clone();
         self.current = Some(i);
         self.scroll.scroll_to(m.line, ScrollAlign::Nearest);
+        self.sideways
+            .reveal
+            .set(Some((m.line, m.range.start, m.range.end)));
         Some(m)
     }
 
@@ -576,6 +627,16 @@ impl TextView {
         self.scroll.scroll_to(line, align);
     }
 
+    /// Scroll so `pos` is in view, down and sideways, as the selection's
+    /// end and the matches [`find_next`](Self::find_next) goes to are.
+    pub fn scroll_to(&mut self, pos: LinePos) {
+        let pos = self.clamp(pos);
+        self.scroll.scroll_to(pos.line, ScrollAlign::Nearest);
+        self.sideways
+            .reveal
+            .set(Some((pos.line, pos.byte, pos.byte)));
+    }
+
     /// Scroll to the end (where a view that
     /// [sticks to its end](TextViewOptions::stick_to_end) then follows it
     /// again).
@@ -594,9 +655,26 @@ fn floor_boundary(s: &str, i: usize) -> usize {
     i
 }
 
-fn strip_cr(line: &mut String) {
-    if line.ends_with('\r') {
+/// Drop a `\r` ending `line`, saying whether there was one.
+fn strip_cr(line: &mut String) -> bool {
+    let cr = line.ends_with('\r');
+    if cr {
         line.pop();
+    }
+    cr
+}
+
+fn char_count(s: &str) -> usize {
+    s.chars().count()
+}
+
+/// Count one line of `chars` characters fewer in `widths`.
+fn remove_width(widths: &mut BTreeMap<usize, usize>, chars: usize) {
+    if let Some(n) = widths.get_mut(&chars) {
+        *n -= 1;
+        if *n == 0 {
+            widths.remove(&chars);
+        }
     }
 }
 
@@ -734,13 +812,17 @@ fn mono_font() -> Option<Font> {
 
 /// A virtualized, read-only view of a [`TextView`]'s lines: only the lines in
 /// (and just around) the viewport are built and laid out, in a monospaced
-/// font, one per row and unwrapped (a line wider than the view is clipped).
+/// font, one per row and unwrapped: the view scrolls sideways as far as the
+/// longest line reaches (a horizontal wheel or trackpad, Shift+wheel,
+/// Left/Right, a sideways finger drag, or the bar along its bottom).
 ///
 /// Drag to select (across lines, including ones scrolled in as the pointer
-/// passes the edge), double-click a word, triple-click a line, Shift+arrows
+/// passes an edge), double-click a word, triple-click a line, Shift+arrows
 /// to extend; Ctrl/Cmd+C or the context menu copies, Ctrl/Cmd+A selects all,
 /// Escape deselects. Up/Down scroll a line, Home/End to the top and end.
-/// [`TextView::find`]'s matches are highlighted, the current one more.
+/// [`TextView::find`]'s matches are highlighted, the current one more; the
+/// match gone to and the selection's moving end are scrolled into view,
+/// down and sideways.
 ///
 /// Screen readers read it as text, named by the lines on screen.
 ///
@@ -769,15 +851,29 @@ pub fn text_view<S: 'static>(
     let size = options.text_size.unwrap_or(theme.typography.body);
     let lh = options.line_height.unwrap_or((size * 1.4).ceil()).max(1.0);
     let font = options.font.clone().or_else(mono_font);
+    // The classic bars' gutter: the sideways bar's, below the rows, when the
+    // lines overflow sideways.
+    let gutter = theme.scroll_bar.gutter();
     let view = Viewport {
         height: options.height,
         overscan: super::virtual_list::DEFAULT_OVERSCAN,
         stick_to_end: options.stick_to_end,
         key: options.scroll_key,
         dropped: state.dropped,
+        tail: if state.sideways.overflows.get() {
+            gutter
+        } else {
+            0.0
+        },
     };
     let rows = Rows::new(state.len(), RowHeight::Fixed(lh));
     let window = Window::open(cx, rows, &view, &state.scroll);
+    // Lines aren't wrapped: the view scrolls sideways too.
+    let x_id = match options.scroll_key {
+        Some(key) => cx.register_scroll_keyed((key, "sideways")),
+        None => cx.register_scroll(),
+    };
+    let x_off = cx.scroll_offset(x_id);
     let pad_x = theme.spacing.sm;
     let pad_y = ((lh - size * 1.25) / 2.0).max(0.0);
     let found = Color::rgba(
@@ -841,32 +937,97 @@ pub fn text_view<S: 'static>(
         }
         lines.push(el.height(lh).padding(Insets::new(pad_y, pad_x, 0.0, pad_x)));
     }
+    // How wide the lines are: the longest's characters at the font's
+    // advance (exact in a monospaced font), or the lines built, measured,
+    // when wider (wide characters, another font).
+    let advance = match &font {
+        Some(f) => (f.measure("0000000000", size).width / 10.0).max(0.1),
+        None => size * 0.6,
+    };
+    let measure = |text: &str| match &font {
+        Some(f) => f.measure(text, size).width,
+        None => char_count(text) as f64 * advance,
+    };
+    let mut wide = state.widest() as f64 * advance;
+    if font.is_some() {
+        for i in window.range.clone() {
+            wide = wide.max(measure(&state.lines[i]));
+        }
+    }
+    // The vertical bar's gutter, when the rows overflow: the lines end left
+    // of it.
+    let beside = if window.rows.total() + view.tail > window.height + 0.5 {
+        gutter
+    } else {
+        0.0
+    };
+    let content_width = (wide + 2.0 * pad_x).ceil() + beside;
+    // The room the lines get: the viewport's width (last frame's) less its
+    // hairline frame and the vertical bar.
+    let room = cx
+        .last_scroll_viewport(window.id)
+        .map(|v| v.width - 2.0 - beside);
+    if let Some(room) = room {
+        state
+            .sideways
+            .overflows
+            .set(content_width - beside > room + 0.5);
+        // A match gone to, or the selection's end: scrolled into view
+        // sideways, with a little room around it.
+        if let Some((line, from, to)) = state.sideways.reveal.take()
+            && let Some(text) = state.lines.get(line)
+        {
+            let (from, to) = (floor_boundary(text, from), floor_boundary(text, to));
+            let start = pad_x + measure(&text[..from]);
+            let end = pad_x + measure(&text[..to]);
+            let margin = (advance * 4.0).min(room / 4.0);
+            let to_x = if start - margin < x_off {
+                Some(start - margin)
+            } else if end + margin > x_off + room {
+                // The end in view, unless that hides the start.
+                Some((end + margin - room).min(start - margin))
+            } else {
+                None
+            };
+            if let Some(x) = to_x {
+                window.requests.scroll_to(x_id, x.max(0.0));
+            }
+        }
+    }
     let first = window.range.start;
     let count = state.len();
-    let content = window
-        .content(lines)
-        .on_text_hit(cx, move |s, hit, extend| {
-            let st = field(s);
-            let mut line = first + hit.leaf;
-            let mut byte = hit.index;
-            // Above or below the built lines (dragging out of the view):
-            // whole lines from there, scrolled into view.
-            if hit.point.y < 0.0 {
-                line = line.saturating_sub((-hit.point.y / lh).ceil() as usize);
-                byte = 0;
-            } else if hit.point.y > lh {
-                line += (hit.point.y / lh) as usize;
-                byte = usize::MAX;
-            }
-            line = line.min(count.saturating_sub(1));
-            st.pointer(LinePos::new(line, byte), extend);
-            if extend {
-                st.scroll.scroll_to(line, ScrollAlign::Nearest);
-            }
-        });
+    let content =
+        window
+            .content(lines)
+            .min_width(content_width)
+            .on_text_hit(cx, move |s, hit, extend| {
+                let st = field(s);
+                let mut line = first + hit.leaf;
+                let mut byte = hit.index;
+                // Above or below the built lines (dragging out of the view):
+                // whole lines from there, scrolled into view.
+                if hit.point.y < 0.0 {
+                    line = line.saturating_sub((-hit.point.y / lh).ceil() as usize);
+                    byte = 0;
+                } else if hit.point.y > lh {
+                    line += (hit.point.y / lh) as usize;
+                    byte = usize::MAX;
+                }
+                line = line.min(count.saturating_sub(1));
+                st.pointer(LinePos::new(line, byte), extend);
+                if extend {
+                    // Dragged past an edge: what it reaches scrolls in.
+                    st.scroll.scroll_to(line, ScrollAlign::Nearest);
+                    if let Some(c) = st.caret {
+                        st.sideways.reveal.set(Some((c.line, c.byte, c.byte)));
+                    }
+                }
+            });
     let w = window.clone();
+    let step = (advance * 4.0).ceil();
     let body = window
         .scroller(content)
+        .scrollable_x(x_id)
         .fill(theme.palette.surface)
         .border(theme.palette.border, 1.0)
         .radius(theme.radius / 2.0)
@@ -897,6 +1058,8 @@ pub fn text_view<S: 'static>(
             }
             KeyInput::Up => w.scroll_by(-lh),
             KeyInput::Down => w.scroll_by(lh),
+            KeyInput::Left => w.requests.scroll_to(x_id, (x_off - step).max(0.0)),
+            KeyInput::Right => w.requests.scroll_to(x_id, x_off + step),
             KeyInput::Home => st.scroll_to_line(0, ScrollAlign::Start),
             KeyInput::End => st.scroll_to_end(),
             KeyInput::SelectLeft

@@ -164,10 +164,12 @@ impl<S: 'static> Pane<S> {
         pos: Point,
     ) -> Option<(scroll_bar::Geometry, Point)> {
         let tree = self.tree.as_ref()?;
-        let (node, m, _) = crate::core::node_to_window(tree, &|n| n.scroll == Some(id))?;
+        let (node, m, _) = crate::core::node_to_window(tree, &|n| {
+            n.scroll == Some(id) || (n.scroll.is_some() && n.scroll_x == Some(id))
+        })?;
         let local = m.inverse()?.apply(pos);
-        let off = self.scroll_offsets.get(&id).copied().unwrap_or(0.0);
-        Some((scroll_bar::geometry(node, off, &theme.scroll_bar)?, local))
+        let g = scroll_bar::geometry_for(node, id, &self.scroll_offsets, &theme.scroll_bar)?;
+        Some((g, local))
     }
 
     /// Scroll container `id` to `offset`. Returns whether it moved.
