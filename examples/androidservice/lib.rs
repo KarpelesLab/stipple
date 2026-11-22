@@ -20,6 +20,15 @@
 //! - `androidservice: service started "TEXT" id=N (activity started: false)`
 //! - `androidservice: receiver ping "TEXT" (activity started: false)`
 //!
+//! An app widget (`PingWidget`), whose layout, label and provider info are
+//! the app's own resources (`res/`, compiled by `cargo-stipple` with
+//! `aapt2`), logs `androidservice: widget update label="Stipple ping"
+//! layout text="Not pinged yet"` when updated. Packaged with libraries
+//! (`package-libraries.sh`: androidx.startup's AAR and its dependencies),
+//! androidx.startup runs `PingInitializer` as the process starts:
+//! `androidservice: startup initializer ran (androidx.startup's R.string:
+//! "androidx.startup")`.
+//!
 //! `examples/androidservice/test-on-device.sh` checks those on an emulator.
 //! The activity itself is an ordinary Stipple app.
 //!
@@ -156,12 +165,52 @@ mod app {
     ) -> JObject {
         let text = unsafe { string(env, text) };
         log(&format!("receiver ping {text:?}"));
-        let reply = CString::new(format!("pong {text}")).unwrap_or_default();
+        unsafe { new_string(env, &format!("pong {text}")) }
+    }
+
+    /// A new Java string of `text`.
+    unsafe fn new_string(env: Env, text: &str) -> JObject {
+        let text = CString::new(text).unwrap_or_default();
         unsafe {
-            let new_string: unsafe extern "C" fn(Env, *const c_char) -> JObject =
+            let new: unsafe extern "C" fn(Env, *const c_char) -> JObject =
                 func(env, NEW_STRING_UTF);
-            new_string(env, reply.as_ptr())
+            new(env, text.as_ptr())
         }
+    }
+
+    /// `PingWidget.update(String, String)`, found by its name: the widget's
+    /// label (a string resource of the app's) and the text its layout (a
+    /// layout resource) starts with, as `onUpdate` read them. Returns the
+    /// widget's new text.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn Java_org_stipple_servicedemo_PingWidget_update(
+        env: Env,
+        _class: JObject,
+        label: JObject,
+        text: JObject,
+    ) -> JObject {
+        let (label, text) = unsafe { (string(env, label), string(env, text)) };
+        log(&format!(
+            "widget update label={label:?} layout text={text:?}"
+        ));
+        unsafe { new_string(env, "Pinged") }
+    }
+
+    /// `PingInitializer.initialized(String)` (only in the build with
+    /// libraries, `package-libraries.sh`): androidx.startup ran the app's
+    /// initializer at process start, which read androidx.startup's own
+    /// string resource through its R class.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn Java_org_stipple_servicedemo_PingInitializer_initialized(
+        env: Env,
+        _class: JObject,
+        key: JObject,
+    ) -> JObject {
+        let key = unsafe { string(env, key) };
+        log(&format!(
+            "startup initializer ran (androidx.startup's R.string: {key:?})"
+        ));
+        unsafe { new_string(env, "initialized") }
     }
 
     // --- The activity: an ordinary Stipple app. ---

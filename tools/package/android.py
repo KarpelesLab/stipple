@@ -21,6 +21,7 @@ from pathlib import Path
 from xml.sax.saxutils import escape, quoteattr
 
 import android_code
+import android_libs
 from common import STORED, PackageError, cargo_build, log, run, walk, warn, zip_add
 from manifest import ANDROID_ABIS, android_qualifier
 
@@ -329,7 +330,10 @@ def screen_orientation(orientations):
 def has_code(m):
     """Whether the package carries dex files: Stipple's own, the Play
     Billing Library's, or the app's."""
-    return bool(needs_dex(m) or m.android_billing or m.android_java or m.android_dex)
+    return bool(
+        needs_dex(m) or m.android_billing or m.android_java or m.android_dex
+        or m.android_libraries
+    )
 
 
 def manifest_xml(m, lib_name, refs):
@@ -574,38 +578,72 @@ def package(m, args, target, target_dir, work, helper):
         shutil.copy(m.android_manifest, manifest)
     else:
         manifest.write_text(manifest_xml(m, lib_name, refs), encoding="utf-8")
-    # The dex files: the receiver's, the Play Billing Library's, then the
-    # app's own (its Java sources, then its prebuilt dex files).
-    dexes = [dex] if dex else []
-    if m.android_billing:
-        dexes += billing(m, manifest, work / "billing")
-    if m.android_java:
-        dexes += android_code.compile_java(
-            sdk, m.android_java, work / "java", m.android_min_sdk, args.profile == "release"
-        )
-    dexes += [android_code.check_dex(p) for p in m.android_dex]
-    dexes = android_code.dex_names(dexes)
+    # The Play Billing Library's entries, the app's fragment, then its
+    # libraries' manifests (android_libs.py), the app's winning.
+    billing_dexes = billing(m, manifest, work / "billing") if m.android_billing else []
     if m.android_manifest_fragment:
         android_code.merge_fragment_file(
             manifest, m.android_manifest_fragment, m.android_package,
             has_code(m) or bool(m.android_manifest),
         )
+    java_libs = android_libs.unpack(m.android_libraries, work / "libraries")
+    android_libs.merge_manifests(manifest, java_libs, m.android_package)
+
+    # The resources: Stipple's (generated), the libraries' and the app's own
+    # (android.res) as overlays, in that order, so the app's win. With Java
+    # or libraries, aapt2 writes the R classes: the app's package's and each
+    # library's.
     compiled = work / "compiled.zip"
     run([sdk.aapt2, "compile", "--dir", work / "res", "-o", compiled], quiet=True)
+    overlays = []
+    for i, d in enumerate([lib.res for lib in java_libs if lib.res] + list(m.android_res)):
+        flat = work / f"compiled-{i}.zip"
+        run([sdk.aapt2, "compile", "--dir", d, "-o", flat], quiet=True)
+        overlays += ["-R", flat]
     link = [
         sdk.aapt2, "link", "-I", sdk.android_jar, "--manifest", manifest,
         "--min-sdk-version", m.android_min_sdk, "--target-sdk-version", m.android_target_sdk,
         "--version-code", m.build, "--version-name", m.version, "--replace-version",
     ]
+    if overlays:
+        link += ["--auto-add-overlay"]
     if m.android_manifest:
         link += ["--rename-manifest-package", m.android_package]
     proto_apk, binary_apk = work / "linked-proto.apk", work / "linked.apk"
-    run(link + ["--proto-format", "-o", proto_apk, compiled], quiet=True)
-    run(link + ["-o", binary_apk, compiled], quiet=True)
+    run(link + ["--proto-format", "-o", proto_apk, compiled, *overlays], quiet=True)
+    r_dir = None
+    r_link = []
+    if m.android_java or java_libs:
+        r_dir = work / "r"
+        r_link = ["--java", r_dir]
+        packages = [p for p in android_libs.res_packages(java_libs) if p != m.android_package]
+        if packages:
+            r_link += ["--extra-packages", ":".join(packages)]
+    run(link + r_link + ["-o", binary_apk, compiled, *overlays], quiet=True)
+
+    # The dex files: the receiver's, the Play Billing Library's, then the
+    # app's own (its Java sources with the R classes and its libraries, then
+    # its prebuilt dex files).
+    dexes = ([dex] if dex else []) + billing_dexes
+    if m.android_java or java_libs:
+        dexes += android_code.compile_java(
+            sdk, m.android_java, work / "java", m.android_min_sdk, args.profile == "release",
+            jars=android_libs.jars(java_libs), generated=r_dir,
+        )
+    dexes += [android_code.check_dex(p) for p in m.android_dex]
+    dexes = android_code.dex_names(dexes)
 
     assets = walk(m.assets) if m.assets and m.assets.is_dir() else []
     if m.assets and not m.assets.is_dir():
         warn(f"no assets directory {m.assets}")
+    # The libraries' assets, under the app's own (which win).
+    have = {name for _, name in assets}
+    assets += [(p, n) for p, n in android_libs.assets(java_libs) if n not in have]
+    # And their native libraries, for the ABIs built.
+    so_files = android_libs.native_libs(java_libs, list(libs))
+    for abi, so in so_files:
+        if so.name == f"lib{lib_name}.so":
+            raise PackageError(f"a library's {abi}/{so.name} has the app's library's name")
     stem = f"{_file_name(m.name)}-{m.version}"
     keystore = Keystore(work.parent)
 
@@ -625,6 +663,8 @@ def package(m, args, target, target_dir, work, helper):
             zip_add(z, f"base/assets/{name}", path=path)
         for abi, lib in libs.items():
             zip_add(z, f"base/lib/{abi}/lib{lib_name}.so", path=lib)
+        for abi, so in so_files:
+            zip_add(z, f"base/lib/{abi}/{so.name}", path=so)
         zip_add(z, "base/native.pb", native_config(list(libs)))
         for name, path in dexes:
             zip_add(z, f"base/dex/{name}", path=path)
@@ -645,6 +685,8 @@ def package(m, args, target, target_dir, work, helper):
             zip_add(z, f"assets/{name}", path=path, stored=path.suffix.lower() in STORED)
         for abi, lib in libs.items():
             zip_add(z, f"lib/{abi}/lib{lib_name}.so", path=lib, stored=True)
+        for abi, so in so_files:
+            zip_add(z, f"lib/{abi}/{so.name}", path=so, stored=True)
     aligned = work / "universal-aligned.apk"
     help_text = subprocess.run([str(sdk.zipalign)], capture_output=True, text=True)
     page = ["-P", "16"] if "-P" in (help_text.stdout + help_text.stderr) else ["-p"]

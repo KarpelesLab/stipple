@@ -6685,6 +6685,33 @@ jobs:
           grep -q 'android.app.NativeActivity' service-manifest.txt
           unzip -p "$apk" classes.dex > service-classes.dex
           "$bt/dexdump" service-classes.dex | grep -q "Class descriptor  : 'Lorg/stipple/servicedemo/PingService;'"
+          # The app widget's own resources (android.res): its layout, provider
+          # info and the R class its Java reads them through.
+          grep -q 'org.stipple.servicedemo.PingWidget' service-manifest.txt
+          unzip -l "$apk" | grep -qE "res/[^ ]*ping_widget"
+          "$bt/dexdump" service-classes.dex | grep -q "Class descriptor  : 'Lorg/stipple/servicedemo/R\$layout;'"
+
+      # The same app with Android libraries on its Java class path
+      # (android.libraries): androidx.startup's AAR and its dependencies,
+      # fetched from Google's Maven repository as a test counterpart. The
+      # library's provider merged into the app's, its resources compiled with
+      # an R class of its package, its classes dexed. Not blocking yet.
+      - name: Package androidservice with Android libraries (AARs and a jar)
+        continue-on-error: true
+        run: |
+          examples/androidservice/package-libraries.sh androidservice-libraries
+          bt="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"
+          apk=androidservice-libraries/Stipple-service-1.0.0-universal.apk
+          "$bt/aapt2" dump xmltree --file AndroidManifest.xml "$apk" | tee libraries-manifest.txt
+          grep -q 'androidx.startup.InitializationProvider' libraries-manifest.txt
+          grep -q 'org.stipple.servicedemo.PingInitializer' libraries-manifest.txt
+          "$bt/aapt2" dump resources "$apk" | grep -q 'string/androidx_startup'
+          unzip -p "$apk" classes.dex > libraries-classes.dex
+          "$bt/dexdump" libraries-classes.dex > libraries-dexdump.txt
+          for c in 'Landroidx/startup/InitializationProvider;' 'Landroidx/startup/R\$string;' \
+            'Landroidx/tracing/Trace;' 'Lorg/stipple/servicedemo/PingInitializer;'; do
+            grep -q "Class descriptor  : '$c'" libraries-dexdump.txt
+          done
 
       - name: Upload the bundle and the APK
         uses: actions/upload-artifact@v4
@@ -6790,6 +6817,14 @@ jobs:
         if: matrix.api-level == 34
         run: tools/package/cargo-stipple android --abi x86_64 --example androidservice --config examples/androidservice/package.toml --out androidservice
 
+      # The same with Android libraries (package-libraries.sh fetches
+      # androidx.startup's AAR and its dependencies as a test counterpart),
+      # for test-on-device.sh with LIBRARIES=1.
+      - name: Package androidservice with Android libraries for the emulator
+        if: matrix.api-level == 34
+        continue-on-error: true
+        run: examples/androidservice/package-libraries.sh androidservice-libraries --abi x86_64
+
       # Another app's side of the clipboard (a receiver that copies, an
       # activity that reads), for examples/androiddemo/test-services.sh.
       - name: Build the clipboard probe APK
@@ -6879,6 +6914,8 @@ jobs:
             bash .github/billing/android/test-billing.sh stipple.apk visual_output || echo "::warning::test-billing.sh failed (non-blocking)"
             # The app's own Java Service and BroadcastReceiver calling into Rust, the service in a process with no activity: not blocking until it has passed on CI's emulators.
             if [ "${{ matrix.api-level }}" = 34 ]; then bash examples/androidservice/test-on-device.sh "androidservice/Stipple-service-1.0.0-universal.apk" visual_output || echo "::warning::androidservice's Java components didn't reach Rust on the emulator (non-blocking)"; fi
+            # The same with AARs and a jar on its Java class path: androidx.startup runs the app's initializer with the library's own resource: not blocking until it has passed on CI's emulators.
+            if [ "${{ matrix.api-level }}" = 34 ] && [ -f androidservice-libraries/Stipple-service-1.0.0-universal.apk ]; then LIBRARIES=1 bash examples/androidservice/test-on-device.sh "androidservice-libraries/Stipple-service-1.0.0-universal.apk" visual_output || echo "::warning::androidservice with Android libraries didn't pass on the emulator (non-blocking)"; fi
             if [ "${{ matrix.api-level }}" = 34 ]; then bash .github/a11y/android/test-probe.sh a11yprobe.apk visual_output; fi
             if [ "${{ matrix.api-level }}" = 34 ]; then bash .github/a11y/android/test-talkback.sh a11yprobe.apk visual_output; fi
             if [ "${{ matrix.api-level }}" = 34 ]; then bash examples/androiddemo/test-renderer.sh stipple-vk.apk Vulkan visual_output || echo "::warning::androiddemo didn't present with Vulkan on the emulator (not blocking yet)"; fi

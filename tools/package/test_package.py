@@ -13,6 +13,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import android  # noqa: E402
 import android_code  # noqa: E402
+import android_libs  # noqa: E402
 from common import PackageError  # noqa: E402
 import ios  # noqa: E402
 import ios_extensions  # noqa: E402
@@ -337,6 +338,143 @@ class AndroidCodeTests(unittest.TestCase):
         # changes nothing.
         out, _ = android_code.merge_fragment(xml, frag('<application android:hasCode="true"/>'), pkg)
         self.assertEqual(out, xml)
+
+
+LIBRARY_MANIFEST = """<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools" package="androidx.startup">
+  <uses-sdk android:minSdkVersion="14"/>
+  <uses-permission android:name="android.permission.INTERNET"/>
+  <uses-permission android:name="android.permission.CAMERA"/>
+  <permission android:name="${applicationId}.LIB_PERMISSION" android:protectionLevel="signature"/>
+  <instrumentation android:name=".T"/>
+  <application android:appComponentFactory="x.Factory">
+    <provider android:name="androidx.startup.InitializationProvider"
+        android:authorities="${applicationId}.androidx-startup"
+        android:exported="false" tools:node="merge">
+      <meta-data android:name="androidx.lifecycle.Init" android:value="androidx.startup"/>
+      <meta-data android:name="com.example.app.Mine" android:value="theirs"/>
+    </provider>
+    <service android:name=".Worker" android:exported="false"/>
+    <receiver android:name="Relative"/>
+    <provider android:name=".Other" android:authorities="${applicationId}.stipple.files"/>
+    <meta-data android:name="lib.flag" android:value="@string/lib_flag"/>
+  </application>
+</manifest>
+"""
+
+
+class AndroidLibraryTests(unittest.TestCase):
+    def test_keys(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "res").mkdir()
+            (Path(d) / "libs").mkdir()
+            m = Manifest(
+                {"id": "com.example.app",
+                 "android": {"libraries": ["libs"], "res": "res"}},
+                Path(d), PACKAGE,
+            )
+            self.assertEqual(m.android_libraries, [(Path(d) / "libs").resolve()])
+            self.assertEqual(m.android_res, [(Path(d) / "res").resolve()])
+            self.assertIn('android:hasCode="true"', android.manifest_xml(m, "a", REFS))
+            for bad in ({"libraries": ["nope.aar"]}, {"res": "nope"}):
+                with self.subTest(bad=bad), self.assertRaises(ManifestError):
+                    Manifest({"id": "com.example.app", "android": bad}, Path(d), PACKAGE)
+
+    def test_unpack(self):
+        import zipfile
+
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            (d / "libs").mkdir()
+            with zipfile.ZipFile(d / "libs" / "startup.aar", "w") as z:
+                z.writestr("AndroidManifest.xml", LIBRARY_MANIFEST)
+                z.writestr("classes.jar", b"PK\5\6" + b"\0" * 18)
+                z.writestr("libs/extra.jar", b"PK\5\6" + b"\0" * 18)
+                z.writestr("res/values/values.xml", "<resources/>")
+                z.writestr("assets/lib.txt", "from the library")
+                z.writestr("jni/x86_64/libfoo.so", b"\x7fELF")
+                z.writestr("jni/armeabi-v7a/libfoo.so", b"\x7fELF")
+                z.writestr("../evil.txt", "no")
+                z.writestr("lint.jar", b"skipped")
+            with zipfile.ZipFile(d / "libs" / "plain.jar", "w") as z:
+                z.writestr("a/B.class", b"\xca\xfe\xba\xbe")
+            (d / "libs" / "notes.txt").write_text("ignored")
+            libs = android_libs.unpack([d / "libs"], d / "out")
+            self.assertEqual([lib.name for lib in libs], ["plain", "startup"])
+            plain, aar = libs
+            self.assertEqual(plain.jars, [d / "libs" / "plain.jar"])
+            self.assertIsNone(plain.package)
+            self.assertEqual(aar.package, "androidx.startup")
+            self.assertEqual([j.name for j in aar.jars], ["classes.jar", "extra.jar"])
+            self.assertEqual(len(android_libs.jars(libs)), 3)
+            self.assertTrue((aar.res / "values" / "values.xml").is_file())
+            self.assertFalse((d / "evil.txt").exists())
+            self.assertFalse((d / "out" / "startup" / "lint.jar").exists())
+            self.assertEqual(android_libs.res_packages(libs), ["androidx.startup"])
+            self.assertEqual([n for _, n in android_libs.assets(libs)], ["lib.txt"])
+            self.assertEqual(
+                [(abi, p.name) for abi, p in android_libs.native_libs(libs, ["x86_64", "arm64-v8a"])],
+                [("x86_64", "libfoo.so")],
+            )
+            (d / "bad.aar").write_bytes(b"not a zip")
+            with self.assertRaises(PackageError):
+                android_libs.unpack([d / "bad.aar"], d / "out2")
+            with self.assertRaises(PackageError):
+                android_libs.unpack([d / "libs" / "notes.txt"], d / "out3")
+
+    def test_merge(self):
+        m = manifest(android={"permissions": ["CAMERA"], "drag-files": True})
+        xml = android.manifest_xml(m, "my_app", REFS)
+        pkg = m.android_package
+        # The app's own fragment declares the provider with its initializer.
+        xml, _ = android_code.merge_fragment(
+            xml,
+            '<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application>'
+            '<provider android:name="androidx.startup.InitializationProvider" '
+            'android:authorities="${applicationId}.androidx-startup" android:exported="false">'
+            '<meta-data android:name="com.example.app.Mine" android:value="androidx.startup"/>'
+            "</provider></application></manifest>",
+            pkg,
+        )
+        A = android_code.A
+        root = ET.fromstring(xml)
+        dropped = android_libs.merge_library(root, LIBRARY_MANIFEST, "androidx.startup", pkg)
+        app = root.find("application")
+        providers = [p for p in app.iter("provider")
+                     if p.get(A + "name") == "androidx.startup.InitializationProvider"]
+        self.assertEqual(len(providers), 1)
+        # The library's meta-data joins the app's provider; the app's own wins.
+        metas = {x.get(A + "name"): x.get(A + "value") for x in providers[0]}
+        self.assertEqual(metas, {"com.example.app.Mine": "androidx.startup",
+                                 "androidx.lifecycle.Init": "androidx.startup"})
+        names = [c.get(A + "name") for c in app]
+        self.assertIn("androidx.startup.Worker", names)
+        self.assertIn("androidx.startup.Relative", names)
+        self.assertNotIn("androidx.startup.Other", names)
+        self.assertIn("lib.flag", names)
+        perms = [p.get(A + "name") for p in root.findall("uses-permission")]
+        self.assertEqual(perms.count("android.permission.CAMERA"), 1)
+        self.assertIn("android.permission.INTERNET", perms)
+        self.assertEqual(root.find("permission").get(A + "name"), "com.example.app.LIB_PERMISSION")
+        self.assertEqual(len(root.findall("uses-sdk")), 1)
+        self.assertLess(list(root).index(root.find("permission")), list(root).index(app))
+        self.assertIsNone(app.get(A + "appComponentFactory"))
+        self.assertFalse(any("tools" in k for e in root.iter() for k in e.attrib))
+        self.assertIn("<instrumentation>", dropped)
+        self.assertTrue(any("androidx.startup.Other" in x for x in dropped))
+        # The whole file, as package() does it.
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "AndroidManifest.xml"
+            path.write_text(xml, encoding="utf-8")
+            aar = android_libs.Library(name="startup", package="androidx.startup",
+                                       manifest=Path(d) / "lib.xml")
+            aar.manifest.write_text(LIBRARY_MANIFEST, encoding="utf-8")
+            android_libs.merge_manifests(path, [aar], pkg)
+            text = path.read_text(encoding="utf-8")
+            self.assertIn('xmlns:android="http://schemas.android.com/apk/res/android"', text)
+            self.assertIn("androidx.startup.Worker", text)
+            ET.fromstring(text)
 
 
 class IosTests(unittest.TestCase):

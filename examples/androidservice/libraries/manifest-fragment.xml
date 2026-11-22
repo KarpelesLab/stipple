@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- androidservice's manifest fragment with libraries (package-libraries.sh):
+     ../manifest-fragment.xml's entries, and androidx.startup's
+     InitializationProvider with the app's initializer. The library's own
+     manifest declares the same provider: cargo-stipple merges it into this
+     one (the app's entry wins), as Gradle's merger does. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <application>
+    <service android:name=".PingService" android:exported="true"/>
+    <receiver android:name=".PingReceiver" android:exported="true"/>
+    <receiver android:name=".PingWidget" android:exported="true"
+        android:label="@string/ping_widget_label">
+      <intent-filter>
+        <action android:name="android.appwidget.action.APPWIDGET_UPDATE"/>
+      </intent-filter>
+      <meta-data android:name="android.appwidget.provider"
+          android:resource="@xml/ping_widget_info"/>
+    </receiver>
+    <meta-data android:name="org.stipple.servicedemo.fragment" android:value="merged"/>
+    <provider android:name="androidx.startup.InitializationProvider"
+        android:authorities="${applicationId}.androidx-startup"
+        android:exported="false">
+      <meta-data android:name="org.stipple.servicedemo.PingInitializer"
+          android:value="androidx.startup"/>
+    </provider>
+  </application>
+</manifest>

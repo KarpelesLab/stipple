@@ -7,6 +7,12 @@
 #   examples/androidservice/test-on-device.sh \
 #       "target/stipple-package/android/Stipple-service-1.0.0-universal.apk" [log-dir]
 #
+# or, with Android libraries:
+#
+#   examples/androidservice/package-libraries.sh target/androidservice-libraries
+#   LIBRARIES=1 examples/androidservice/test-on-device.sh \
+#       target/androidservice-libraries/Stipple-service-1.0.0-universal.apk [log-dir]
+#
 # 1. The manifest has the fragment's components next to
 #    Stipple's activity (`cmd package query-services`, `dumpsys package`).
 # 2. A service with no activity: the process isn't running, `am startservice`
@@ -17,7 +23,15 @@
 # 3. A receiver: `am broadcast` to PingReceiver, whose native method is found
 #    by name; the Rust side logs it and its reply comes back as the
 #    broadcast's result data.
-# 4. The activity still starts in the same process (a Stipple app), and the
+# 4. An app widget whose layout, label and provider info are the app's own
+#    resources (res/, compiled by cargo-stipple): the system parsed its
+#    provider info (`dumpsys appwidget`), and its update reads the label and
+#    the layout's text through the R class and hands them to Rust.
+# 5. With LIBRARIES=1 (an APK from package-libraries.sh): androidx.startup's
+#    InitializationProvider, merged from the library's manifest, ran the app's
+#    initializer as the process started, which read the library's own string
+#    resource through its R class.
+# 6. The activity still starts in the same process (a Stipple app), and the
 #    service then sees it.
 #
 # Fails if one of them didn't pass.
@@ -67,6 +81,11 @@ check "the fragment's service is declared" \
 check "the fragment's receiver is declared" \
   bash -c "adb shell cmd package query-receivers --components -n $pkg/.PingReceiver | grep -q $pkg/.PingReceiver"
 check "Stipple's NativeActivity is still declared" grep -q "$pkg/android.app.NativeActivity" "$out/androidservice-package.txt"
+adb shell dumpsys appwidget > "$out/androidservice-appwidget.txt"
+check "the widget's provider info (an xml resource) was parsed" \
+  grep -qE "cmp:ComponentInfo\{$pkg/$pkg.PingWidget\}" "$out/androidservice-appwidget.txt"
+check "the widget's initial layout is a resource" \
+  bash -c "grep -A1 'cmp:ComponentInfo{$pkg/$pkg.PingWidget}' '$out/androidservice-appwidget.txt' | grep -qE 'initialLayout=#7f[0-9a-f]{6}'"
 
 # 2. The service, in a process started for it alone. Android 8 and later
 # don't start a background app's services: the temporary allowlist (what a
@@ -86,7 +105,22 @@ check "the receiver's native method (by name) ran" \
   wait_for 'androidservice: receiver ping "hello" \(activity started: false\)' 30
 check "the receiver's reply came back" grep -q 'data="pong hello"' "$out/androidservice-broadcast.txt"
 
-# 4. The activity, in the same process.
+# 4. The widget: its update reads its resources.
+adb shell am broadcast -f 0x20 -a org.stipple.servicedemo.UPDATE_WIDGET -n "$pkg/.PingWidget" \
+  | tee "$out/androidservice-widget.txt"
+check "the widget read its label and layout (the app's own resources)" \
+  wait_for 'androidservice: widget update label="Stipple ping" layout text="Not pinged yet"' 30
+
+# 5. The libraries: androidx.startup ran the app's initializer at process
+# start (the service's start above started the process).
+if [ "${LIBRARIES:-0}" = 1 ]; then
+  check "androidx.startup (an AAR) ran the app's initializer with its own resource" \
+    wait_for "androidservice: startup initializer ran \(androidx.startup's R.string: \"androidx.startup\"\)" 30
+  check "the library's provider is in the merged manifest" \
+    grep -q "$pkg/androidx.startup.InitializationProvider" "$out/androidservice-package.txt"
+fi
+
+# 6. The activity, in the same process.
 pid_before="$(adb shell pidof "$pkg" | tr -d '\r')"
 adb shell am start -W -n "$pkg/android.app.NativeActivity" >/dev/null
 check "the activity started" wait_for 'androidservice: activity running' 30

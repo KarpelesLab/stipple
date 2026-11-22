@@ -123,6 +123,8 @@ permissions = ["CAMERA", "POST_NOTIFICATIONS"]
 # java = "android/java"            # the app's own Java sources (javac + d8), or a list of directories
 # dex = ["android/vpn.dex"]        # prebuilt dex files, added as classes<N>.dex
 # manifest-fragment = "android/manifest-fragment.xml"   # merged into the manifest (see below)
+# libraries = ["android/libs"]     # .aar and .jar files (or directories of them) for that Java
+# res = "android/res"              # the app's own resources (an app widget's layout), compiled with aapt2
 
 [package.metadata.stipple.linux]
 # prefix = "/usr"                  # where it installs (--prefix overrides)
@@ -464,8 +466,20 @@ message service. An app ships those itself, next to what Stipple writes:
   the build-tools' `d8` (`--release` for the release profile, `--min-api`
   the app's `min-sdk`), and adds the result as the next `classes<N>.dex`.
   These are the developer's build tools, found at packaging time (a clear
-  error says which is missing); nothing is linked into the app. Only the
-  platform's classes are on the class path: no AndroidX, no AARs.
+  error says which is missing); nothing is linked into the app. The
+  platform's `android.jar` is on the class path, with the `libraries`.
+- **`libraries`**: Android libraries for that Java: `.aar` and `.jar` files,
+  or directories of them (each `.aar` and `.jar` directly inside). See
+  [below](#android-libraries-aars-and-jars).
+- **`res`**: a directory of the app's own resources (or a list of them), in
+  Android's layout (`res/layout/`, `res/xml/`, `res/values/`,
+  `res/drawable/`...), for the components: an app widget's layout and
+  provider info, a tile's icon, strings. They're compiled with `aapt2
+  compile` and linked over Stipple's own (the app's win where both name the
+  same resource), and with `java` or `libraries` `aapt2` also writes the
+  `R` class (the app's package's), compiled with the sources, so the Java
+  says `R.layout.widget`; the manifest fragment names them as usual
+  (`android:resource="@xml/widget_info"`, `android:label="@string/..."`).
 - **`dex`**: prebuilt dex files (built some other way, or from a library),
   each added as the next `classes<N>.dex` (the tool checks each is a dex).
 - **`manifest-fragment`**: an XML file with a bare `<manifest>` root, whose
@@ -482,8 +496,9 @@ message service. An app ships those itself, next to what Stipple writes:
   out in full in the manifest), as in Gradle.
 
 The dex files go in this order: Stipple's own (`scheduled-notifications`,
-`drag-files`), the Play Billing Library's (`billing`), the `java` sources',
-then `dex`; with any of them the manifest says `android:hasCode="true"`.
+`drag-files`), the Play Billing Library's (`billing`), the `java` sources'
+with the `libraries`' classes, then `dex`; with any of them the manifest says
+`android:hasCode="true"`.
 
 ```xml
 <!-- android/manifest-fragment.xml -->
@@ -518,7 +533,43 @@ methods, `JNI_OnLoad`), and what runs when Android starts the process for
 a service with no activity: see
 [android.md](platforms/android.md#the-apps-own-java-classes).
 [`examples/androidservice`](../examples/androidservice) is a working app
-with a `Service` and a `BroadcastReceiver`.
+with a `Service`, a `BroadcastReceiver` and an app widget whose layout,
+label and provider info are its own resources.
+
+#### Android libraries (AARs and jars)
+
+An app's Java often needs a library: AndroidX, a vendor's SDK. With no
+Gradle, `libraries` lists the files themselves (downloaded from Maven, or
+built); the tool fetches nothing and resolves no dependencies, so a
+library's own dependencies are listed too (its `.pom` names them). What
+Gradle would do with them, the tool does with the SDK's tools:
+
+- **A `.jar`** goes on `javac`'s class path for the `java` sources and is
+  dexed with them by `d8` (which desugars Java 8 to 11 features for
+  `min-sdk`).
+- **An `.aar`** (an Android library) is unpacked: its `classes.jar` and
+  `libs/*.jar` as above; its `AndroidManifest.xml` merged into the app's
+  after the app's own entries and fragment, as Gradle's merger does: what the
+  manifest already has wins (a permission, a `<meta-data>`, a provider
+  authority are left out when they're there), a component the app declares
+  already gets the library's `<meta-data>` it lacks (so several libraries
+  can register with androidx.startup's `InitializationProvider`), relative
+  class names are in the library's package, `${applicationId}` is the app's,
+  and `tools:` attributes, `<uses-sdk>` and the library's `<application>`
+  attributes are dropped (with a warning for what an app may miss); its
+  `res/` compiled and linked under the app's (the app's `res` win); and an
+  `R` class written for its package (`aapt2 link --extra-packages`) and
+  compiled with the app's, so the library's `R.string.x` resolves at run
+  time; its `assets/` join the app's (the app's win), and its
+  `jni/<abi>/*.so` go into `lib/` for the ABIs built.
+
+Kotlin libraries need the Kotlin standard library's jar listed too;
+`proguard.txt`, `lint.jar` and annotation processors are ignored (nothing
+is shrunk). [`examples/androidservice/package-libraries.sh`](../examples/androidservice/package-libraries.sh)
+packages that example with androidx.startup's AAR and its dependencies
+(androidx.tracing's AAR, androidx.annotation's jar), fetched and checked
+against their SHA-256, and an initializer of the app's that the library's
+provider runs at process start.
 
 **Signing.** Play signs what users download with a key it keeps (Play App
 Signing); you sign uploads with an upload key:
@@ -609,12 +660,9 @@ Connect key's `.p8` from a secret into a file, and set
   go into the base module and the bundle.
 - Stipple-drawn UI inside an app extension (see [App extensions](#app-extensions)),
   App Clips and Instant Apps.
-- Resources for the app's own Android components: an app widget provider
-  or a Quick Settings tile can be declared in the manifest fragment, but
-  resources of its own (an app widget's layout XML) aren't compiled.
-- Android libraries (AARs, AndroidX) for the app's Java: only the
-  platform's `android.jar` is on its class path; a library's classes can
-  come in already dexed through `dex`.
+- Maven resolution for `android.libraries` (the files are the developer's,
+  dependencies included), Gradle's `tools:node`/`tools:replace` merge
+  instructions, and shrinking (R8, ProGuard rules).
 - Uploading itself: the tool stops at the signed files, except through
   Xcode (`STIPPLE_IOS_UPLOAD`).
 - macOS (`.app`/`.pkg` for the Mac App Store, notarization), Windows (MSIX)

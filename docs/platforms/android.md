@@ -220,13 +220,19 @@ Android instantiates some classes by the name the manifest gives: a
 written at run time, so an app ships them in the APK: `cargo-stipple`
 compiles its Java sources (`android.java`) or adds prebuilt dex files
 (`android.dex`), and merges a manifest fragment (`android.manifest-fragment`)
-declaring them into the manifest it writes; see
+declaring them into the manifest it writes, with the resources they use
+(`android.res`: an app widget's layout, compiled with `aapt2`, with an `R`
+class) and the Android libraries they're written against
+(`android.libraries`: AARs and jars, their manifests, resources and classes
+merged in as Gradle would); see
 [packaging.md](../packaging.md#the-apps-own-java-classes-and-components).
-[`examples/androidservice`](../../examples/androidservice) has a `Service`
-and a `BroadcastReceiver` calling into Rust, and
+[`examples/androidservice`](../../examples/androidservice) has a `Service`,
+a `BroadcastReceiver` and an app widget calling into Rust, and
 `examples/androidservice/test-on-device.sh` checks them on an emulator
 (passed on a local API 34 one and in CI trial runs on API 34; CI packages
-it (required) and runs it there without blocking).
+it (required) and runs it there without blocking); `package-libraries.sh` packages it with
+androidx.startup's AAR, whose provider runs an initializer of the app's
+(passed on a local API 34 emulator; CI runs it without blocking).
 
 **Reaching the Rust code.** The classes call into the app's library, the
 same `.so` the `NativeActivity` runs: a static initializer loads it with

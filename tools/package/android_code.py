@@ -82,37 +82,50 @@ def java_sources(dirs):
     return files
 
 
-def compile_java(sdk, dirs, out, min_sdk, release=True):
+def compile_java(sdk, dirs, out, min_sdk, release=True, jars=(), generated=None):
     """The app's Java sources, compiled against the platform's android.jar
-    and dexed: a list of dex files (one, unless there are more than 64K
-    methods)."""
+    and the library `jars` (android_libs.py), and dexed with those jars: a
+    list of dex files (one, unless there are more than 64K methods).
+    `generated` is a directory of generated sources compiled with them (the
+    R classes aapt2 writes)."""
     javac, d8 = find_javac(), find_d8(sdk)
-    sources = java_sources(dirs)
+    sources = java_sources(dirs) if dirs else []
+    if generated:
+        sources += sorted(p for p in Path(generated).rglob("*.java") if p.is_file())
+    jars = [Path(j) for j in jars]
     out = Path(out)
     if out.exists():
         shutil.rmtree(out)
     classes, dex_dir = out / "classes", out / "dex"
     classes.mkdir(parents=True)
     dex_dir.mkdir()
-    args = out / "sources.txt"
-    args.write_text("".join(f'"{_arg(p)}"\n' for p in sources), encoding="utf-8")
-    run(
-        [javac, "-Xlint:-options", "--release", JAVA_RELEASE, "-encoding", "UTF-8",
-         "-classpath", sdk.android_jar, "-sourcepath", os.pathsep.join(map(str, dirs)),
-         "-d", classes, f"@{args}"],
-        quiet=True,
-    )
-    jar = out / "classes.jar"
-    with zipfile.ZipFile(jar, "w") as z:
-        for p in sorted(classes.rglob("*.class")):
-            z.write(p, p.relative_to(classes).as_posix())
+    program = list(jars)
+    if sources:
+        args = out / "sources.txt"
+        args.write_text("".join(f'"{_arg(p)}"\n' for p in sources), encoding="utf-8")
+        source_path = [*map(str, dirs)] + ([str(generated)] if generated else [])
+        run(
+            [javac, "-Xlint:-options", "--release", JAVA_RELEASE, "-encoding", "UTF-8",
+             "-classpath", os.pathsep.join([str(sdk.android_jar), *map(str, jars)]),
+             "-sourcepath", os.pathsep.join(source_path), "-d", classes, f"@{args}"],
+            quiet=True,
+        )
+        jar = out / "classes.jar"
+        with zipfile.ZipFile(jar, "w") as z:
+            for p in sorted(classes.rglob("*.class")):
+                z.write(p, p.relative_to(classes).as_posix())
+        program.insert(0, jar)
+    if not program:
+        return []
     run(
         [d8, "--release" if release else "--debug", "--min-api", max(min_sdk, 21),
-         "--lib", sdk.android_jar, "--output", dex_dir, jar],
+         "--lib", sdk.android_jar, "--output", dex_dir, *program],
         quiet=True,
     )
     dexes = sorted(dex_dir.glob("classes*.dex"), key=_dex_index)
-    log(f"compiled {len(sources)} Java source(s) into {len(dexes)} dex file(s)")
+    what = [f"{len(sources)} Java source(s)"] if sources else []
+    what += [f"{len(jars)} library jar(s)"] if jars else []
+    log(f"compiled {' and '.join(what)} into {len(dexes)} dex file(s)")
     return dexes
 
 

@@ -107,7 +107,7 @@ How to build, package and run on each platform, and what works there today.
 | In-app purchases (`platform::store`) | mock ⁷³ | mock ⁷³ | mock ⁷³ | StoreKit ⁷³ | Play Billing ⁷³ | mock ⁷³ |
 | Calling the platform's own APIs: JNI access, activities started for a result (`platform::android`) | — | — | — | — | ✅ ⁸⁷ | — |
 | App extensions and app groups' shared containers (`platform::shared_dir`) | — | — | `shared_dir` ¹⁰ | ✅ ⁸⁹ | — | — |
-| The app's own platform code and manifest entries (`cargo-stipple`) | — | — | — | — | Java, dex, manifest fragment ⁹⁰ | — |
+| The app's own platform code and manifest entries (`cargo-stipple`) | — | — | — | — | Java, dex, AARs and jars, resources, manifest fragment ⁹⁰ | — |
 | Network status and changes (`platform::network`, `App::on_network`) | netlink, NetworkManager ⁹¹ | IP Helper ⁹¹ | Network.framework ⁹¹ | Network.framework ⁹¹ | `ConnectivityManager` ⁹¹ | `navigator.onLine` ⁹¹ |
 | Secure storage for secrets (`platform::secure_store`) | Secret Service ⁹² | Credential Manager ⁹² | Keychain ⁹² | Keychain ⁹² | Keystore ⁹² | ❌ |
 | Reference app (`examples/mediabrowser`): browse, sort, preview, play, accessible, four languages | ✅ ⁸⁵ | ✅ ⁸⁵ | ✅ ⁸⁵ | — | — | sample folder ⁸⁵ |
@@ -791,8 +791,15 @@ clashes with Stipple's own entries are errors). The classes call into the
 app's Rust through `native` methods; Stipple defines no `JNI_OnLoad`.
 `examples/androidservice` (a `Service` started with no activity and a
 `BroadcastReceiver`) passed on a local API 34 emulator and in two CI trial
-runs there (three times in a row each); CI packages it (required) and runs
-it on API 34 without blocking. See
+runs there (three times in a row each); CI packages it (required) and runs it on
+API 34 without blocking. `android.res` compiles the components' own resources
+with `aapt2` (with an `R` class: the example's app widget reads its layout
+and label), and `android.libraries` puts AARs and jars on the Java class
+path, merging their manifests, resources (an `R` class per library) and
+classes as Gradle would; the example packaged with androidx.startup's AAR
+and its dependencies passed on a local API 34 emulator (the library's
+provider runs the app's initializer, which reads the library's own
+resource), and CI runs it there without blocking. See
 [packaging.md](packaging.md#the-apps-own-java-classes-and-components).
 ⁹¹ Online, the transport, metered, constrained (Low Data Mode, Data Saver)
 and a generation that changes with the default network, as `Event::Network`

@@ -2114,8 +2114,21 @@ Most input only works on X11 today.
   process started for a component with no activity.
   `examples/androidservice` (a `Service` and a `BroadcastReceiver`) passed on
   a local API 34 emulator and in CI trial runs on API 34; CI packages it
-  (required) and runs it there, not blocking yet. Not yet: AARs/AndroidX on the Java class path, resources for the
-  components (an app widget's layout)._ See
+  (required) and runs it there, not blocking yet. `android.res` (the components' own
+  resources, compiled with `aapt2` and overlaid on Stipple's, with an `R`
+  class for the Java) and `android.libraries` (`.aar` and `.jar` files on
+  `javac`'s class path and dexed with the app's; an AAR's manifest merged
+  after the app's, the app's entries winning and a shared component getting
+  the library's `<meta-data>`; its `res/` compiled with an `R` class of its
+  package through `aapt2 link --extra-packages`; its assets and
+  `jni/<abi>` libraries packed): the example's app widget reads its layout
+  and label, and `package-libraries.sh` (androidx.startup's and
+  androidx.tracing's AARs, androidx.annotation's jar, fetched from Google's
+  Maven repository as a test counterpart) has the library's provider run
+  the app's initializer, which reads the library's own string resource;
+  both passed on a local API 34 emulator, and CI packages and runs them
+  without blocking. Not yet: Maven resolution (the files are the
+  developer's), `tools:` merge instructions, shrinking._ See
   [docs/packaging.md](docs/packaging.md#the-apps-own-java-classes-and-components).
 - ✅ The user's languages and formats (#47): `platform::preferred_languages`
   (BCP 47 tags in order: `NSLocale.preferredLanguages`,

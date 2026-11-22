@@ -3,11 +3,20 @@
      in package.toml). Names starting with "." are in the app's package.
      Exported so that adb can start them (test-on-device.sh); a real app
      guards an exported component with a permission, as a VpnService does
-     with android:permission="android.permission.BIND_VPN_SERVICE". -->
+     with android:permission="android.permission.BIND_VPN_SERVICE". The
+     widget's label and provider info are the app's own resources (res/). -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
   <application>
     <service android:name=".PingService" android:exported="true"/>
     <receiver android:name=".PingReceiver" android:exported="true"/>
+    <receiver android:name=".PingWidget" android:exported="true"
+        android:label="@string/ping_widget_label">
+      <intent-filter>
+        <action android:name="android.appwidget.action.APPWIDGET_UPDATE"/>
+      </intent-filter>
+      <meta-data android:name="android.appwidget.provider"
+          android:resource="@xml/ping_widget_info"/>
+    </receiver>
     <meta-data android:name="org.stipple.servicedemo.fragment" android:value="merged"/>
   </application>
 </manifest>

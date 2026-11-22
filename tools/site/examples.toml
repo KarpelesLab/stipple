@@ -379,7 +379,7 @@ description = "An Android app calling an API Stipple doesn't wrap through stippl
 needs = "Android: a NativeActivity in an APK."
 
 [native.androidservice]
-description = "An Android app with its own Java Service and BroadcastReceiver, declared in a manifest fragment, calling into Rust through native methods (packaged by cargo-stipple)."
+description = "An Android app with its own Java Service, BroadcastReceiver and app widget (with its own resources), declared in a manifest fragment, calling into Rust through native methods (packaged by cargo-stipple, optionally with Android libraries: AARs and jars)."
 needs = "Android: an APK built by cargo-stipple."
 
 [native.contentproc]

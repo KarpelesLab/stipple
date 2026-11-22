@@ -332,6 +332,20 @@ class Manifest:
         self.android_manifest_fragment = self._path(
             d.pop("manifest-fragment", None), "android.manifest-fragment"
         )
+        # Libraries for that code (android_libs.py): .aar and .jar files, or
+        # directories of them; and the app's own resources, for its
+        # components (an app widget's layout).
+        libraries = d.pop("libraries", [])
+        if isinstance(libraries, str):
+            libraries = [libraries]
+        self.android_libraries = [self._path(x, "android.libraries") for x in libraries]
+        res = d.pop("res", [])
+        if isinstance(res, str):
+            res = [res]
+        self.android_res = [self._path(r, "android.res") for r in res]
+        for r in self.android_res:
+            if not r.is_dir():
+                raise ManifestError(f"android.res: {r} isn't a directory")
         self.android_debuggable = bool(d.pop("debuggable", False))
         if d:
             raise ManifestError(f"unknown keys in android: {', '.join(sorted(d))}")

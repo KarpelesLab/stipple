@@ -30,6 +30,7 @@ const FILES: &[(&str, &[u8])] = &[
     file!("tools/package/cargo-stipple"),
     file!("tools/package/android.py"),
     file!("tools/package/android_code.py"),
+    file!("tools/package/android_libs.py"),
     file!("tools/package/common.py"),
     file!("tools/package/helper.rs"),
     file!("tools/package/ios.py"),

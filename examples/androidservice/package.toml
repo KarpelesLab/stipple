@@ -3,9 +3,10 @@
 #   tools/package/cargo-stipple android --example androidservice \
 #       --config examples/androidservice/package.toml
 #
-# The app's own Java classes (java/, compiled with javac and d8) and the
-# components they implement (manifest-fragment.xml, merged into the manifest
-# cargo-stipple writes). See docs/packaging.md.
+# The app's own Java classes (java/, compiled with javac and d8), its
+# resources (res/, compiled with aapt2) and the components they implement
+# (manifest-fragment.xml, merged into the manifest cargo-stipple writes). With
+# Android libraries too: package-libraries.sh. See docs/packaging.md.
 id = "org.stipple.servicedemo"
 name = "Stipple service"
 version = "1.0.0"
@@ -16,3 +17,4 @@ icon-background = "#16181d"
 abis = ["arm64-v8a", "x86_64"]
 java = "java"
 manifest-fragment = "manifest-fragment.xml"
+res = "res"                # the widget's layout, label and provider info, compiled with aapt2
