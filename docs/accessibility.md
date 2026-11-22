@@ -884,7 +884,13 @@ arrives as `object:announcement` "Row 2 tapped", with a polite
 notification in the tree. It passes locally under Xvfb (at-spi2-core 2.58)
 and doesn't fail the job yet (not run under sway). The Orca script then
 also presses "Row 2" and reports whether Orca speaks the toast. The same
-walk under headless sway (`wtype` for the keys) and **Orca** itself
+walk under headless sway (`wtype` for the keys, with a keyboard held in the
+seat for the whole walk by a `wtype` that only sleeps: each `wtype` run
+makes a virtual keyboard and destroys it on exit, and in a seat with no
+other keyboard that takes the keyboard capability away and back every time,
+so the app binds a new `wl_keyboard` per run and `wtype`'s press, sent as
+soon as the compositor has its keymap, could reach the seat before it did,
+leaving only the release; every key now arrives on the first send) and **Orca** itself
 (`.github/scripts/orca-linux.sh`: Orca runs headless with its debug log,
 which records every utterance as `SPEECH OUTPUT`, and must speak the entry
 after Tab; then, added later and not yet run in CI, "Row 0" after another

@@ -310,6 +310,26 @@ if depth:
         value.currentValue = 0.0
         moved = offsets(await_log(said, n), said)
         check(bool(moved) and moved[-1] == 0, "setting the value to 0 scrolled back ({})".format(moved))
+        # Its scroll bar: the pane's last child, vertical, its value the
+        # offset; setting it scrolls the list.
+        bars = [pane.getChildAtIndex(i) for i in range(pane.childCount)]
+        bars = [b for b in bars if b is not None and b.getRole() == pyatspi.ROLE_SCROLL_BAR]
+        check(len(bars) == 1, "the pane has a scroll bar ({})".format(len(bars)))
+        if bars:
+            bar = bars[0]
+            check(bar.getState().contains(pyatspi.STATE_VERTICAL), "...vertical")
+            bv = bar.queryValue()
+            check(bv.maximumValue == pane.queryValue().maximumValue,
+                  "...over the pane's range ({} of 0..{})".format(bv.currentValue, bv.maximumValue))
+            # (The list is at 0 here: the bar takes it to the end. The
+            # ScrollTo below then scrolls up to "Row 20", which leaves "Row 2"
+            # out of view above the list for the toast's check.)
+            n = len(log_lines(said))
+            end = bv.maximumValue
+            bv.currentValue = end
+            moved = offsets(await_log(said, n), said)
+            check(bool(moved) and moved[-1] == end,
+                  "setting the scroll bar's value to its maximum scrolled the list to the end ({})".format(moved))
         # A row below the viewport, scrolled into view.
         row20 = named(walk(frame, 0, []), pyatspi.ROLE_PUSH_BUTTON, "Row 20")
         check(row20 is not None, "a push button 'Row 20'")
@@ -326,22 +346,6 @@ if depth:
             check(bool(moved) and wait_for(shown),
                   "...and brought it into view ({}; row {}, pane {})".format(
                       moved, extents(row20), (px, py, pw, ph)))
-        # Its scroll bar: the pane's last child, vertical, its value the
-        # offset; setting it scrolls the list.
-        bars = [pane.getChildAtIndex(i) for i in range(pane.childCount)]
-        bars = [b for b in bars if b is not None and b.getRole() == pyatspi.ROLE_SCROLL_BAR]
-        check(len(bars) == 1, "the pane has a scroll bar ({})".format(len(bars)))
-        if bars:
-            bar = bars[0]
-            check(bar.getState().contains(pyatspi.STATE_VERTICAL), "...vertical")
-            bv = bar.queryValue()
-            check(bv.maximumValue == pane.queryValue().maximumValue,
-                  "...over the pane's range ({} of 0..{})".format(bv.currentValue, bv.maximumValue))
-            n = len(log_lines(said))
-            bv.currentValue = 0.0
-            moved = offsets(await_log(said, n), said)
-            check(bool(moved) and moved[-1] == 0,
-                  "setting the scroll bar's value to 0 scrolled the list back ({})".format(moved))
     # The sideways strip of chips.
     # (Its chips are labels in panels, or buttons where they take a tap.)
     chip = (named(elements, pyatspi.ROLE_LABEL, "Chip 0")
@@ -441,22 +445,22 @@ if field is not None:
         text.getText(0, -1), text.characterCount, text.caretOffset), flush=True)
 
 # Keyboard focus, as a screen reader follows it: Tab, then the focus event.
-del events[:]
-focused = None
-# The first key a fresh virtual keyboard sends (wtype makes one per run) can
-# be lost while the compositor switches to its keymap, so a Tab that focuses
-# nothing is sent once more, with a warning; the second must work.
-for attempt in range(2):
-    subprocess.run(tab_cmd, check=False)
-    for _ in range(20 if attempt == 0 else 40):
+# Every key is sent once and must land: under Wayland, atspi-linux.sh holds a
+# keyboard in the seat for the whole walk, so wtype's runs don't take the
+# app's wl_keyboard away and back (which lost their presses).
+def await_focus(cmd):
+    """Send `cmd` and wait for a state-changed:focused event."""
+    del events[:]
+    subprocess.run(cmd, check=False)
+    for _ in range(40):
         pump(0.25)
         hits = [e for e in events if e[0].startswith("object:state-changed:focused") and e[1] == 1]
         if hits:
-            focused = hits[-1]
-            break
-    if focused is not None:
-        break
-    print("warning: no focus event after the first Tab; sending it again", flush=True)
+            return hits[-1]
+    return None
+
+
+focused = await_focus(tab_cmd)
 check(focused is not None and focused[2] not in (pyatspi.ROLE_FRAME, pyatspi.ROLE_APPLICATION),
       "after Tab, a control in the window reported state-changed:focused ({})".format(focused))
 check(any(e[0] == "focus:" for e in events), "...and a focus: event")
@@ -537,56 +541,23 @@ def keys(name):
     return [a.replace("Tab", name) for a in tab_cmd]
 
 
-def await_focus(cmd, settled=lambda: False):
-    """Send `cmd` and wait for a state-changed:focused event. A key that
-    focuses nothing, while `settled()` says focus hasn't moved, is sent again
-    (up to three times), with a warning (a key can be lost, as the first Tab
-    above)."""
-    del events[:]
-    for attempt in range(3):
-        subprocess.run(cmd, check=False)
-        for _ in range(20 if attempt == 0 else 40):
-            pump(0.25)
-            hits = [e for e in events if e[0].startswith("object:state-changed:focused") and e[1] == 1]
-            if hits:
-                return hits[-1]
-        if settled():
-            return None
-        print("warning: no focus event after {}; sending it again".format(" ".join(cmd)), flush=True)
-    return None
-
-
 def taps():
     with open(app_log) as f:
         return sum(1 for line in f if line.startswith("touchdemo: row 0 tapped"))
 
 
 if row0 is not None and field is not None:
-    focused = await_focus(tab_cmd, lambda: row0.getState().contains(pyatspi.STATE_FOCUSED))
+    focused = await_focus(tab_cmd)
     check(focused is not None and focused[2] == pyatspi.ROLE_PUSH_BUTTON and focused[3] == "Row 0",
           "Tab from the field focused the push button 'Row 0' ({})".format(focused))
     check(any(e[0] == "focus:" for e in events), "...with a focus: event")
     check(row0.getState().contains(pyatspi.STATE_FOCUSED), "'Row 0' says it is focused")
     for key, what in (("space", "Space"), ("Return", "Enter")):
-        # A key can be lost on the way (as the first Tab above): one that
-        # presses nothing is sent again, with a warning. Keys can be lost
-        # for seconds at a time (seen: Return twice in a row), so up to three
-        # times.
         before = taps()
-        pressed = False
-        for attempt in range(3):
-            subprocess.run(keys(key), check=False)
-            for _ in range(20 if attempt == 0 else 40):
-                pump(0.25)
-                if taps() > before:
-                    pressed = True
-                    break
-            if pressed:
-                break
-            if attempt < 2:
-                print("warning: no tap after {}; sending it again".format(key), flush=True)
+        subprocess.run(keys(key), check=False)
+        pressed = wait_for(lambda: taps() > before)
         check(pressed, "{} on the focused 'Row 0' pressed it: the app logged the tap".format(what))
-    back = await_focus(keys("shift+Tab"), lambda: field.getState().contains(pyatspi.STATE_FOCUSED))
+    back = await_focus(keys("shift+Tab"))
     check(back is not None and back[2] == pyatspi.ROLE_ENTRY,
           "Shift+Tab went back to the entry ({})".format(back))
 

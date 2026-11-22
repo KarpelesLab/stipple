@@ -5104,11 +5104,13 @@ jobs:
 
       # Scroll panes, a check box and a toast, through AT-SPI (the walk with
       # ATSPI_WALK_DEPTH=1, on a fresh touchdemo): the list of rows is a
-      # scroll pane whose "scroll forward" action, Value (set to 0) and
-      # Component.ScrollTo on "Row 20" scroll it (the app logs the offsets,
-      # accessible-value events follow), and its scroll bar child (a vertical
-      # ROLE_SCROLL_BAR over the same range) scrolls it back when its Value
-      # is set to 0; the strip of chips scrolls too; the
+      # scroll pane whose "scroll forward" action and Value (set to 0)
+      # scroll it (the app logs the offsets, accessible-value events
+      # follow), its scroll bar child (a vertical ROLE_SCROLL_BAR over the
+      # same range) scrolls it to the end when its Value is set to the
+      # maximum, and Component.ScrollTo on "Row 20" scrolls back up to that
+      # row (leaving "Row 2" out of view above); the strip of chips scrolls
+      # too; the
       # "Remember" check box is checked by its action (state and event); and
       # a tap on "Row 2" raises a toast, which arrives as an
       # object:announcement and a polite live-region notification. Passes
@@ -5195,7 +5197,10 @@ jobs:
       # The same walk with touchdemo as a Wayland client of headless sway (the
       # bridge doesn't depend on the backend; Wayland hides window positions,
       # so screen coordinates are the window's). Required, after passing in
-      # every run since it landed.
+      # every run since it landed. atspi-linux.sh holds a keyboard in the
+      # seat for the whole walk (a wtype that only sleeps), so each wtype
+      # run doesn't take the app's wl_keyboard away and back, which lost
+      # presses sent before the app had bound the new one.
       - name: Read and drive a running Wayland window through AT-SPI (sway)
         run: |
           export XDG_RUNTIME_DIR="$RUNNER_TEMP/xdgrt"
