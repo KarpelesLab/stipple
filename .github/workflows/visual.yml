@@ -7650,7 +7650,7 @@ jobs:
       # The Dock tile's progress bar, read back from its content view.
       - name: Dock progress
         continue-on-error: true
-        run: grep -q 'Cocoa dock progress: value=0.5 cleared=true' lifecycle-macos.log
+        run: "grep -q 'Cocoa dock progress: value=0.5 cleared=true' lifecycle-macos.log"
 
   # After a fully green push to master, commit the fresh screenshots so the README
   # always shows what the code renders today. Pushes made with GITHUB_TOKEN don't
