@@ -161,12 +161,12 @@ pub(crate) fn ios_content_types(accept: &str) -> Vec<ContentType> {
 }
 
 #[cfg(any(target_os = "ios", target_os = "android"))]
-pub(crate) use pending::{Done, finish_open, finish_save, register};
+pub(crate) use pending::{Done, finish_folder, finish_open, finish_save, register};
 
 /// The callbacks waiting for a picker, by request id, on the UI thread.
 #[cfg(any(target_os = "ios", target_os = "android"))]
 mod pending {
-    use super::super::FileContents;
+    use super::super::{FileContents, Folder};
     use std::cell::{Cell, RefCell};
     use std::collections::HashMap;
 
@@ -174,6 +174,7 @@ mod pending {
     pub(crate) enum Done {
         Open(Box<dyn FnOnce(Option<FileContents>)>),
         Save(Box<dyn FnOnce(bool)>),
+        Folder(Box<dyn FnOnce(Option<Folder>)>),
     }
 
     thread_local! {
@@ -202,6 +203,7 @@ mod pending {
         match take(id) {
             Some(Done::Open(done)) => done(file),
             Some(Done::Save(done)) => done(false),
+            Some(Done::Folder(done)) => done(None),
             None => {}
         }
     }
@@ -211,6 +213,17 @@ mod pending {
         match take(id) {
             Some(Done::Save(done)) => done(saved),
             Some(Done::Open(done)) => done(None),
+            Some(Done::Folder(done)) => done(None),
+            None => {}
+        }
+    }
+
+    /// Request `id` (a folder) is answered: the folder, or `None`.
+    pub(crate) fn finish_folder(id: u32, folder: Option<Folder>) {
+        match take(id) {
+            Some(Done::Folder(done)) => done(folder),
+            Some(Done::Open(done)) => done(None),
+            Some(Done::Save(done)) => done(false),
             None => {}
         }
     }

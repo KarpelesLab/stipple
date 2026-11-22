@@ -192,7 +192,9 @@ Images aren't supported.
 ### File dialogs
 
 A browser can't block for a dialog and doesn't reveal paths, so `open_file`,
-`save_file` and `pick_folder` return `None` on the web. Use the contents-based
+`save_file` and `pick_folder` return `None` on the web, and
+`pick_folder_then` answers `None` (Chromium's `showDirectoryPicker` isn't
+used). Use the contents-based
 calls, which work on every platform:
 
 ```rust

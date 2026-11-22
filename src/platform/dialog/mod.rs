@@ -45,21 +45,32 @@
 //! On the web, iOS and Android [`open_file`], [`save_file`] and
 //! [`pick_folder`] return `None`.
 //!
+//! ## Folders
+//!
+//! [`pick_folder_then`] works on the desktops, iOS and Android: it hands the
+//! callback a [`Folder`], whose files are listed, read and written by name
+//! (a directory on the desktops and iOS, a document tree on Android, where
+//! there's no path).
+//!
 //! [`open_file`]: crate::platform::dialog::open_file
 //! [`save_file`]: crate::platform::dialog::save_file
 //! [`pick_folder`]: crate::platform::dialog::pick_folder
 //! [`open_file_contents`]: crate::platform::dialog::open_file_contents
 //! [`save_file_contents`]: crate::platform::dialog::save_file_contents
 //! [`FileDialog::file_name`]: crate::platform::dialog::FileDialog::file_name
+//! [`pick_folder_then`]: crate::platform::dialog::pick_folder_then
+//! [`Folder`]: crate::platform::dialog::Folder
 
 use std::path::PathBuf;
 
+mod folder;
 mod message;
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) mod mobile;
 #[cfg(target_os = "ios")]
 #[allow(unsafe_code)]
 pub(crate) mod picker_ios;
+pub use folder::{Folder, FolderEntry};
 pub use message::{
     MessageBox, MessageDone, MessageInput, MessageKind, MessageResponse, message,
     press_native_button,
@@ -295,6 +306,41 @@ pub fn save_file(opts: &FileDialog) -> Option<PathBuf> {
 pub fn pick_folder(opts: &FileDialog) -> Option<PathBuf> {
     let title = title_or(opts, "Select Folder");
     backend::file_chooser(Op::Folder, &title)
+}
+
+/// Let the user choose a folder, and pass it to `done` (or `None` if they
+/// cancelled): a [`Folder`], whose files the app then lists, reads and
+/// writes by name, the same way on every platform.
+///
+/// On the desktops this is [`pick_folder`], and `done` runs before this
+/// returns. On iOS (`UIDocumentPickerViewController` for `public.folder`,
+/// the picked URL accessed as a security-scoped resource) and Android (the
+/// Storage Access Framework's `ACTION_OPEN_DOCUMENT_TREE`, the folder a
+/// document tree with no path) the picker opens and `done` runs later,
+/// from the event loop; call this from the UI thread. The web has no
+/// folder picker here: `done` gets `None`.
+pub fn pick_folder_then(opts: &FileDialog, done: impl FnOnce(Option<Folder>) + 'static) {
+    #[cfg(any(target_os = "ios", target_os = "android"))]
+    {
+        let _ = opts;
+        let id = mobile::register(mobile::Done::Folder(Box::new(done)));
+        #[cfg(target_os = "ios")]
+        let shown = picker_ios::open_folder(id);
+        #[cfg(target_os = "android")]
+        let shown = crate::platform::backend::android::open_document_tree(id);
+        if !shown {
+            mobile::finish_folder(id, None);
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = opts;
+        done(None);
+    }
+    #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
+    {
+        done(pick_folder(opts).map(Folder::new));
+    }
 }
 
 /// Let the user pick a color in the platform's color dialog, starting from

@@ -5774,6 +5774,10 @@ jobs:
           print(f"{h:08x}")' examples/touchdemo/assets/hello.txt)
           grep -qF "touchdemo: asset hello.txt bytes=$size fnv1a=$fnv text=\"Hello from a packaged asset.\"" "$LOG"
           grep -qF 'touchdemo: assets list=["hello.txt"] img=["dot.svg"] exists=true missing=Some("no asset \"nope.txt\"")' "$LOG"
+          # The folder picker (not blocking yet): answered with a directory,
+          # the app lists, reads and writes it through its Folder.
+          grep -qF 'touchdemo: folder picked name="touchdemo-folder" entries=["a.txt", "b.txt"] read=Ok("in the folder") wrote=Ok(())' "$LOG" \
+            || echo "::warning::touchdemo: the folder picker didn't hand over the folder ($(grep 'touchdemo: folder' "$LOG" | tr '\n' ' '))"
           # Assets::open_fd (not blocking yet): the asset's own file, from 0.
           grep -qE "touchdemo: asset fd hello.txt=Ok\(\(0, $size, true, true\)\)" "$LOG" \
             || echo "::warning::touchdemo: Assets::open_fd didn't give hello.txt's file"

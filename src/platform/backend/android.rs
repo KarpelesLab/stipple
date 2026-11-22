@@ -74,6 +74,8 @@ mod drag;
 mod edit_menu;
 // The app's FileProvider, for files dragged out of it.
 mod files;
+/// A folder picked as a Storage Access Framework document tree.
+mod folder;
 /// The input method's `InputConnection` to the focused text field.
 mod ime;
 /// The geometry of the system bars' insets (Android-free, tested on hosts).
@@ -105,8 +107,9 @@ pub(crate) mod secure_store;
 mod share;
 
 pub(crate) use alarm::{cancel_scheduled, pending_scheduled, schedule};
+pub(crate) use folder::DocumentTree;
 pub(crate) use notify::notify;
-pub(crate) use pick::{create_document, open_document};
+pub(crate) use pick::{create_document, open_document, open_document_tree};
 pub(crate) use share::share;
 
 // ---- NDK FFI ----------------------------------------------------------------

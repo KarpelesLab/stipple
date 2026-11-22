@@ -19,19 +19,22 @@ use std::sync::Mutex;
 
 use super::jni::{self, Env, JObject, JValue, Jni};
 use super::{Command, classes, log, post_command, run_on_main};
-use crate::platform::dialog::{FileContents, mobile};
+use crate::platform::dialog::{FileContents, Folder, mobile};
 
 /// The picker's answer, for the UI thread.
 #[derive(Clone, Debug)]
 pub(crate) enum Outcome {
     Opened(Option<FileContents>),
     Saved(bool),
+    Folder(Option<Folder>),
 }
 
 /// What a request waits to do with the document it gets.
 enum Waiting {
     Open,
     Save(Vec<u8>),
+    /// A document tree (`ACTION_OPEN_DOCUMENT_TREE`).
+    Tree,
 }
 
 impl Waiting {
@@ -39,6 +42,7 @@ impl Waiting {
         match self {
             Waiting::Open => Outcome::Opened(None),
             Waiting::Save(_) => Outcome::Saved(false),
+            Waiting::Tree => Outcome::Folder(None),
         }
     }
 }
@@ -101,6 +105,26 @@ pub(crate) fn create_document(id: u32, name: String, mime: &'static str, bytes: 
         if started.is_none() {
             log("stipple: can't open the document picker");
             post_command(Command::Picked(id, Outcome::Saved(false)));
+        }
+    })
+}
+
+/// Let the user pick a folder (`ACTION_OPEN_DOCUMENT_TREE`), for dialog
+/// request `id`. `false` if there's no activity to ask from.
+pub(crate) fn open_document_tree(id: u32) -> bool {
+    run_on_main(move |jni, activity| {
+        let started = (|| {
+            let action = jni.string("android.intent.action.OPEN_DOCUMENT_TREE")?;
+            let intent = jni.new_named(
+                c"android/content/Intent",
+                c"(Ljava/lang/String;)V",
+                &[JValue { l: action }],
+            )?;
+            start(jni, activity, intent, id, Waiting::Tree)
+        })();
+        if started.is_none() {
+            log("stipple: can't open the folder picker");
+            post_command(Command::Picked(id, Outcome::Folder(None)));
         }
     })
 }
@@ -224,7 +248,10 @@ pub(super) unsafe extern "C" fn on_activity_result(
             let outcome = unsafe {
                 jni::with_env(vm as *mut c_void, |jni| {
                     let (uri, resolver) = (uri as JObject, resolver as JObject);
-                    let outcome = transfer(jni, resolver, uri, waiting);
+                    let outcome = match waiting {
+                        Waiting::Tree => Outcome::Folder(tree(jni, vm, resolver, uri)),
+                        waiting => transfer(jni, resolver, uri, waiting),
+                    };
                     jni.delete_global(uri);
                     jni.delete_global(resolver);
                     Some(outcome)
@@ -235,6 +262,14 @@ pub(super) unsafe extern "C" fn on_activity_result(
     if spawned.is_err() {
         post_command(Command::Picked(id, if_unspawned));
     }
+}
+
+/// The picked document tree, as a folder.
+fn tree(jni: &Jni, vm: usize, resolver: JObject, uri: JObject) -> Option<Folder> {
+    let (tree, root, name) =
+        super::folder::DocumentTree::new(jni, vm as *mut c_void, resolver, uri)?;
+    log(&format!("stipple: folder picked: {name:?}"));
+    Some(Folder::tree(name, std::sync::Arc::new(tree), root))
 }
 
 /// Read the picked document, or write the bytes to the created one.
@@ -275,6 +310,7 @@ fn transfer(jni: &Jni, resolver: JObject, uri: JObject, waiting: Waiting) -> Out
             ));
             Outcome::Saved(saved)
         }
+        Waiting::Tree => Outcome::Folder(None),
     }
 }
 
@@ -340,5 +376,6 @@ pub(super) fn deliver(id: u32, outcome: Outcome) {
     match outcome {
         Outcome::Opened(file) => mobile::finish_open(id, file),
         Outcome::Saved(saved) => mobile::finish_save(id, saved),
+        Outcome::Folder(folder) => mobile::finish_folder(id, folder),
     }
 }

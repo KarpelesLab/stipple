@@ -416,6 +416,53 @@ mod app {
             );
             println!("androiddemo: save requested");
         });
+        // A folder (ACTION_OPEN_DOCUMENT_TREE), read and written by name
+        // through the document tree, off the UI thread.
+        let folder = button(cx, "Dir").on_tap(cx, |_| {
+            dialog::pick_folder_then(&FileDialog::new(), |folder| {
+                let Some(folder) = folder else {
+                    println!("androiddemo: folder cancelled");
+                    return;
+                };
+                println!(
+                    "androiddemo: folder picked {:?} uri={}",
+                    folder.name(),
+                    folder.uri().is_some_and(|u| u.starts_with("content://"))
+                );
+                std::thread::spawn(move || {
+                    let names = |f: &dialog::Folder| {
+                        f.entries().map(|e| {
+                            e.iter()
+                                .map(|e| format!("{}{}", e.name, if e.is_dir { "/" } else { "" }))
+                                .collect::<Vec<_>>()
+                        })
+                    };
+                    let before = names(&folder).map_err(|e| e.to_string());
+                    let read = folder
+                        .read("in.txt")
+                        .map(|b| String::from_utf8_lossy(&b).trim_end().to_owned())
+                        .map_err(|e| e.to_string());
+                    let wrote = folder
+                        .write("out.txt", b"written by androiddemo\n")
+                        .and_then(|()| folder.write("out.txt", b"replaced\n"))
+                        .map_err(|e| e.to_string());
+                    let made = folder
+                        .create_folder("made")
+                        .and_then(|sub| {
+                            sub.write("deep.txt", b"deep\n")?;
+                            folder.folder("made")?.read("deep.txt")
+                        })
+                        .map(|b| String::from_utf8_lossy(&b).trim_end().to_owned())
+                        .map_err(|e| e.to_string());
+                    println!(
+                        "androiddemo: folder before={before:?} read={read:?} wrote={wrote:?} \
+                         made={made:?} after={:?}",
+                        names(&folder).map_err(|e| e.to_string())
+                    );
+                });
+            });
+            println!("androiddemo: folder requested");
+        });
         let handle = cx.handle();
         let share = button(cx, "Share").on_tap(cx, move |_| {
             handle.share(
@@ -451,7 +498,7 @@ mod app {
         });
         column(vec![
             row(vec![notify, open, save]).gap(theme.spacing.sm),
-            row(vec![share, buzz, later]).gap(theme.spacing.sm),
+            row(vec![share, buzz, later, folder]).gap(theme.spacing.sm),
         ])
         .gap(theme.spacing.sm)
     }

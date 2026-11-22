@@ -410,6 +410,19 @@ picker is up, the activity comes back without the request; the callback is
 gone with the old process. `open_file`, `save_file` and `pick_folder` return
 `None`.
 
+`dialog::pick_folder_then` starts `ACTION_OPEN_DOCUMENT_TREE` the same way;
+once the user has chosen a folder and allowed access, the callback gets a
+`Folder` with no path but a `content:` `uri()`: a document tree, whose
+documents it lists (`entries`: `DocumentsContract`'s child documents,
+queried through the `ContentResolver`), reads and writes by name
+(`openFileDescriptor`, `"r"` and `"wt"`; a new file through
+`DocumentsContract.createDocument`, typed from its extension), and whose
+subfolders it opens and makes. Its calls block and work from any thread
+(the tree keeps global references and attaches the thread). The grant lasts
+while the app runs; it isn't made persistable
+(`takePersistableUriPermission`) for the next launch yet. Android 11 and
+later don't let the user pick the storage's root or `Download` itself.
+
 CI drives DocumentsUI through `uiautomator` on its emulator: it picks a file
 pushed to Downloads and checks the app read it, backs out of another (the
 callback hears `None`), saves one and reads it back with `adb shell cat`, and
@@ -934,7 +947,7 @@ examples/androiddemo/test-on-device.sh stipple.apk shots
   TalkBack on, on the API 34 emulator, and moves its focus and clicks with
   it (see [accessibility.md](../accessibility.md#android); this passes on a
   local emulator). The document picker answers with contents only:
-  `open_file` and friends (paths) return `None`, and there is no folder picker
-  (`ACTION_OPEN_DOCUMENT_TREE`).
+  `open_file` and friends (paths) return `None`. The folder picker's grant
+  isn't kept for the next launch.
 - Rendering is software only: a full-HD screen is a lot of pixels, so heavy
   animation runs below the display's rate on slower devices and emulators.

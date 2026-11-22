@@ -455,7 +455,11 @@ reads it, cancels one, and saves one; the iOS simulator self-test checks both
 pickers come up and that cancelling reaches the app, and, since choosing a
 file there can't be scripted, hands each picker's delegate a file
 (`documentPicker:didPickDocumentsAtURLs:`) and checks the app gets its bytes,
-or the export's success. `open_file` and friends still return `None`. See
+or the export's success. `open_file` and friends still return `None`.
+`pick_folder_then` hands over a `Folder` read and written by name: a
+document tree (`ACTION_OPEN_DOCUMENT_TREE`) on Android, which the emulator
+picks in DocumentsUI and writes to (not blocking yet), a security-scoped
+directory on iOS (simulator self-test logged, not blocking). See
 [ios.md](platforms/ios.md#file-pickers) and [android.md](platforms/android.md#file-pickers).
 
 ⁶³ `NotificationManager` on a channel of the app's, asking for

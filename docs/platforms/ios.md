@@ -445,6 +445,15 @@ The call returns at once and the callback runs when the picker closes, from
 the main thread (`None` / `false` if it was cancelled). `open_file`,
 `save_file` and `pick_folder` return `None`.
 
+`dialog::pick_folder_then` presents the same picker for `public.folder`,
+without a copy: the picked folder lies outside the app's sandbox, so its
+URL's security-scoped access is started
+(`startAccessingSecurityScopedResource`) and the callback gets a `Folder`
+with its `path()`, which lists (`entries`), reads, writes, opens subfolders
+and makes them by name, or through `std::fs` under that path. The access is
+stopped once the last clone of the `Folder` (or a subfolder) goes; it isn't
+kept for the next launch (no bookmark yet).
+
 ## OS-drawn controls
 
 Under `Theme::native()` buttons, switches, sliders and progress bars are real
@@ -564,7 +573,11 @@ applies.
   drag between two apps can't be scripted on the simulator and hasn't been
   run.
 - File pickers answer with contents only (`open_file` and friends return
-  `None`), and there is no folder picker. Choosing a file in the picker can't
+  `None`); the folder picker answers with a `Folder`, whose access isn't
+  kept across launches (no security-scoped bookmark yet). The simulator
+  self-test hands the folder picker's delegate a directory and logs what the
+  app read and wrote there (not blocking yet); a folder outside the sandbox,
+  with real scoped access, hasn't been picked. Choosing a file in the picker can't
   be scripted on the simulator (its contents run in another process), so CI
   checks the pickers come up, that cancelling reaches the app, and hands the
   delegate a picked file's URL itself (`documentPicker:didPickDocumentsAtURLs:`,

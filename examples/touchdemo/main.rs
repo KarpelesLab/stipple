@@ -697,6 +697,8 @@ mod selftest {
     static LIST_BEFORE: AtomicU64 = AtomicU64::new(0);
     /// The field's text before the dead keys typed.
     static BEFORE_TEXT: Mutex<String> = Mutex::new(String::new());
+    /// What the folder picker's callback saw, once it ran.
+    static FOLDER: Mutex<Option<String>> = Mutex::new(None);
     /// What the save picker's callback got, once it ran.
     static SAVED: Mutex<Option<bool>> = Mutex::new(None);
     /// The document picker's class.
@@ -1922,6 +1924,52 @@ mod selftest {
             );
             report("selftest");
         });
+        // The folder picker (not part of the checks yet: its outcome is
+        // logged): answered as picking a directory does, the app lists, reads
+        // and writes it through the Folder it gets.
+        let folder_path = std::env::temp_dir().join("touchdemo-folder");
+        let path = folder_path.clone();
+        steps.run(0, move |_| {
+            let _ = std::fs::remove_dir_all(&path);
+            let _ = std::fs::create_dir_all(&path);
+            let _ = std::fs::write(path.join("a.txt"), b"in the folder\n");
+            dialog::pick_folder_then(&FileDialog::new(), |folder| {
+                let line = match folder {
+                    Some(f) => {
+                        let wrote = f.write("b.txt", b"written\n").map_err(|e| e.to_string());
+                        let names: Vec<String> = f
+                            .entries()
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(|e| e.name)
+                            .collect();
+                        let read = f
+                            .read("a.txt")
+                            .map(|b| String::from_utf8_lossy(&b).trim_end().to_owned())
+                            .map_err(|e| e.to_string());
+                        format!(
+                            "name={:?} entries={names:?} read={read:?} wrote={wrote:?}",
+                            f.name()
+                        )
+                    }
+                    None => "None".into(),
+                };
+                log(&format!("touchdemo: folder picked {line}"));
+                *FOLDER.lock().unwrap() = Some(line);
+            });
+        });
+        steps.until(|_| simulate::presented_controller() == PICKER);
+        let path = folder_path.clone();
+        steps.run(600, move |_| {
+            log(&format!(
+                "touchdemo: folder picker presented {}",
+                simulate::presented_controller()
+            ));
+            if !simulate::pick_document(&path.to_string_lossy()) {
+                log("touchdemo: no folder picker to pick from");
+            }
+        });
+        steps.until(|_| FOLDER.lock().unwrap().is_some());
         mobile_input(&mut steps);
         drag_out_and_trackpad(&mut steps);
 

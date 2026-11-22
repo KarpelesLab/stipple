@@ -16,6 +16,12 @@
 //!   wherever they choose (Files, iCloud Drive, another app's provider); the
 //!   file goes once the picker closes.
 //!
+//! - **Folder**: `initForOpeningContentTypes:asCopy:` for `public.folder`
+//!   without a copy: the picked URL is outside the sandbox, so its
+//!   security-scoped access is started (`startAccessingSecurityScopedResource`)
+//!   and held by a [`Scope`] inside the [`Folder`](super::Folder), which
+//!   stops it once the last clone of the folder goes.
+//!
 //! The picker's delegate is a class built at run time
 //! (`StippleDocumentPickerDelegate`, adopting `UIDocumentPickerDelegate`):
 //! `documentPicker:didPickDocumentsAtURLs:` and `documentPickerWasCancelled:`
@@ -46,6 +52,7 @@ unsafe extern "C" {
 /// What a picker on screen was opened for.
 enum Kind {
     Open,
+    Folder,
     /// The directory holding the file being exported.
     Export(PathBuf),
 }
@@ -104,6 +111,69 @@ pub(crate) fn open(id: u32, types: &[ContentType]) -> bool {
         }
         present(id, picker, Kind::Open)
     })
+}
+
+/// Let the user pick a folder, for dialog request `id`. `false` if no
+/// picker could be shown.
+pub(crate) fn open_folder(id: u32) -> bool {
+    with_pool(|| unsafe {
+        let ut = class("UTType");
+        if ut.is_null() {
+            return false;
+        }
+        let s = nsstring("public.folder");
+        let folder = msg!(ut, "typeWithIdentifier:", (s: Id) -> Id);
+        if folder.is_null() {
+            return false;
+        }
+        let array = msg!(class("NSArray"), "arrayWithObject:", (folder: Id) -> Id);
+        let picker = msg!(class("UIDocumentPickerViewController"), "alloc", () -> Id);
+        let copy = false;
+        let picker = msg!(picker, "initForOpeningContentTypes:asCopy:",
+            (array: Id, copy: bool) -> Id);
+        let no = false;
+        if !picker.is_null() {
+            msg!(picker, "setAllowsMultipleSelection:", (no: bool) -> ());
+        }
+        present(id, picker, Kind::Folder)
+    })
+}
+
+/// A picked folder's URL, retained, with its security-scoped access (when
+/// it has one: a folder in the app's own container needs none) stopped and
+/// the URL released when dropped.
+pub(crate) struct Scope {
+    url: Id,
+    accessing: bool,
+}
+
+// NSURL is immutable and its scoped-access calls are thread-safe.
+unsafe impl Send for Scope {}
+unsafe impl Sync for Scope {}
+
+impl Drop for Scope {
+    fn drop(&mut self) {
+        unsafe {
+            if self.accessing {
+                msg!(self.url, "stopAccessingSecurityScopedResource", () -> ());
+            }
+            msg!(self.url, "release", () -> ());
+        }
+    }
+}
+
+/// The folder at `url`, its security-scoped access started.
+unsafe fn scoped_folder(url: Id) -> Option<super::Folder> {
+    unsafe {
+        let path = PathBuf::from(rust_string(msg!(url, "path", () -> Id))?);
+        let accessing = msg!(url, "startAccessingSecurityScopedResource", () -> bool);
+        msg!(url, "retain", () -> Id);
+        debug(format_args!(
+            "picker: folder {} (scoped access {accessing})",
+            path.display()
+        ));
+        Some(super::Folder::scoped(path, Scope { url, accessing }))
+    }
 }
 
 /// Let the user choose where to save `bytes` as `name`, for dialog request
@@ -253,6 +323,7 @@ fn give_up(picker: Id) {
     unsafe { msg!(picker, "release", () -> ()) };
     match pending.kind {
         Kind::Open => mobile::finish_open(pending.id, None),
+        Kind::Folder => mobile::finish_folder(pending.id, None),
         Kind::Export(dir) => {
             let _ = std::fs::remove_dir_all(dir);
             mobile::finish_save(pending.id, false);
@@ -347,8 +418,13 @@ extern "C" fn did_pick(_this: Id, _cmd: Sel, picker: Id, urls: Id) {
         .then(|| rust_string(unsafe { msg!(url, "path", () -> Id) }))
         .flatten()
         .map(PathBuf::from);
+    let folder = match pending.kind {
+        Kind::Folder if !url.is_null() => unsafe { scoped_folder(url) },
+        _ => None,
+    };
     unsafe { msg!(picker, "release", () -> ()) };
     match pending.kind {
+        Kind::Folder => mobile::finish_folder(pending.id, folder),
         Kind::Open => {
             let file = path.and_then(|path| {
                 let bytes = std::fs::read(&path).ok();
@@ -380,6 +456,7 @@ extern "C" fn cancelled(_this: Id, _cmd: Sel, picker: Id) {
     unsafe { msg!(picker, "release", () -> ()) };
     match pending.kind {
         Kind::Open => mobile::finish_open(pending.id, None),
+        Kind::Folder => mobile::finish_folder(pending.id, None),
         Kind::Export(dir) => {
             let _ = std::fs::remove_dir_all(dir);
             mobile::finish_save(pending.id, false);

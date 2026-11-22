@@ -36,7 +36,9 @@
 # 9. Open brings up DocumentsUI's picker, where a file pushed to Downloads is
 #    picked and the app reads it; Back cancels another; Save creates
 #    stipple-saved.txt with the app's bytes; and the process killed under the
-#    picker comes back cleanly (the results fragment isn't restored);
+#    picker comes back cleanly (the results fragment isn't restored); Dir
+#    picks a folder (ACTION_OPEN_DOCUMENT_TREE) and the app lists, reads and
+#    writes it through the document tree (not blocking yet);
 # 10. a Back the app doesn't handle leaves it to the system: with predictive
 #    back (Android 13 and later, the manifest's enableOnBackInvokedCallback),
 #    Back reaches the app through its OnBackInvokedCallback while it would go
@@ -755,6 +757,67 @@ case "$saved" in
   "Saved by androiddemo"*) ;;
   *) echo "stipple-saved.txt holds: $saved" >&2; exit 1 ;;
 esac
+
+# A folder (ACTION_OPEN_DOCUMENT_TREE, through dialog::pick_folder_then):
+# Documents/stipple-folder, chosen in DocumentsUI and allowed; the app lists
+# it, reads in.txt, writes out.txt twice and a file in a subfolder it makes,
+# all through the document tree. Back cancels another. Not blocking yet.
+folder_check() {
+  adb shell rm -rf /sdcard/Documents/stipple-folder
+  adb shell mkdir -p /sdcard/Documents/stipple-folder
+  printf 'Hello from the folder\n' > "$shots/stipple-in.txt"
+  adb push "$shots/stipple-in.txt" /sdcard/Documents/stipple-folder/in.txt >/dev/null
+  wait_top "$pkg" 20 || return 1
+  tap_when 'text="Dir"' || return 1
+  wait_top "documentsui" 30 || return 1
+  sleep 2
+  # It opens where it was last, or on the device's storage: go there.
+  if ! tap_node 'text="stipple-folder"'; then
+    if ! tap_node 'text="Documents"'; then
+      tap_when 'content-desc="Show roots"' || return 1
+      # The device's storage, named after the device.
+      tap_when 'text="(sdk_gphone[^"]*|Internal storage)"' || return 1
+      tap_when 'text="Documents"' || return 1
+    fi
+    tap_when 'text="stipple-folder"' || return 1
+  fi
+  sleep 1
+  tap_when 'text="(USE THIS FOLDER|Use this folder)"' || return 1
+  tap_when 'resource-id="android:id/button1"' || return 1
+  wait_for 'androiddemo: folder picked "stipple-folder" uri=true' 30 || return 1
+  wait_for 'androiddemo: folder before=Ok\(\["in.txt"\]\) read=Ok\("Hello from the folder"\) wrote=Ok\(\(\)\) made=Ok\("deep"\) after=Ok\(\["in.txt", "made/", "out.txt"\]\)' 30 || return 1
+  [ "$(adb shell cat /sdcard/Documents/stipple-folder/out.txt | tr -d '\r')" = replaced ] || return 1
+  [ "$(adb shell cat /sdcard/Documents/stipple-folder/made/deep.txt | tr -d '\r')" = deep ] || return 1
+  adb exec-out screencap -p > "$shots/android-folder.png" || true
+  wait_top "$pkg" 20 || return 1
+  tap_when 'text="Dir"' || return 1
+  wait_top "documentsui" 30 || return 1
+  sleep 1
+  # Back goes up the folders the picker opened in first, then closes it.
+  local i
+  for ((i = 0; i < 6; i++)); do
+    adb shell input keyevent KEYCODE_BACK
+    sleep 2
+    (($(count "androiddemo: folder cancelled") > 0)) && break
+  done
+  wait_for "androiddemo: folder cancelled" 10 || return 1
+}
+folder_ok=0
+folder_check && folder_ok=1
+# DocumentsUI now opens where the folder was picked, where Back goes up a
+# folder instead of closing it: make it forget, for the checks below.
+adb shell pm clear com.google.android.documentsui >/dev/null 2>&1 || true
+if [ "$folder_ok" = 1 ]; then
+  echo "android: a folder picked in DocumentsUI was listed, read and written through its document tree"
+else
+  echo "::warning::the folder picker check didn't pass"
+  log | grep -E "androiddemo: folder|stipple: (folder|document)" | tail -10 || true
+  for _ in 1 2 3 4 5 6; do
+    wait_top "$pkg" 1 >/dev/null 2>&1 && break
+    adb shell input keyevent KEYCODE_BACK || true
+    sleep 2
+  done
+fi
 
 # The share sheet (ACTION_SEND through the chooser), with a text, a URL and a
 # file (through MediaStore on Android 10 and later): Back closes the chooser

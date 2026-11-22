@@ -2571,8 +2571,18 @@ Most input only works on X11 today.
   again and hands its delegate a file URL itself
   (`documentPicker:didPickDocumentsAtURLs:`, `simulate::pick_document`): the
   open callback gets the written file's name and bytes (and the copy is
-  deleted), the export's callback `true` (added, not yet run in CI). No folder
-  picker.
+  deleted), the export's callback `true` (added, not yet run in CI). Folders:
+  `dialog::pick_folder_then` hands the callback a `Folder` (list, read,
+  write, open and make subfolders by name) on every platform but the web:
+  `pick_folder`'s directory on the desktops, `UIDocumentPickerViewController`
+  for `public.folder` with the URL's security-scoped access held while the
+  `Folder` lives on iOS, and `ACTION_OPEN_DOCUMENT_TREE`'s document tree
+  through `DocumentsContract` on Android. androiddemo's emulator run picks a
+  folder in DocumentsUI and lists, reads, writes and makes a subfolder in it
+  (passed on a local API 34 emulator; not blocking in CI yet); the iOS
+  simulator self-test hands the picker a directory (logged, not blocking);
+  the desktop path is unit-tested. Not yet: keeping the access for the next
+  launch (persistable URI grants, security-scoped bookmarks).
 - ✅ Notifications on iOS: `platform::notify` through
   `UNUserNotificationCenter`; the first call asks permission
   (`requestAuthorizationWithOptions:`, with a hand-built completion block) and
