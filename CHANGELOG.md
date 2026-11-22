@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.11](https://github.com/KarpelesLab/stipple/compare/stipple-v0.0.10...stipple-v0.0.11) - 2026-11-22
+
+### Added
+
+- *(a11y)* range values, tables, captions and text attributes on every bridge
+- *(a11y)* relations, the X root window's AT_SPI_BUS, and acting on what's scrolled out of view
+- *(scroll-bar)* hold-to-page, arrow buttons, two-way areas, accessibility roles, skins
+- *(window)* windows reopen where they were left (App::remember_window)
+- *(window)* app badge and progress on the Windows taskbar and the Linux launcher
+- *(window)* window size limits follow the content's layout
+- *(text)* emoji sequences as one glyph: morx for Apple Color Emoji, GSUB fixes for Segoe and Noto ([#76](https://github.com/KarpelesLab/stipple/pull/76))
+- *(video)* H.264 and HEVC through Media Foundation (Windows) and MediaCodec (Android)
+- *(widgets)* long lines scroll sideways in text_view ([#90](https://github.com/KarpelesLab/stipple/pull/90))
+- *(widgets)* regex find in text_view ([#90](https://github.com/KarpelesLab/stipple/pull/90))
+- *(widgets)* inline completion in the combo box ([#85](https://github.com/KarpelesLab/stipple/pull/85))
+- *(platform)* D-Bus activation of a single instance, and cargo stipple linux ([#88](https://github.com/KarpelesLab/stipple/pull/88))
+- *(wayland)* owned windows are xdg-dialog-v1 dialogs, modal ones set_modal ([#81](https://github.com/KarpelesLab/stipple/pull/81))
+
+### Fixed
+
+- *(gpu)* NVIDIA samples its own tiled dma-bufs and udmabufs on Vulkan and GLES (6g)
+
+### Other
+
+- update screenshots from CI
+- update screenshots from CI
+
 ## [0.0.10](https://github.com/KarpelesLab/stipple/compare/stipple-v0.0.9...stipple-v0.0.10) - 2026-11-20
 
 ### Added
