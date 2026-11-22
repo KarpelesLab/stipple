@@ -1495,6 +1495,32 @@ impl Element {
         self
     }
 
+    /// Say this element controls the one whose
+    /// [`a11y_id`](Element::a11y_id) is `id`: a combo box its open list, a
+    /// tab the panel it shows, a button the region it expands. Screen
+    /// readers offer to jump there (AT-SPI's controller-for / controlled-by
+    /// relations, UIA's `ControllerFor`, `AXLinkedUIElements`,
+    /// `aria-controls`). [`select`](crate::widgets::select) and the tab
+    /// strips with a [`panel`](crate::widgets::Tabs::panel) set it
+    /// themselves.
+    pub fn controls(mut self, id: impl Into<String>) -> Self {
+        self.semantics
+            .get_or_insert_with(Semantics::default)
+            .controls = Some(id.into());
+        self
+    }
+
+    /// Say this element (a [`Role::TreeItem`](crate::core::Role::TreeItem))
+    /// is at depth `level` of its tree, 1 for the top level, as
+    /// [`tree`](crate::widgets::tree) does for its rows. In a flat tree the
+    /// item before it one level up is then its parent (AT-SPI's
+    /// node-child-of / node-parent-of relations, UIA's `Level`,
+    /// `AXDisclosureLevel`, `aria-level`).
+    pub fn a11y_level(mut self, level: usize) -> Self {
+        self.semantics.get_or_insert_with(Semantics::default).level = Some(level.max(1));
+        self
+    }
+
     /// Enable wrapping. On a text element the text word-wraps to the element's
     /// content width across as many lines as needed. On a stack (row or
     /// column), children that don't fit the main axis flow onto new lines, with

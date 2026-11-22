@@ -355,7 +355,11 @@ checked, editable, password) and its bounds on screen. Actions: accessibility
 focus, click (a tap at the node's center), focus and select (the same tap),
 scroll forward and backward on any scroll container whose content overflows
 (a page, as a wheel over it, sideways for a horizontal strip; each offered
-only while it can go that way), set text (select all, then type). Changes to
+only while it can go that way), show on screen (`ACTION_SHOW_ON_SCREEN`,
+API 23 and later, on a node inside a container that scrolls: it is scrolled
+into view), set text (select all, then type). A click, focus or select on a
+node scrolled out of view scrolls it into view first and taps it there
+(`platform::access::reveal`). Changes to
 the tree send `TYPE_WINDOW_CONTENT_CHANGED`, a moved focus
 `TYPE_VIEW_FOCUSED`, and a container that scrolled `TYPE_VIEW_SCROLLED`. A hovering finger (TalkBack's explore by
 touch) goes to the host view, which announces the node under it. The host

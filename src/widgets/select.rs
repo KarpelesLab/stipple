@@ -361,7 +361,9 @@ pub fn select<S: 'static, T: AsRef<str>>(
                     hooks.changed(s);
                 }
             }
-        });
+        })
+        // The select controls its list (`Element::controls`).
+        .a11y_id(scroll.list_id());
         // It grows in from its button, and fades back out when it closes.
         let list = motion::popup(list, &theme.motion, t, (0.5, 0.0))
             .exit(motion::popup_exit(&theme.motion, (0.5, 0.0)));
@@ -417,6 +419,9 @@ pub fn select<S: 'static, T: AsRef<str>>(
     el.action = Some(tap);
     el.focus = Some(keys);
     cx.set_field_hooks(keys, hooks);
+    if open {
+        el = el.controls(scroll.list_id());
+    }
     // Known again when its search field gives the focus back.
     el.key(("stipple-select", tap)).role(Role::ComboBox)
 }

@@ -82,6 +82,11 @@ struct Node {
     scroll: Option<A11yScroll>,
     /// For a scroll bar, the scrolling it shows (its range info).
     bar: Option<A11yScroll>,
+    /// Its place in the tree (child indices from the root).
+    path: Vec<usize>,
+    /// Whether a scroll container that scrolls holds it (it can be scrolled
+    /// on screen: `ACTION_SHOW_ON_SCREEN`).
+    in_scroller: bool,
 }
 
 /// The tree the provider serves. `nodes[0]` is the root (the host view).
@@ -91,12 +96,16 @@ struct Tree {
     /// The node TalkBack has its focus on, and the one under a hovering finger.
     a11y_focus: i32,
     hover: i32,
+    /// The tree the nodes were flattened from: an action on a node scrolled
+    /// out of view brings it into view first (`access::reveal`).
+    source: Option<A11yNode>,
 }
 
 static TREE: Mutex<Tree> = Mutex::new(Tree {
     nodes: Vec::new(),
     a11y_focus: HOST_VIEW_ID,
     hover: HOST_VIEW_ID,
+    source: None,
 });
 
 fn tree() -> std::sync::MutexGuard<'static, Tree> {
@@ -153,7 +162,14 @@ fn new_alert(old: &[Node], new: &[Node]) -> Option<i32> {
 /// `scale`) into the tree the provider serves. On the UI thread. Returns what
 /// changed.
 pub(super) fn update(root: &A11yNode, content: ARect, scale: f64) -> Changes {
-    fn walk(n: &A11yNode, parent: i32, content: ARect, scale: f64, out: &mut Vec<Node>) -> i32 {
+    struct At<'a> {
+        content: ARect,
+        scale: f64,
+        path: &'a mut Vec<usize>,
+        in_scroller: bool,
+    }
+    fn walk(n: &A11yNode, parent: i32, at: &mut At<'_>, out: &mut Vec<Node>) -> i32 {
+        let (content, scale) = (at.content, at.scale);
         let id = out.len() as i32;
         let (x, y, w, h) = n.bounds;
         let px = |v: f64, origin: i32| (v * scale).round() as i32 + origin;
@@ -184,21 +200,34 @@ pub(super) fn update(root: &A11yNode, content: ARect, scale: f64) -> Changes {
             visible,
             scroll: n.scroll,
             bar: n.scroll_bar,
+            path: at.path.clone(),
+            in_scroller: at.in_scroller,
         });
-        let children: Vec<i32> = n
-            .children
-            .iter()
-            .map(|c| walk(c, id, content, scale, out))
-            .collect();
+        let was = at.in_scroller;
+        at.in_scroller |= n.scroll.is_some_and(|s| s.scrolls());
+        let mut children = Vec::with_capacity(n.children.len());
+        for (i, c) in n.children.iter().enumerate() {
+            at.path.push(i);
+            children.push(walk(c, id, at, out));
+            at.path.pop();
+        }
+        at.in_scroller = was;
         out[id as usize].children = children;
         id
     }
     let mut nodes = Vec::new();
-    walk(root, 0, content, scale, &mut nodes);
+    let mut at = At {
+        content,
+        scale,
+        path: &mut Vec::new(),
+        in_scroller: false,
+    };
+    walk(root, 0, &mut at, &mut nodes);
     let mut t = tree();
     if t.nodes == nodes {
         return Changes::default();
     }
+    t.source = Some(root.clone());
     let focus_of = |nodes: &[Node]| {
         nodes
             .iter()
@@ -587,6 +616,27 @@ fn node_info(jni: &Jni, id: i32) -> Option<JObject> {
     for a in actions {
         jni.call_void(info, c"addAction", c"(I)V", &[JValue { i: a }])?;
     }
+    // Inside a list that scrolls, it can be brought on screen (API 23).
+    if node.in_scroller
+        && let Some(show) = show_on_screen(jni)
+        && let Some(action) = jni.new_named(
+            c"android/view/accessibility/AccessibilityNodeInfo$AccessibilityAction",
+            c"(ILjava/lang/CharSequence;)V",
+            &[
+                JValue { i: show },
+                JValue {
+                    l: std::ptr::null_mut(),
+                },
+            ],
+        )
+    {
+        let _ = jni.call_void(
+            info,
+            c"addAction",
+            c"(Landroid/view/accessibility/AccessibilityNodeInfo$AccessibilityAction;)V",
+            &[JValue { l: action }],
+        );
+    }
     Some(info)
 }
 
@@ -646,6 +696,36 @@ fn send_event(jni: &Jni, id: i32, kind: i32) -> Option<()> {
     Some(())
 }
 
+/// `android.R.id.accessibilityActionShowOnScreen` (API 23; `None` before).
+fn show_on_screen(jni: &Jni) -> Option<i32> {
+    static ID: std::sync::OnceLock<Option<i32>> = std::sync::OnceLock::new();
+    *ID.get_or_init(|| jni.static_int(c"android/R$id", c"accessibilityActionShowOnScreen"))
+}
+
+/// The events that bring node `path` into view, then tap it there (`tap`:
+/// with the tap), from the tree the nodes came from.
+fn revealed(path: &[usize], tap: bool) -> Option<Vec<Event>> {
+    let t = tree();
+    let root = t.source.as_ref()?;
+    if tap {
+        root.activate_events(path)
+    } else {
+        root.scroll_into_view_events(path)
+    }
+}
+
+/// Tap `node`, brought into view first when a scroll container hides it.
+fn tap_node(node: &Node) {
+    match revealed(&node.path, true) {
+        Some(events) => {
+            for event in events.into_iter().chain([Event::PointerLeft]) {
+                post_command(Command::Deliver(event));
+            }
+        }
+        None => tap(node.center),
+    }
+}
+
 /// Tap `at` (logical pixels), as a finger would.
 fn tap(at: Point) {
     for event in [
@@ -697,7 +777,7 @@ fn act(jni: &Jni, id: i32, action: i32, args: JObject) -> bool {
             true
         }
         ACTION_CLICK | ACTION_FOCUS | ACTION_SELECT => {
-            tap(node.center);
+            tap_node(&node);
             if action == ACTION_CLICK {
                 send_event(jni, id, TYPE_VIEW_CLICKED);
             }
@@ -716,6 +796,13 @@ fn act(jni: &Jni, id: i32, action: i32, args: JObject) -> bool {
             post_command(Command::Deliver(Event::Scroll {
                 delta: ScrollDelta::pixels(dx, dy),
             }));
+            true
+        }
+        _ if Some(action) == show_on_screen(jni) && node.in_scroller => {
+            // Scrolled until it shows (nothing when it does already).
+            for event in revealed(&node.path, false).unwrap_or_default() {
+                post_command(Command::Deliver(event));
+            }
             true
         }
         ACTION_SET_TEXT if editable(node.role) => {

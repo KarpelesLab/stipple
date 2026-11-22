@@ -38,6 +38,8 @@
 mod getting_started {}
 
 #[cfg(test)]
+mod a11y_relations_tests;
+#[cfg(test)]
 mod a11y_scroll_tests;
 pub mod anim;
 mod app_clipboard;
@@ -5394,6 +5396,8 @@ pub(crate) fn to_platform_a11y(node: &crate::core::AccessNode) -> crate::platfor
         text_selection: node.text_selection,
         id: node.id.clone(),
         labelled_by: node.labelled_by.clone(),
+        controls: node.controls.clone(),
+        level: node.level,
         placeholder: node.placeholder.clone(),
         scroll: node.scroll.map(scroll),
         scroll_bar: node.scroll_bar.map(scroll),

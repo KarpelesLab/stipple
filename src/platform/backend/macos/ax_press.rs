@@ -61,6 +61,16 @@ pub(super) fn press_class() -> Class {
 /// `accessibilityPerformPress`: click the middle of the element, in the
 /// window whose view it is under. `NO` when it isn't under one any more.
 extern "C" fn perform_press(this: Id, _cmd: Sel) -> bool {
+    // Scrolled out of view: the scroll that brings it back first, then the
+    // click where it lands (see `access::reveal`).
+    let revealed = super::ax_value::act_on_node(this, |root, path| {
+        root.scroll_into_view_events(path)?;
+        println!("Cocoa a11y: AXPress on a node out of view: scrolled to it first");
+        root.activate_events(path)
+    });
+    if let Some(queued) = revealed {
+        return queued;
+    }
     unsafe {
         // The view: up the parents (each element's parent is set when it's
         // made; the top one's is the view).

@@ -2812,9 +2812,8 @@ Most input only works on X11 today.
   selection set from outside, the relations, and that the app is found again
   after `at-spi2-registryd` is restarted; a separate step (not failing the job
   yet) restarts `at-spi-bus-launcher`. All pass locally under Xvfb (sway not
-  tried locally); not yet seen in CI. Left: the X root window's `AT_SPI_BUS`
-  property, controller-for / member-of relations (the tree doesn't know them),
-  relations, caret and selection on the other desktops' bridges.
+  tried locally); not yet seen in CI. (The X root window's `AT_SPI_BUS`,
+  the other relations and the other desktops' bridges: see the next items.)
 - ✅ Accessibility depth found by the out-of-process checks and the screen
   readers. **Scrolling:** a scroll container's node says where it is
   scrolled (`AccessNode::scroll`, an `AccessScroll`: offset, range, viewport,
@@ -2849,10 +2848,47 @@ Most input only works on X11 today.
   and `uiademo --patterns` (Windows) now pass and are required; NVDA and Orca report whether they
   speak the toast. The Windows, macOS and iOS code is build- and
   clippy-checked only. Left: UIA text attributes, text-selection and
-  text-changed events, RangeValue, Grid / Table and `LabeledBy`; macOS title
-  elements and static text values; an activation of an item scrolled out
-  of view lands outside the viewport (screen readers bring it into view
-  first); the sway walk doesn't run the depth checks.
+  text-changed events, RangeValue, Grid / Table and `LabeledBy`; the sway
+  walk doesn't run the depth checks. (macOS title elements, static text
+  values and activations out of view: see the next item.)
+- ✅ Relations, the accessibility bus from the X root window, and acting on
+  what's scrolled out of view. **Model:** `Element::controls(id)` (the new
+  `AccessNode::controls`: a `select` and a `combo_box` control their open
+  list, a `TabBar` with a `panel(id)` its panel) and `Element::a11y_level`
+  (`AccessNode::level`, which `tree` sets on its rows);
+  `platform::access::relations` works out, for every bridge, labelled-by /
+  label-for, controller-for / controlled-by, member-of (radio buttons side
+  by side: `radio`s, `choice_chips`) and node-child-of / node-parent-of (a
+  flat tree's parent item, by level; a nested one's by place). **AT-SPI:**
+  all of them in `GetRelationSet`, a tree item's `level` attribute; the bus
+  is looked for as `libatspi` does: `$AT_SPI_BUS_ADDRESS`, the X root
+  window's `AT_SPI_BUS` (read by the X11 backend at connection and on
+  change), then the session bus, each tried until one connects. **UIA:**
+  `ControllerFor`, a tree item's `Level` (caret and selection were there
+  already: the Text pattern's `GetSelection` and range `Select`). **macOS:**
+  `AXTitleUIElement` / `AXServesAsTitleForUIElements`, `AXLinkedUIElements`,
+  outline rows' `AXDisclosureLevel` / `AXDisclosedByRow` /
+  `AXDisclosedRows`, and static text's `AXValue`, `AXNumberOfCharacters`
+  and selected range. **Web:** `aria-controls`, `aria-level`.
+  **Out of view:** `platform::access::reveal` scrolls every container on
+  the way to a node (outermost first, the wheel kept off inner containers
+  scrolling the same way) and gives where its middle lands; every
+  activation and focus goes through it (AT-SPI's click and `GrabFocus`,
+  UIA's Invoke / Toggle / SelectionItem / ExpandCollapse, `AXPress` on
+  Stipple's elements, Android's click, focus and select plus the new
+  `ACTION_SHOW_ON_SCREEN`, the web overlay's click), so a click on an item
+  scrolled out of its list lands on it. App tests
+  (`src/a11y_relations_tests.rs`) and unit tests; the AT-SPI walks
+  (`atspi-relations.sh` on `widgetsdemo` and `mediabrowser`,
+  `atspi-x11-bus.sh`, and the depth walk's "Row 2" now clicked while out of
+  view) pass locally under Xvfb and passed in a CI run (on a scratch
+  branch), not failing the job yet; `uiademo --relations` passed there too
+  (non-blocking), as did the Windows, NVDA, web and Android jobs.
+  `axprobe --links` (non-blocking) hasn't run: the macOS code is build- and
+  clippy-checked only. Left: iOS's
+  `accessibilityActivate` taps the element's frame without scrolling;
+  `AXScrollToVisible` still can't be added (see above); UIA's `LabeledBy`
+  (another item).
 - ✅ Keyboard focus for buttons and the other controls a tap activates
   (`core::tab_focus`): an `on_tap` element whose role is a button, checkbox,
   switch, tab, select, list or tree item, row, cell or column header (not a

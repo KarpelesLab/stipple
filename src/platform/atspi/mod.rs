@@ -3,8 +3,9 @@
 //! [`crate::platform::a11y`]; no `libatspi`, `atk` or `zbus`.
 //!
 //! On the first [`Window::set_accessibility_tree`] a helper thread finds the
-//! accessibility bus (`$AT_SPI_BUS_ADDRESS`, or `org.a11y.Bus.GetAddress` on
-//! the session bus, which starts `at-spi-bus-launcher` when needed), connects
+//! accessibility bus (`$AT_SPI_BUS_ADDRESS`, the X root window's `AT_SPI_BUS`
+//! property, or `org.a11y.Bus.GetAddress` on the session bus, which starts
+//! `at-spi-bus-launcher` when needed; see [`address`]), connects
 //! to it and registers the app with the registry (`org.a11y.atspi.Socket.Embed`
 //! on `org.a11y.atspi.Registry`'s root). With no session bus or no
 //! accessibility bus it gives up quietly and the app runs as before; it never
@@ -29,7 +30,12 @@
 //! [`Ime::SetSelection`](crate::platform::Ime::SetSelection)), and `Value`
 //! (a spin button's number). `GetRelationSet` gives labelled-by / label-for
 //! between a field and its caption
-//! ([`Element::labelled_by`](crate::core::Element::labelled_by)).
+//! ([`Element::labelled_by`](crate::core::Element::labelled_by)),
+//! controller-for / controlled-by ([`Element::controls`](crate::core::Element::controls):
+//! a select's open list, a tab's panel), member-of (a radio group) and
+//! node-child-of / node-parent-of (a tree item's parent; its depth is its
+//! `level` attribute), from `access::relations`. An action or focus on a
+//! node scrolled out of view brings it into view first.
 //!
 //! The UI thread raises the events when it swaps a tree: names, roles,
 //! text, carets and selections, checked/selected/expanded states and
@@ -37,15 +43,17 @@
 //! and `focus:`); a window's activation raises `window:activate` /
 //! `window:deactivate`.
 
+mod address;
 mod events;
 mod marshal;
 mod registry;
 mod serve;
 mod text;
 
-use crate::platform::a11y::{DBus, put_field, put_field_sig, put_field_u32};
+use crate::platform::a11y::{put_field, put_field_sig, put_field_u32};
 use crate::platform::access::{A11yNode, A11yRole};
 use crate::platform::{ControlFlow, Event, Window, WindowId};
+pub(crate) use address::set_x11_address;
 use events::Signal;
 use marshal::{Body, Value};
 use std::io::Write;
@@ -493,37 +501,12 @@ fn embed(writer: &mut Writer, name: &str) -> Result<u32, String> {
     )
 }
 
-/// The accessibility bus's address.
-fn bus_address() -> Result<String, String> {
-    if let Ok(addr) = std::env::var("AT_SPI_BUS_ADDRESS")
-        && !addr.is_empty()
-    {
-        return Ok(addr);
-    }
-    let session = match std::env::var("DBUS_SESSION_BUS_ADDRESS") {
-        Ok(a) if !a.is_empty() => a,
-        _ => {
-            // The systemd user bus, where the variable isn't set.
-            let dir = std::env::var("XDG_RUNTIME_DIR").map_err(|_| "no session bus")?;
-            let path = format!("{dir}/bus");
-            if !std::path::Path::new(&path).exists() {
-                return Err("no session bus".into());
-            }
-            format!("unix:path={path}")
-        }
-    };
-    let mut bus = DBus::connect_address(&session)?;
-    bus.set_read_timeout(Some(std::time::Duration::from_secs(10)));
-    bus.a11y_bus_address()
-}
-
 /// Connect, register with the registry, then answer calls until the
 /// connection drops; `connected` is set once the bus is reached. The
 /// registry restarting (its name changing owner) registers the app again.
 fn run(connected: &mut bool) -> Result<(), String> {
-    let addr = bus_address()?;
+    let (mut bus, addr) = address::connect()?;
     debug(format_args!("accessibility bus at {addr}"));
-    let mut bus = DBus::connect_address(&addr)?;
     *connected = true;
     let name = bus.unique_name().to_string();
     if let Err(e) = bus.add_match(registry::OWNER_RULE) {

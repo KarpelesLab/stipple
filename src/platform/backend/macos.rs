@@ -36,6 +36,9 @@ use crate::render::{Pixmap, Surface};
 
 /// Keyboard focus through NSAccessibility (`AXFocused`, focus changes).
 mod ax_focus;
+/// Title elements, linked elements, outline rows' disclosure and static
+/// text values, set once a window's elements are made.
+mod ax_links;
 /// What the elements say beyond role and label, and the notifications a
 /// tree swap posts (AppKit-free).
 mod ax_plan;
@@ -893,6 +896,7 @@ extern "C" fn acc_children(this: Id, _cmd: Sel) -> Id {
             let el = build_ax_element(child, this, this, Some(root), &mut vec![i]);
             msg_void_id(arr, sel("addObject:"), el);
         }
+        ax_links::link(arr, root);
         msg_id(arr, sel("retain"));
         if let Some((old, _)) = cache.replace((arr, at)) {
             msg_void(old, sel("release"));

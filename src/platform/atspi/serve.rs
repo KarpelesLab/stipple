@@ -282,8 +282,14 @@ impl Node<'_> {
     }
 
     /// The pointer events of a click at the node's middle.
+    /// Brought into view first, in the scroll containers around it, so
+    /// the click lands on it (see `access::reveal`).
     fn click(&self) -> Vec<Event> {
-        self.node.click_events()
+        self.win
+            .root
+            .as_deref()
+            .and_then(|root| root.activate_events(&self.chain))
+            .unwrap_or_else(|| self.node.click_events())
     }
 
     /// The caret as a character offset, where the tree says.
@@ -686,6 +692,15 @@ fn node(b: &Bridge, n: &Node, m: &Message) -> (Reply, Option<Vec<Event>>) {
                         ("container-live", "polite"),
                         ("atomic", "true"),
                     ]);
+                } else if let Some(level) = n
+                    .win
+                    .root
+                    .as_deref()
+                    .and_then(|root| root.tree_level(&n.chain))
+                {
+                    // A tree item's depth, 1 at the top (as `aria-level`).
+                    let level = level.to_string();
+                    r.str_dict(&[("toolkit", "Stipple"), ("level", &level)]);
                 } else {
                     r.str_dict(&[("toolkit", "Stipple")]);
                 }
@@ -801,50 +816,34 @@ fn caret(n: &Node) -> Option<i32> {
 /// `AtspiRelationType`.
 const RELATION_LABEL_FOR: u32 = 1;
 const RELATION_LABELLED_BY: u32 = 2;
+const RELATION_CONTROLLER_FOR: u32 = 3;
+const RELATION_CONTROLLED_BY: u32 = 4;
+const RELATION_MEMBER_OF: u32 = 5;
+const RELATION_NODE_CHILD_OF: u32 = 7;
+const RELATION_NODE_PARENT_OF: u32 = 8;
 
-/// The node's relations, each with the chains of the nodes it relates to in
-/// its window: labelled-by the nodes whose id is its `labelled_by`, and
-/// label-for the nodes naming its id.
+/// The node's relations (see `access::relations`), each with the chains of
+/// the nodes it relates to in its window.
 fn relations(n: &Node) -> Vec<(u32, Vec<Vec<usize>>)> {
     let Some(root) = n.win.root.as_deref() else {
         return Vec::new();
     };
-    let mut out = Vec::new();
-    if let Some(id) = &n.node.labelled_by {
-        let labels = find(root, &|m| m.id.as_ref() == Some(id));
-        if !labels.is_empty() {
-            out.push((RELATION_LABELLED_BY, labels));
-        }
-    }
-    if let Some(id) = &n.node.id {
-        let fields = find(root, &|m| m.labelled_by.as_ref() == Some(id));
-        if !fields.is_empty() {
-            out.push((RELATION_LABEL_FOR, fields));
-        }
-    }
-    out
-}
-
-/// The chains of the nodes under `root` (itself included) that `pred` picks.
-fn find(root: &A11yNode, pred: &dyn Fn(&A11yNode) -> bool) -> Vec<Vec<usize>> {
-    fn go(
-        n: &A11yNode,
-        pred: &dyn Fn(&A11yNode) -> bool,
-        chain: &mut Vec<usize>,
-        out: &mut Vec<Vec<usize>>,
-    ) {
-        if pred(n) {
-            out.push(chain.clone());
-        }
-        for (i, c) in n.children.iter().enumerate() {
-            chain.push(i);
-            go(c, pred, chain, out);
-            chain.pop();
-        }
-    }
-    let mut out = Vec::new();
-    go(root, pred, &mut Vec::new(), &mut out);
-    out
+    let r = root.relations(&n.chain);
+    [
+        (RELATION_LABELLED_BY, r.labelled_by),
+        (RELATION_LABEL_FOR, r.label_for),
+        (RELATION_CONTROLLER_FOR, r.controller_for),
+        (RELATION_CONTROLLED_BY, r.controlled_by),
+        (RELATION_MEMBER_OF, r.member_of),
+        (
+            RELATION_NODE_CHILD_OF,
+            r.node_child_of.into_iter().collect(),
+        ),
+        (RELATION_NODE_PARENT_OF, r.node_parent_of),
+    ]
+    .into_iter()
+    .filter(|(_, targets)| !targets.is_empty())
+    .collect()
 }
 
 fn component(bus: &str, n: &Node, member: &str, args: &mut Args) -> (Reply, Option<Vec<Event>>) {

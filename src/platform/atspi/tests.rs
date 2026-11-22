@@ -922,3 +922,71 @@ fn a_scroll_bar_is_a_scroll_bar_with_its_orientation_and_a_value() {
     );
     assert_eq!(last_wheel(&mut b), (0.0, 60.0));
 }
+
+#[test]
+fn relations_name_controls_groups_and_tree_parents() {
+    let mut b = Bridge::new();
+    b.bus = ":1.7".into();
+    let item = |name: &str, level| A11yNode {
+        level: Some(level),
+        ..leaf(A11yRole::TreeItem, name, (0.0, 0.0, 10.0, 10.0))
+    };
+    let radio = |name: &str| leaf(A11yRole::RadioButton, name, (0.0, 0.0, 10.0, 10.0));
+    b.win_mut(9).root = Some(Arc::new(A11yNode {
+        children: vec![
+            A11yNode {
+                controls: Some("list".into()),
+                ..leaf(A11yRole::ComboBox, "Apple", (0.0, 0.0, 40.0, 20.0))
+            },
+            A11yNode {
+                id: Some("list".into()),
+                ..leaf(A11yRole::List, "", (0.0, 20.0, 40.0, 40.0))
+            },
+            A11yNode {
+                children: vec![radio("A"), radio("B")],
+                ..leaf(A11yRole::Group, "", (0.0, 60.0, 40.0, 20.0))
+            },
+            A11yNode {
+                children: vec![item("root", 1), item("child", 2)],
+                ..leaf(A11yRole::Tree, "", (0.0, 80.0, 40.0, 20.0))
+            },
+        ],
+        ..leaf(A11yRole::Window, "Form", (0.0, 0.0, 200.0, 100.0))
+    }));
+    let mut relations = |path: &[usize]| {
+        relation_set(&ok(
+            call(
+                &mut b,
+                &node_path(9, path),
+                "org.a11y.atspi.Accessible",
+                "GetRelationSet",
+                Body::new(),
+            ),
+            "a(ua(so))",
+        ))
+    };
+    // CONTROLLER_FOR (3) / CONTROLLED_BY (4).
+    assert_eq!(relations(&[0]), vec![(3, vec![node_path(9, &[1])])]);
+    assert_eq!(relations(&[1]), vec![(4, vec![node_path(9, &[0])])]);
+    // MEMBER_OF (5): the whole group.
+    assert_eq!(
+        relations(&[2, 1]),
+        vec![(5, vec![node_path(9, &[2, 0]), node_path(9, &[2, 1])])]
+    );
+    // NODE_PARENT_OF (8) / NODE_CHILD_OF (7).
+    assert_eq!(relations(&[3, 0]), vec![(8, vec![node_path(9, &[3, 1])])]);
+    assert_eq!(relations(&[3, 1]), vec![(7, vec![node_path(9, &[3, 0])])]);
+    // The child's depth is its `level` attribute.
+    let attrs = ok(
+        call(
+            &mut b,
+            &node_path(9, &[3, 1]),
+            "org.a11y.atspi.Accessible",
+            "GetAttributes",
+            Body::new(),
+        ),
+        "a{ss}",
+    );
+    let text = String::from_utf8_lossy(&attrs);
+    assert!(text.contains("level") && text.contains('2'), "{text:?}");
+}

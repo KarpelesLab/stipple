@@ -126,6 +126,11 @@ pub struct A11yNode {
     pub id: Option<String>,
     /// The [`id`](Self::id) of the node that labels this one.
     pub labelled_by: Option<String>,
+    /// The [`id`](Self::id) of the node this one controls (a combo box's
+    /// open list, a tab's panel); see [`relations`].
+    pub controls: Option<String>,
+    /// A tree item's depth, 1 for the top level.
+    pub level: Option<usize>,
     /// A text field's hint, read while it's empty.
     pub placeholder: Option<String>,
     /// For a scroll container, where it is scrolled.
@@ -158,6 +163,8 @@ impl A11yNode {
             text_selection: None,
             id: None,
             labelled_by: None,
+            controls: None,
+            level: None,
             placeholder: None,
             scroll: None,
             scroll_bar: None,
@@ -272,8 +279,12 @@ impl A11yNode {
 
 mod actions;
 mod changes;
+mod relations;
+mod reveal;
 #[allow(unused_imports)]
 pub(crate) use changes::{A11yChange, changes};
+#[allow(unused_imports)]
+pub(crate) use relations::Relations;
 
 /// The ARIA role the web's bridge gives `role`; empty for none (static text,
 /// and the window root, which the page's overlay itself stands for).
@@ -371,6 +382,19 @@ pub(crate) fn aria_json(node: &A11yNode) -> String {
         }
         if let Some(c) = n.checked {
             let _ = write!(out, ",\"c\":{}", u8::from(c));
+        }
+        // What `aria-controls` names (by the target's id, its "i") and a
+        // tree item's `aria-level`.
+        if let Some(id) = &n.id {
+            out.push_str(",\"i\":");
+            string(out, id);
+        }
+        if let Some(id) = &n.controls {
+            out.push_str(",\"ct\":");
+            string(out, id);
+        }
+        if let (A11yRole::TreeItem, Some(level)) = (n.role, n.level) {
+            let _ = write!(out, ",\"lv\":{level}");
         }
         if let Some(s) = n.scroll {
             let _ = write!(
@@ -531,7 +555,16 @@ mod tests {
                 A11yNode {
                     selected: true,
                     expanded: Some(false),
+                    level: Some(2),
                     ..leaf(A11yRole::TreeItem, "src")
+                },
+                A11yNode {
+                    controls: Some("menu".into()),
+                    ..leaf(A11yRole::ComboBox, "Pick")
+                },
+                A11yNode {
+                    id: Some("menu".into()),
+                    ..leaf(A11yRole::List, "")
                 },
                 A11yNode {
                     scroll: Some(A11yScroll {
@@ -553,7 +586,9 @@ mod tests {
                 r#"{"r":"","n":"Say \"hi\"\\\u000a","b":[0,0,0,0],"f":0},"#,
                 r#"{"r":"textbox","n":"abc","b":[1,3,30,10],"f":1,"p":"Name"},"#,
                 r#"{"r":"checkbox","n":"Bold","b":[0,0,0,0],"f":0,"c":1},"#,
-                r#"{"r":"treeitem","n":"src","b":[0,0,0,0],"f":0,"s":1,"e":0},"#,
+                r#"{"r":"treeitem","n":"src","b":[0,0,0,0],"f":0,"s":1,"e":0,"lv":2},"#,
+                r#"{"r":"combobox","n":"Pick","b":[0,0,0,0],"f":0,"ct":"menu"},"#,
+                r#"{"r":"listbox","n":"","b":[0,0,0,0],"f":0,"i":"menu"},"#,
                 r#"{"r":"","n":"","b":[0,0,0,0],"f":0,"sc":[12,300,0,0]}]}"#,
             )
         );

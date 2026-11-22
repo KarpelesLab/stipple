@@ -3356,6 +3356,18 @@ jobs:
           .github\scripts\uia-roles.ps1 -Exe target\release\examples\touchdemo.exe `
             -Title "Stipple Touch" -Out visual_output -Expect "ScrollBar|*","Pane|*"
 
+      # Relations in-process (uiademo --relations): a combo box's
+      # ControllerFor names its list, a flat tree's item has its Level, and
+      # an Invoke on a row scrolled out of view scrolls, then clicks inside
+      # the viewport. New, so it doesn't fail the job yet.
+      - name: UI Automation relations (non-blocking)
+        continue-on-error: true
+        shell: powershell
+        run: |
+          cargo build --release --example uiademo
+          .\target\release\examples\uiademo.exe --relations
+          if ($LASTEXITCODE -ne 0) { throw "uiademo --relations failed" }
+
       - name: Timers and background work wake the event loop
         shell: bash
         run: |
@@ -4823,6 +4835,34 @@ jobs:
           grep 'axprobe: depth notification' $L || echo "no notifications heard"
           exit $fail
 
+      # What elements say of each other, from outside the app (axprobe
+      # --links): the text field's AXTitleUIElement is its caption "Note",
+      # the static text "Rows tapped: N" has its text as its AXValue, and
+      # AXPress on "Row 20", scrolled out of the list, scrolls it into view
+      # and presses it (the app logs the tap). New, so it doesn't fail the
+      # job.
+      - name: Title elements, static text values and a press out of view (AX API, non-blocking)
+        continue-on-error: true
+        run: |
+          ./target/release/examples/touchdemo > visual_output/touchdemo-links.log 2>&1 &
+          PID=$!
+          sleep 5
+          status=0
+          perl -e 'alarm 90; exec @ARGV' ./axprobe "$PID" --links > visual_output/axprobe-links.log 2>&1 || status=$?
+          kill "$PID" 2>/dev/null || true
+          L=visual_output/axprobe-links.log
+          A=visual_output/touchdemo-links.log
+          cat $L
+          if [ "$status" = 3 ]; then
+            echo "::warning::macOS AX API refused to this process; the links checks didn't run"
+            exit 0
+          fi
+          [ "$status" = 0 ]
+          grep -q 'axprobe: links field title element role=AXStaticText desc="Note"' $L
+          grep -qE 'axprobe: links static text value="Rows tapped: [0-9]+"' $L
+          grep -q 'axprobe: links AXPress "Row 20" -> AXError 0$' $L
+          grep -q '^touchdemo: row 20 tapped' $A
+
       # The reference app's tree as VoiceOver reads it (axprobe, built and
       # trusted by the steps above): the folder outline, the table, the
       # player's Play button (pressed through AXPress) and its slider.
@@ -5039,6 +5079,33 @@ jobs:
           cargo build --release --example mediabrowser
           DISPLAY=:99 dbus-run-session -- \
             bash .github/scripts/atspi-mediabrowser.sh target/release/examples/mediabrowser visual_output
+
+      # Relations, followed from outside as Orca does: widgetsdemo's "Size"
+      # select, opened by its click action, is controller-for its list (and
+      # the list controlled-by it), its "Format" chips are one radio group
+      # (member-of), and the media browser's folder "Music" is
+      # node-child-of the root folder one level up (its "level" attribute),
+      # which is node-parent-of it. Passes locally under Xvfb; not yet seen
+      # on the runner, so it doesn't fail the job.
+      - name: Relations through AT-SPI (X11, non-blocking)
+        continue-on-error: true
+        run: |
+          cargo build --release --example widgetsdemo
+          DISPLAY=:99 dbus-run-session -- bash .github/scripts/atspi-relations.sh \
+            visual_output "controls radios" -- target/release/examples/widgetsdemo
+          DISPLAY=:99 dbus-run-session -- bash .github/scripts/atspi-relations.sh \
+            visual_output "tree=Music" -- target/release/examples/mediabrowser --sample --select Music/chime.wav
+
+      # The accessibility bus found from the X root window's AT_SPI_BUS
+      # property alone, with no session bus for the app to ask (as libatspi
+      # finds it over ssh -X or under sudo). Passes locally under Xvfb; not
+      # yet seen on the runner, so it doesn't fail the job.
+      - name: Find the accessibility bus through the X root window (non-blocking)
+        continue-on-error: true
+        run: |
+          sudo apt-get install -y python3-xlib
+          DISPLAY=:99 dbus-run-session -- \
+            bash .github/scripts/atspi-x11-bus.sh target/release/examples/touchdemo visual_output
 
       # The accessibility bus itself restarting (at-spi-bus-launcher killed,
       # then started again on demand): the app reconnects and registers

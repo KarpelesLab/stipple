@@ -5,6 +5,7 @@
 //
 //   axprobe <pid> [button label to press]
 //   axprobe <pid> --depth
+//   axprobe <pid> --links
 //
 // It prints "axprobe: trusted=<bool>" (AXIsProcessTrusted: whether TCC lets
 // this process use the AX API), then every element under the app's windows
@@ -16,7 +17,9 @@
 //
 // With --depth it checks the values, text ranges, checkbox, scroll area and
 // actions instead (see runDepth at the end), printing "axprobe: depth ..."
-// lines for the CI step to check.
+// lines for the CI step to check. With --links it checks what elements say
+// of each other and a press out of view (see runLinks at the end), printing
+// "axprobe: links ..." lines.
 import ApplicationServices
 import Foundation
 
@@ -27,7 +30,8 @@ guard CommandLine.arguments.count >= 2, let pid = pid_t(CommandLine.arguments[1]
     exit(2)
 }
 let depthMode = CommandLine.arguments.count >= 3 && CommandLine.arguments[2] == "--depth"
-let press = CommandLine.arguments.count >= 3 && !depthMode ? CommandLine.arguments[2] : nil
+let linksMode = CommandLine.arguments.count >= 3 && CommandLine.arguments[2] == "--links"
+let press = CommandLine.arguments.count >= 3 && !depthMode && !linksMode ? CommandLine.arguments[2] : nil
 
 print("axprobe: trusted=\(AXIsProcessTrusted())")
 
@@ -117,6 +121,11 @@ if windows.isEmpty {
 }
 if depthMode {
     runDepth()
+    print("axprobe: done")
+    exit(0)
+}
+if linksMode {
+    runLinks()
     print("axprobe: done")
     exit(0)
 }
@@ -318,5 +327,46 @@ func runDepth() {
             print("axprobe: depth AXScrollToVisible \"Row 0\" -> AXError \(err.rawValue)")
             settle()
         }
+    }
+}
+
+// ---- --links --------------------------------------------------------------
+
+// The field's caption as its AXTitleUIElement (touchdemo's "Note"), static
+// text's AXValue ("Rows tapped: N"), and AXPress on "Row 20", scrolled out
+// of the list: the app must log that row's tap (it is scrolled into view
+// first).
+func runLinks() {
+    if let field = find("AXTextField") {
+        let (err, v) = copy(field, kAXTitleUIElementAttribute)
+        if err == .success, let v {
+            let title = v as! AXUIElement
+            print("axprobe: links field title element role=\(string(title, kAXRoleAttribute) ?? "?") "
+                  + "desc=\"\(string(title, kAXDescriptionAttribute) ?? "")\"")
+        } else {
+            print("axprobe: links field title element none (AXError \(err.rawValue))")
+        }
+    } else {
+        print("axprobe: links no text field")
+    }
+    if let label = allElements().first(where: { $0.0 == "AXStaticText" && $0.1.hasPrefix("Rows tapped") })?.2 {
+        print("axprobe: links static text value=\"\(string(label, kAXValueAttribute) ?? "")\" "
+              + "characters=\(string(label, kAXNumberOfCharactersAttribute) ?? "?")")
+    } else {
+        print("axprobe: links no static text 'Rows tapped'")
+    }
+    if let row = find("AXButton", "Row 20") {
+        if let f = frame(row) {
+            print("axprobe: links Row 20 frame before=\(Int(f.minX)),\(Int(f.minY))")
+        }
+        let err = AXUIElementPerformAction(row, kAXPressAction as CFString)
+        print("axprobe: links AXPress \"Row 20\" -> AXError \(err.rawValue)")
+        settle()
+        settle()
+        if let again = find("AXButton", "Row 20"), let f = frame(again) {
+            print("axprobe: links Row 20 frame after=\(Int(f.minX)),\(Int(f.minY))")
+        }
+    } else {
+        print("axprobe: links no button 'Row 20'")
     }
 }

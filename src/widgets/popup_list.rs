@@ -28,6 +28,12 @@ pub(crate) struct ListScroll {
 }
 
 impl ListScroll {
+    /// The accessibility id of the list this scrolls, which the control
+    /// opening it [`controls`](Element::controls).
+    pub(crate) fn list_id(&self) -> String {
+        format!("stipple-popup-list-{}", self.id.0)
+    }
+
     /// The scroll container of a list of `rows` rows. Register it on every
     /// build, open or closed, so the scroll containers declared after it
     /// keep their ids (and offsets).

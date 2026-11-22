@@ -51,17 +51,57 @@ that scrolls that way (`platform::access`, shared by the bridges):
 | Windows | a pane (or the list) with the Scroll pattern; its items have ScrollItem | `SetScrollPercent`, `Scroll` (a page or a line), `ScrollIntoView` |
 | macOS | an `AXScrollArea` (a list keeps its role) with an `AXScrollBar` | the bar's `AXValue` (0 to 1), `AXIncrement` / `AXDecrement` |
 | iOS | elements inside it | `accessibilityScroll:` (VoiceOver's three-finger swipe), a page, with "Page N of M" |
-| Android | a scrollable node | `ACTION_SCROLL_FORWARD` / `BACKWARD`, a page, offered only where it can go; `TYPE_VIEW_SCROLLED` when it moved |
+| Android | a scrollable node | `ACTION_SCROLL_FORWARD` / `BACKWARD`, a page, offered only where it can go; `ACTION_SHOW_ON_SCREEN` on what's inside; `TYPE_VIEW_SCROLLED` when it moved |
 | Linux | a scroll pane (a list keeps its role) with `Value` (the offset) | `Action` "scroll forward" / "scroll backward", setting `Value.CurrentValue`, `Component.ScrollTo` on what's inside |
 | Web | the overlay element, with the scroll in its data | focus moving to a control scrolled out of view brings it back |
 
-A page is 80% of the viewport. App tests (`src/a11y_scroll_tests.rs`) scroll
-a plain container a page, to its end and back to an item through the events
-the bridges make, and check the tree's offsets follow. Not covered: a click
-(an activation) on an item scrolled out of view lands where the item is laid
-out, outside the viewport, so a screen reader has to bring it into view first
-(they do, on most platforms, before activating); a container inside another
-under its middle can take a wheel meant for the outer one.
+A page is 80% of the viewport. Bringing a node into view
+(`platform::access::reveal`) scrolls every container on the way down to it,
+outermost first, by the least that shows it whole, each with a wheel over a
+part of that container that shows and isn't an inner container scrolling
+the same way. **An activation or a focus on a node scrolled out of view
+brings it into view first**, then clicks it where it then is (its middle,
+within what the containers show): AT-SPI's "click" action and `GrabFocus`,
+UIA's Invoke, Toggle, SelectionItem and ExpandCollapse, macOS's `AXPress`
+on Stipple's own elements, Android's click, focus and select, and the web
+overlay's click. Before, the click landed where the item was laid out,
+outside the viewport, on whatever was drawn there (or outside the window).
+
+App tests (`src/a11y_scroll_tests.rs`, `src/a11y_relations_tests.rs`)
+scroll a plain container a page, to its end and back to an item through the
+events the bridges make, check the tree's offsets follow, and activate an
+item laid out below its list in one delivery (the scroll, then the click):
+the item's handler runs (a bare click at its middle misses it) and it is in
+view after. Not covered: iOS's `accessibilityActivate` still taps the
+element's frame (VoiceOver only stops on what shows there).
+
+## Relations
+
+The tree says how nodes relate (`AccessNode`, and `platform::access::relations`
+works the relations out once for every bridge):
+
+- **labelled-by / label-for**: a control names its caption with
+  `Element::labelled_by(id)`, the caption having `Element::a11y_id(id)`.
+- **controller-for / controlled-by**: `Element::controls(id)` names the
+  element a control controls. A `select` and a `combo_box` control their
+  open list (an id they give it), a `TabBar` with a `panel(id)` has its
+  selected tab control that panel; an app marks others itself.
+- **member-of**: radio buttons side by side under one parent (a column of
+  `radio`s, `choice_chips`) are one group, each a member of it.
+- **node-child-of / node-parent-of**: a tree item's parent item. `tree`
+  gives each row its depth (`Element::a11y_level`, 1 at the top); in such a
+  flat tree the nearest item before one, a level up, is its parent. Tree
+  items nested in tree items are related by where they sit.
+
+| Platform | Labels | Controls | Groups and tree items |
+| --- | --- | --- | --- |
+| Linux (AT-SPI) | `labelled-by` / `label-for` | `controller-for` / `controlled-by` | `member-of`; `node-child-of` / `node-parent-of`, and a tree item's `level` attribute |
+| Windows (UIA) | (the field's name is its caption) | `ControllerFor` | a tree item's `Level`; UIA fills in `PositionInSet` / `SizeOfSet` from the siblings |
+| macOS | `AXTitleUIElement` / `AXServesAsTitleForUIElements` | `AXLinkedUIElements` | an outline row's `AXDisclosureLevel`, `AXDisclosedByRow`, `AXDisclosedRows` |
+| Web | (the field's name is its caption) | `aria-controls` | a tree item's `aria-level` |
+
+Ids are matched within a window's tree. Nothing is inferred beyond the
+above: a label beside a field without them isn't related to it.
 
 ### Scroll bars
 
@@ -201,6 +241,12 @@ the scroll math and the events a swap plans are worked out without COM in
   on their items and on radio buttons (select is a click).
 - **ExpandCollapse** on what expands and on selects (a tree item opens with
   a click and the arrow key its tree takes).
+- **Relations** (`uia/relations.rs`): `ControllerFor` names the elements a
+  node controls (a select's open list, a tab's panel) and a tree item has its
+  `Level` (see [Relations](#relations)). Invoke, Toggle, SelectionItem and
+  ExpandCollapse on a node scrolled out of view scroll it into view before
+  their click (`uiademo --relations` checks the properties and a scrolled
+  Invoke in-process, in a step that doesn't fail the job yet).
 - **Scroll** on scroll containers (a plain `Element::scrollable` is a Pane):
   the percentages and view sizes, `Scroll` a page or a line, and
   `SetScrollPercent`; **ScrollItem** on what they hold (`ScrollIntoView`).
@@ -341,6 +387,16 @@ by the AppKit-free `macos/ax_plan.rs`):
   for it, and overriding the legacy `accessibilityActionNames` to add one
   left every element with no actions as AppKit reported them (`AXPress`
   included; seen in CI), so it was taken out.
+- **Links and static text** (`macos/ax_links.rs`, set once a window's
+  elements are made): a control `labelled_by` a caption has the caption's
+  element as its `AXTitleUIElement` (and the caption it among its
+  `AXServesAsTitleForUIElements`), a control has what it controls among its
+  `AXLinkedUIElements`, a tree item its `AXDisclosureLevel` (0 at the top),
+  `AXDisclosedByRow` and `AXDisclosedRows`, and static text its text as its
+  `AXValue` (its label stays), with `AXNumberOfCharacters` and, for
+  selectable text with a selection, `AXSelectedTextRange` / `AXSelectedText`.
+  `AXPress` on an element scrolled out of view scrolls it into view before
+  its click (a live `NSButton` presses itself).
 - **Notifications.** A tree swap posts what changed on the rebuilt elements:
   `AXTitleChanged`, `AXValueChanged` (a field's text, a check, a scroll
   bar), `AXSelectedTextChanged`, `AXSelectedChildrenChanged` /
@@ -397,14 +453,18 @@ its selected range is set and read back, the "Remember" checkbox reads 0,
 then 1 after `AXPress` (the app logs it), "Row 2" raises a toast, the list
 is an `AXScrollArea` whose scroll bar's value, set to 0.5, scrolls it; an `AXObserver` reports the
 notifications it hears. It hasn't run on a runner yet, so it doesn't fail
-the job.
+the job. Another, *Title elements, static text values and a press out of
+view*, runs `axprobe --links`: the field's `AXTitleUIElement` must be the
+static text "Note", "Rows tapped: N" must have its text as its `AXValue`,
+and `AXPress` on "Row 20", below the list, must reach the app; new, and
+doesn't fail the job.
 
-Not covered: static text has no `AXValue` (its label carries the text); no
-title elements (a field's caption is its label instead); the elements are
+Not covered: the elements are
 built again after each tree change (or when the window moves), so an
 observer registered on an old element goes quiet; no `AXScrollToVisible`
 (see above). The depth checks haven't passed on a runner yet: build- and
-clippy-checked, with the AppKit-free logic unit-tested on every host.
+clippy-checked, with the AppKit-free logic unit-tested on every host; so
+are the links (`ax_links.rs`).
 
 ## iOS
 
@@ -451,7 +511,10 @@ the closest widget class (`Button`, `EditText`, `TextView`...), text, state
 actions (accessibility focus, click, focus, select, set text, and scroll on
 every scroll container whose content overflows: a page forward or back,
 each offered only while it can go that way, sideways for a horizontal
-strip; a container that scrolled sends `TYPE_VIEW_SCROLLED`). See
+strip; a container that scrolled sends `TYPE_VIEW_SCROLLED`; and, on API 23
+and later, `ACTION_SHOW_ON_SCREEN` on a node inside a container that
+scrolls, which scrolls it into view). A click, focus or select on a node
+scrolled out of view brings it into view first, then taps it there. See
 [the Android page](platforms/android.md#accessibility).
 
 **CI** (`visual-android`): a small accessibility service stands in for
@@ -514,9 +577,11 @@ An invisible overlay of ARIA elements mirrors the tree over the canvas. The
 `visual-web` job's headless Chrome checks it from the page. A scroll
 container's element carries where it is scrolled; when a screen reader moves
 focus to a control in it that is scrolled out of view, the page scrolls the
-app's container to show it (a wheel at the container's middle). ARIA has no
-scroll role or action, so nothing else is exposed; not yet tried with a
-screen reader. See [the web page](platforms/web.md#accessibility).
+app's container to show it (a wheel at the container's middle), and a click
+(a screen reader's activation) on one does so before clicking it where it
+then is. ARIA has no scroll role or action, so nothing else is exposed. A
+control that controls another has `aria-controls` naming its element, and a
+tree item its `aria-level`. Not yet tried with a screen reader. See [the web page](platforms/web.md#accessibility).
 
 ## Linux
 
@@ -526,12 +591,17 @@ hand-written D-Bus client in `stipple::platform::a11y`; no `libatspi`, `atk`
 or `zbus`).
 
 - **Connecting.** On a window's first tree a helper thread finds the
-  accessibility bus: `$AT_SPI_BUS_ADDRESS`, or `org.a11y.Bus.GetAddress` on
-  the session bus (`$DBUS_SESSION_BUS_ADDRESS`, else `$XDG_RUNTIME_DIR/bus`),
-  which starts `at-spi-bus-launcher` when needed. With no session bus or no
-  accessibility bus it gives up quietly and the windows stop handing their
-  trees over; startup never waits for it. `NO_AT_BRIDGE=1` turns it off, as
-  for GTK. (The X root window's `AT_SPI_BUS` property isn't read.) If the
+  accessibility bus as `libatspi` does (`atspi/address.rs`), trying each
+  in turn until one connects: `$AT_SPI_BUS_ADDRESS`; on X11, the root
+  window's `AT_SPI_BUS` property, which `at-spi-bus-launcher` sets on the
+  display it serves (read by the X11 backend when it connects, and again
+  when the property changes), so an app that can't reach that session bus
+  (over `ssh -X`, under `sudo`, in a sandbox) still finds it; then
+  `org.a11y.Bus.GetAddress` on the session bus (`$DBUS_SESSION_BUS_ADDRESS`,
+  else `$XDG_RUNTIME_DIR/bus`), which starts `at-spi-bus-launcher` when
+  needed. With no accessibility bus it gives up quietly and the windows stop
+  handing their trees over; startup never waits for it. `NO_AT_BRIDGE=1`
+  turns it off, as for GTK. If the
   accessibility bus goes away after it was reached (`at-spi-bus-launcher`
   restarted), the thread keeps the trees, asks for the bus again (which
   starts a new one), reconnects and registers again, waiting 1, 2, 4… up to
@@ -591,10 +661,13 @@ or `zbus`).
   `text_field(…).labelled_by("note")`. Ids are matched within the window's
   tree. Nothing is inferred: a label beside a field without them isn't
   related to it (Orca guesses one from the layout, as it does for any
-  toolkit). Only AT-SPI exposes the relation so far (not UIA's `LabeledBy`,
-  nor macOS's title element). There are no controller-for or member-of
-  relations: the tree doesn't know which list a combo box opens or which
-  radio buttons form a group.
+  toolkit). The other relations come from the tree too (see
+  [Relations](#relations)): `controller-for` / `controlled-by` (a select and
+  its open list, a tab and its panel), `member-of` (a radio group, the
+  whole group as GTK reports it) and `node-child-of` / `node-parent-of`
+  (a tree item's parent), with a tree item's depth as its `level`
+  attribute. An action or `GrabFocus` on a node scrolled out of view brings
+  it into view first.
 - **Events.** Swapping a tree raises what changed, node by node at the same
   place: `object:property-change:accessible-name` (and `…-role`),
   `object:text-changed:delete`/`insert` for text,
@@ -665,8 +738,10 @@ scrolls it (the app logs its offset, the pane's `Value` follows, with an
 `accessible-value` event), setting its `Value` to 0 scrolls back, and
 `ScrollTo` on "Row 20" brings it into view; the strip of chips is a scroll
 pane of its own that scrolls; the "Remember" check box's action checks it
-(the app logs it; `checked` state and event); and "Row 2"'s action raises a
-toast that arrives as `object:announcement` "Row 2 tapped", with a polite
+(the app logs it; `checked` state and event); and "Row 2"'s action, with
+"Row 2" scrolled out of view above the list by then, presses it (the app
+logs that row's tap, and it is in view again after) and raises a toast that
+arrives as `object:announcement` "Row 2 tapped", with a polite
 notification in the tree. It passes locally under Xvfb (at-spi2-core 2.58)
 and doesn't fail the job yet (not run under sway). The Orca script then
 also presses "Row 2" and reports whether Orca speaks the toast. The same
@@ -678,11 +753,25 @@ Tab, and Space must press it) run in the same job, pass in CI and are required t
 walk runs the new checks as well; they haven't been run under a Wayland
 compositor outside CI.
 
+*Relations through AT-SPI* (`.github/scripts/atspi-relations.sh` and
+`atspi-relations.py`) opens `widgetsdemo`'s "Size" select by its action and
+follows its `controller-for` to its list (and `controlled-by` back), checks
+its "Format" chips' `member-of` names the whole group, and in
+`mediabrowser`'s folder tree that "Music" is `node-child-of` the root folder
+a level up (by their `level` attributes), which is `node-parent-of` it.
+*Find the accessibility bus through the X root window*
+(`.github/scripts/atspi-x11-bus.sh`) puts the bus's address on the root
+window (when the launcher didn't), runs `touchdemo` with no session bus to
+ask (no `DBUS_SESSION_BUS_ADDRESS`, an empty `XDG_RUNTIME_DIR`), and a
+pyatspi client must find it registered, the bridge saying it took the
+address from the property. Both pass locally under Xvfb (at-spi2-core
+2.58) and don't fail the job yet.
+
 `a11ydemo serve` still serves a fixed tree over the session bus for the
 `dbus-send` checks.
 
 Not covered: no text attributes, character extents are the node's box split
-evenly (not the glyphs'), only labelled-by / label-for relations (and only
-where the app declares them), a spin button's `Value` has no range, and a
+evenly (not the glyphs'), a spin button's `Value` has no range, and a
 scroll pane's `Value` and its scroll bar children's say the same; nodes
-scrolled out of view still say `showing`. Relations are AT-SPI's only.
+scrolled out of view still say `showing`. The `AT_SPI_BUS` property is read
+once at startup and when it changes, not looked up again on each reconnect.

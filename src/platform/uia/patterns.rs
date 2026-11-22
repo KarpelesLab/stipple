@@ -236,7 +236,9 @@ unsafe fn with_node(p: *mut Provider, f: impl FnOnce(&A11yNode) -> Hresult) -> H
 unsafe fn click(p: *mut Provider) -> Hresult {
     unsafe {
         with_node(p, |n| {
-            deliver(p, n.click_events());
+            // Brought into view first (see `access::reveal`).
+            let events = super::relations::activate_events(p).unwrap_or_else(|| n.click_events());
+            deliver(p, events);
             S_OK
         })
     }
@@ -559,7 +561,8 @@ unsafe fn set_expanded(this: *mut c_void, open: bool) -> Hresult {
             if (state == 1) == open {
                 return S_OK;
             }
-            let mut events = n.click_events();
+            let mut events =
+                super::relations::activate_events(p).unwrap_or_else(|| n.click_events());
             if n.role == A11yRole::TreeItem {
                 let code = if open {
                     KeyCode::ArrowRight
@@ -810,7 +813,7 @@ pub(super) unsafe fn vt<'a, T>(p: *mut c_void) -> &'a T {
 
 /// The first provider (depth first, as `Navigate` walks) whose node has
 /// `role` and `name`, as its `…Fragment` interface (`AddRef`ed).
-unsafe fn find_through(frag: *mut c_void, role_type: i32, name: &str) -> *mut c_void {
+pub(super) unsafe fn find_through(frag: *mut c_void, role_type: i32, name: &str) -> *mut c_void {
     unsafe {
         if int_through(frag, UIA_ControlTypePropertyId) == role_type
             && name_through(frag, UIA_NamePropertyId) == name
@@ -1009,7 +1012,21 @@ pub fn selftest_patterns() -> Result<(), String> {
             "Item 0 isn't selected, and its container is the list",
         )?;
         (ivt.select)(it);
-        check(take_recorded().len() == 3, "Select clicks the item")?;
+        // Item 0 is above the list's viewport (scrolled by 40): it is
+        // scrolled into view first (a wheel), then clicked.
+        let got = take_recorded();
+        check(
+            got.len() == 5
+                && matches!(got[1], Event::Scroll { .. })
+                && matches!(
+                    got[4],
+                    Event::PointerButton {
+                        state: crate::platform::event::ButtonState::Released,
+                        ..
+                    }
+                ),
+            &format!("Select scrolls the item into view, then clicks it: {got:?}"),
+        )?;
         release_through(it);
         // Above the viewport: ScrollIntoView scrolls back to it.
         let si = pattern_through(first, UIA_ScrollItemPatternId);

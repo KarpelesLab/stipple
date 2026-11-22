@@ -52,11 +52,13 @@ use core::ffi::c_void;
 
 mod events;
 mod patterns;
+mod relations;
 mod scroll_bar;
 mod text;
 
 pub(crate) use events::{plan_events, raise_planned};
 pub use patterns::selftest_patterns;
+pub use relations::selftest_relations;
 
 type Hresult = i32;
 const S_OK: Hresult = 0;
@@ -766,6 +768,14 @@ unsafe extern "system" fn invoke(this: *mut c_void) -> Hresult {
         if hwnd.is_null() {
             return E_FAIL;
         }
+        // Scrolled out of view: the scroll that brings it back, then the
+        // click where it lands (see `access::reveal`).
+        if relations::needs_reveal(p)
+            && let Some(events) = relations::activate_events(p)
+        {
+            patterns::deliver(p, events);
+            return S_OK;
+        }
         let scale = window_scale(hwnd);
         let (x, y, w, h) = (*p).bounds;
         let cx = ((x + w / 2.0) * scale).round() as i32;
@@ -868,6 +878,7 @@ unsafe extern "system" fn get_property_value(
                     0
                 };
             }
+            id if relations::property(p, id, &mut v) => {}
             id if patterns::property(p, id, &mut v) => {}
             id if scroll_bar::property(p, id, &mut v) => {}
             UIA_IsInvokePatternAvailablePropertyId => {

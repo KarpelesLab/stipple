@@ -42,6 +42,8 @@ use crate::platform::input;
 use crate::platform::window::{CursorIcon, Window, WindowAttributes, fit_icon};
 use crate::render::{Pixmap, Surface};
 
+/// The accessibility bus's address on the root window (`AT_SPI_BUS`).
+mod atspi_bus;
 /// Focus, attention requests, the bell and undecorated windows.
 mod attention;
 /// Transparent windows: the ARGB visual and blur behind.
@@ -1902,6 +1904,11 @@ where
         ..Default::default()
     };
     conn.scale = read_xft_scale(&mut conn).map_err(os)?;
+    // Where the accessibility bus is, as the launcher put it on the root
+    // (before root events are selected, so the reply comes straight back).
+    if let Err(e) = atspi_bus::read_at_startup(&mut conn) {
+        dbg(format_args!("AT_SPI_BUS unread: {e}"));
+    }
     // Hear the scale change (`Xft.dpi` in the root's resources).
     scale::watch(&mut conn).map_err(os)?;
     let argb_visual = conn.setup.argb_visual;
@@ -2038,6 +2045,7 @@ where
         // window hears a new one, then lays out again at its size.
         let root = shared.lock().unwrap().setup.root;
         if scale::is_root_property(root, &buf) {
+            let _ = atspi_bus::changed(&mut shared.lock().unwrap(), &mut backlog, &buf);
             let new = scale::changed(&mut shared.lock().unwrap(), &mut backlog, &buf);
             if let Ok(Some(new)) = new {
                 let mut flow = ControlFlow::Wait;

@@ -290,6 +290,22 @@ fn with_node<R>(el: Id, f: impl FnOnce(&MacWindow, Kind, &A11yNode, &[usize]) ->
     Some(f(&win, kind, root, &path))
 }
 
+/// Queue the events `f` makes from the element's window's tree and its
+/// node's path (`None` from `f`: nothing to do); whether they were queued,
+/// `None` when nothing was.
+pub(super) fn act_on_node(
+    el: Id,
+    f: impl FnOnce(&A11yNode, &[usize]) -> Option<Vec<Event>>,
+) -> Option<bool> {
+    with_node(el, |win, kind, root, path| {
+        if kind != Kind::Node {
+            return None;
+        }
+        Some(queue(win.view, f(root, path)?))
+    })
+    .flatten()
+}
+
 /// Queue `events` for `view`'s window and wake the loop to deliver them.
 fn queue(view: Id, events: Vec<Event>) -> bool {
     if events.is_empty() {

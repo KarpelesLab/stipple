@@ -268,8 +268,9 @@ if depth:
             check(bool(moved) and moved[-1] == 0,
                   "setting the scroll bar's value to 0 scrolled the list back ({})".format(moved))
     # The sideways strip of chips.
-    # (Its chips have no tap handler: labels in panels.)
-    chip = named(elements, pyatspi.ROLE_LABEL, "Chip 0")
+    # (Its chips are labels in panels, or buttons where they take a tap.)
+    chip = (named(elements, pyatspi.ROLE_LABEL, "Chip 0")
+            or named(elements, pyatspi.ROLE_PUSH_BUTTON, "Chip 0"))
     strip = scroll_pane_of(chip)
     check(strip is not None and strip != pane, "the chips are in a scroll pane of their own")
     if strip is not None:
@@ -292,18 +293,25 @@ if depth:
         check(any(t.startswith("object:state-changed:checked") and d == 1 for t, d, *_ in events),
               "a state-changed:checked event said so")
 
-    # A toast: a tap on "Row 2" raises one, which is announced. The click
-    # lands at the row's middle, so it's scrolled into view first.
+    # A toast: a tap on "Row 2" raises one, which is announced. "Row 2" is
+    # scrolled out of view above the list now (by the ScrollTo on "Row
+    # 20"): its click brings it back into view first, then lands on it.
     row2 = named(walk(frame, 0, []), pyatspi.ROLE_PUSH_BUTTON, "Row 2")
     check(row2 is not None, "a push button 'Row 2'")
-    if row2 is not None and pane is not None:
-        row2.queryComponent().scrollTo(pyatspi.SCROLL_ANYWHERE)
-        py = extents(pane)[1]
-        check(wait_for(lambda: extents(row2)[1] >= py), "'Row 2' scrolled back into view")
     if row2 is not None:
         del announcements[:]
         n = len(log_lines("touchdemo: toast"))
+        tapped = len(log_lines("touchdemo: row 2 tapped"))
+        py = extents(pane)[1] if pane is not None else None
+        check(py is None or extents(row2)[1] < py, "'Row 2' is out of view above the list")
         check(row2.queryAction().doAction(0), "'click' on 'Row 2' is accepted")
+        check(bool(await_log("touchdemo: row 2 tapped", tapped)), "the click pressed 'Row 2'")
+        if py is not None:
+            # (The toast changes the tree's shape: found again.)
+            def back_in_view():
+                again = named(walk(frame, 0, []), pyatspi.ROLE_PUSH_BUTTON, "Row 2")
+                return again is not None and extents(again)[1] >= py
+            check(wait_for(back_in_view), "...and 'Row 2' is in view again")
         check(bool(await_log("touchdemo: toast", n)), "the app raised its toast")
         check(wait_for(lambda: any(t == "Row 2 tapped" for _, t in announcements)),
               "an object:announcement said 'Row 2 tapped' ({})".format(announcements))

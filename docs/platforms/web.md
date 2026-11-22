@@ -284,7 +284,13 @@ a checkbox or switch; the built-in ones do).
 
 - **Activation.** A screen reader activates an element by clicking it; the
   overlay turns a click on an element into a press and release at the middle
-  of its node, which runs the node's tap handler (or focuses a field).
+  of its node, which runs the node's tap handler (or focuses a field). A node
+  scrolled out of its container's view is scrolled into it first, and the
+  click lands where it then is.
+- **Relations.** A control that controls another (`Element::controls`: a
+  select's open list, a tab's panel) has `aria-controls` naming that node's
+  element (`ct` and `i` in the JSON); a tree item has its `aria-level`
+  (`lv`).
 - **Focus, app to page.** When the app's focus moves to a text field, the
   textarea takes keyboard focus and is labelled by the field's element
   (`aria-labelledby`); for any other focused node, its own element takes it.

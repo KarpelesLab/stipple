@@ -463,32 +463,46 @@ export async function start(canvas, wasmUrl, options = {}) {
   // Scroll the app's scroll container around `el` (the nearest overlay
   // element that is one) so that `el`'s node shows: the least movement, as
   // a wheel at the container's middle. A screen reader that moves focus to a
-  // control scrolled out of view brings it back this way.
+  // control scrolled out of view brings it back this way, and an activation
+  // of one does before its click. Returns how far the node moved, [dx, dy].
   const revealNode = (el) => {
     const b = el._b;
+    // Asked already since the tree last came (a focus, then its click): it
+    // moved by then.
+    if (el._shiftFor === b) return el._shift;
     let c = el.parentElement;
     while (c && c !== overlay && !c._sc) c = c.parentElement;
-    if (!b || !c || !c._sc || !c._b) return;
-    const across = c._sc[2];
+    if (!b || !c || !c._sc || !c._b) return [0, 0];
+    const [offset, max, across, rtl] = c._sc;
     const [cx, cy, cw, ch] = c._b;
     const [v0, v1, t0, t1] = across
       ? [cx, cx + cw, b[0], b[0] + b[2]]
       : [cy, cy + ch, b[1], b[1] + b[3]];
     // How far the content moves: a wheel's pixels, the way it reveals
     // (right and down positive, a right-to-left strip too).
-    const by = t0 < v0 ? t0 - v0 : t1 > v1 ? Math.min(t1 - v1, t0 - v0) : 0;
-    if (Math.abs(by) < 0.5) return;
+    let by = t0 < v0 ? t0 - v0 : t1 > v1 ? Math.min(t1 - v1, t0 - v0) : 0;
+    // As far as the container goes (a right-to-left strip's offset grows
+    // the other way).
+    by = rtl && across
+      ? Math.min(Math.max(by, offset - max), offset)
+      : Math.min(Math.max(by, -offset), max - offset);
+    if (Math.abs(by) < 0.5) return [0, 0];
     e.stipple_pointer(0, 0, cx + cw / 2, cy + ch / 2, 0);
     if (across) e.stipple_wheel(by, 0, 0);
     else e.stipple_wheel(0, by, 0);
+    el._shiftFor = b;
+    el._shift = across ? [-by, 0] : [0, -by];
+    return el._shift;
   };
 
   // A click at the middle of `el`'s node: how a screen reader's "activate"
-  // reaches the element (its tap handler, or focus for a text field).
+  // reaches the element (its tap handler, or focus for a text field),
+  // brought into view first when it's scrolled out of its container.
   const clickNode = (el) => {
     const b = el._b;
     if (!b) return;
-    const x = b[0] + b[2] / 2, y = b[1] + b[3] / 2;
+    const [dx, dy] = revealNode(el);
+    const x = b[0] + b[2] / 2 + dx, y = b[1] + b[3] / 2 + dy;
     e.stipple_pointer(0, 0, x, y, 0);
     e.stipple_pointer(1, 0, x, y, 0);
     e.stipple_pointer(2, 0, x, y, 0);
@@ -496,6 +510,10 @@ export async function start(canvas, wasmUrl, options = {}) {
 
   let ids = 0;
   const idOf = (el) => el.id || (el.id = `${prefix}-n${++ids}`);
+  // The tree's ids (`Element::a11y_id`) to their elements, and the elements
+  // whose aria-controls names one, from the latest tree.
+  const relIds = new Map();
+  const relControls = [];
   const attr = (el, name, value) => {
     if (value === null || value === undefined) {
       if (el.hasAttribute(name)) el.removeAttribute(name);
@@ -521,6 +539,7 @@ export async function start(canvas, wasmUrl, options = {}) {
     attr(el, "aria-expanded", node.e === undefined ? null : node.e ? "true" : "false");
     attr(el, "aria-checked", node.c === undefined ? null : node.c ? "true" : "false");
     attr(el, "aria-placeholder", node.p ?? null);
+    attr(el, "aria-level", node.lv ?? null);
     el._sc = node.sc ?? null;
     // A scroll bar: its orientation and value (its container's offset, in
     // CSS pixels), and the container it scrolls (its parent).
@@ -530,6 +549,10 @@ export async function start(canvas, wasmUrl, options = {}) {
     attr(el, "aria-valuemax", sb ? sb[1] : null);
     attr(el, "aria-valuenow", sb ? sb[0] : null);
     attr(el, "aria-controls", sb && el.parentElement ? idOf(el.parentElement) : null);
+    // aria-controls names its target's element, found once the tree is in.
+    if (node.i !== undefined) relIds.set(node.i, el);
+    if (node.ct !== undefined) relControls.push([el, node.ct]);
+    else if (!sb) attr(el, "aria-controls", null);
     if (FOCUSABLE.has(node.r)) {
       if (el.tabIndex !== -1 || !el.hasAttribute("tabindex")) el.tabIndex = -1;
     } else if (el.hasAttribute("tabindex")) {
@@ -563,7 +586,13 @@ export async function start(canvas, wasmUrl, options = {}) {
     stats.a11y++;
     place();
     const tree = JSON.parse(json);
+    relIds.clear();
+    relControls.length = 0;
     const focused = sync(root, tree, 0, 0);
+    for (const [el, id] of relControls) {
+      const target = relIds.get(id);
+      attr(el, "aria-controls", target ? idOf(target) : null);
+    }
     // Keyboard focus follows the app's: a text field's is the textarea
     // (named by the field), anything else's is its own element.
     if (focused && TEXT_ROLES.has(focused.getAttribute("role"))) {
@@ -1416,8 +1445,10 @@ export async function start(canvas, wasmUrl, options = {}) {
     // A screen reader moved focus to a text field's element: focus the field.
     // Any control it moved to that is scrolled out of view comes into view.
     const el = ev.target;
-    if (!quiet && el !== input && el._b) revealNode(el);
-    if (!quiet && el !== input && TEXT_ROLES.has(el.getAttribute?.("role"))) clickNode(el);
+    // (A field's click brings it into view itself.)
+    if (quiet || el === input || !el._b) return;
+    if (TEXT_ROLES.has(el.getAttribute?.("role"))) clickNode(el);
+    else revealNode(el);
   });
   overlay.addEventListener("focusout", () => {
     // Focus may only be moving within the overlay; look once it settled.

@@ -516,7 +516,12 @@ registry or the accessibility bus restarts; the walk checks these too
 with scroll actions, a `Value` (its offset, settable) and `ScrollTo` on what
 it holds, and a toast raises `object:announcement` from a polite live
 region; a further step checks these, with a check box (passing locally, not
-failing the job yet). See [accessibility.md](accessibility.md#linux).
+failing the job yet). Controller-for / controlled-by (a select and its
+list, a tab and its panel), member-of (radio groups) and node-child-of /
+node-parent-of (tree items) relations, the bus found from the X root
+window's `AT_SPI_BUS` too, and actions on what's scrolled out of view
+bringing it into view first (checked by steps passing locally, not failing
+the job yet). See [accessibility.md](accessibility.md#linux).
 
 ⁶⁷ A hand-built provider per node, hosted by the window's provider: control
 type, name, bounds in screen pixels, keyboard focus, hit testing, and the
@@ -533,7 +538,9 @@ Scroll / ScrollItem and Text (ranges by character, word, line and document)
 patterns, property- and structure-changed events, and toasts announced
 with UIA's notification event, checked through their vtables and from the
 .NET client in a step that doesn't fail the job yet (not yet run on
-Windows). See [accessibility.md](accessibility.md#windows).
+Windows). `ControllerFor` and tree items' `Level`, and patterns that click
+bring a node scrolled out of view into view first. See
+[accessibility.md](accessibility.md#windows).
 
 ⁶⁸ An `NSAccessibilityElement` per node, with role, label and frame in screen
 coordinates. CI reads a running app's tree from another process through the
@@ -548,7 +555,9 @@ selected text range, checkboxes a value, scroll containers an
 `AXScrollArea` with a settable scroll bar,
 and tree swaps post value, selection, expansion and layout notifications;
 `axprobe --depth` checks them in a step that doesn't fail the job yet (not
-yet run). See [accessibility.md](accessibility.md#macos).
+yet run). Title elements, linked elements, outline rows' disclosure and
+static text values (`axprobe --links`, not failing the job; build-checked).
+See [accessibility.md](accessibility.md#macos).
 
 ⁶⁹ In the shared core, so the same everywhere: `Cx::memo` and `Cx::derive`,
 transition-only frames drawn from the tree on screen, and scenes culled to the

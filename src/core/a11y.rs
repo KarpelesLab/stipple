@@ -22,8 +22,11 @@
 //! [`checked`](crate::core::Element::checked); a declared role wins over the
 //! inferred one. A control names the element that labels it with
 //! [`labelled_by`](crate::core::Element::labelled_by) and the label's
-//! [`a11y_id`](crate::core::Element::a11y_id). A text field's node carries
-//! its caret and selection.
+//! [`a11y_id`](crate::core::Element::a11y_id), and the element it controls
+//! (a combo box's list, a tab's panel) with
+//! [`controls`](crate::core::Element::controls); a tree item says its depth
+//! with [`a11y_level`](crate::core::Element::a11y_level). A text field's node
+//! carries its caret and selection.
 
 use std::collections::HashMap;
 
@@ -183,6 +186,12 @@ pub(crate) struct Semantics {
     /// The [`id`](Semantics::id) of the element that labels this one (a
     /// field's caption).
     pub labelled_by: Option<String>,
+    /// The [`id`](Semantics::id) of the element this one controls (see
+    /// [`Element::controls`](crate::core::Element::controls)).
+    pub controls: Option<String>,
+    /// A tree item's depth, 1 at the top (see
+    /// [`Element::a11y_level`](crate::core::Element::a11y_level)).
+    pub level: Option<usize>,
     /// A text field's hint, read while it's empty (see
     /// [`Element::placeholder`](crate::core::Element::placeholder)).
     pub placeholder: Option<String>,
@@ -243,6 +252,17 @@ pub struct AccessNode {
     /// The id of the node that labels this one
     /// ([`Element::labelled_by`](crate::core::Element::labelled_by)).
     pub labelled_by: Option<String>,
+    /// The id of the node this one controls
+    /// ([`Element::controls`](crate::core::Element::controls)): a combo box's
+    /// open list, a tab's panel. Bridges report the inverse (controlled-by)
+    /// on that node.
+    pub controls: Option<String>,
+    /// A tree item's depth, 1 for the top level
+    /// ([`Element::a11y_level`](crate::core::Element::a11y_level)): in a flat
+    /// tree (rows of [`Role::TreeItem`] side by side, as
+    /// [`tree`](crate::widgets::tree) builds), the item before it one level
+    /// up is its parent.
+    pub level: Option<usize>,
     /// A text field's hint
     /// ([`Element::placeholder`](crate::core::Element::placeholder)), which
     /// screen readers read while it's empty.
@@ -402,6 +422,8 @@ fn build(node: &LayoutNode, cx: &Ctx<'_>, is_root: bool) -> AccessNode {
         text_selection,
         id: sem.and_then(|s| s.id.clone()),
         labelled_by: sem.and_then(|s| s.labelled_by.clone()),
+        controls: sem.and_then(|s| s.controls.clone()),
+        level: sem.and_then(|s| s.level),
         placeholder: sem.and_then(|s| s.placeholder.clone()),
         scroll: scroll_of(node, cx.offsets),
         scroll_bar: None,
@@ -448,6 +470,8 @@ fn scroll_bars_of(node: &LayoutNode, offsets: &HashMap<ScrollId, f64>) -> Vec<Ac
                 text_selection: None,
                 id: None,
                 labelled_by: None,
+                controls: None,
+                level: None,
                 placeholder: None,
                 scroll: None,
                 scroll_bar: Some(AccessScroll {

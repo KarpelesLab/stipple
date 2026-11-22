@@ -416,6 +416,7 @@ pub fn combo_box<S: 'static, T: AsRef<str>>(
     let open = state.open && !matches.is_empty();
     let scroll = ListScroll::register(cx, &theme, matches.len());
     let row_of = |h: Option<usize>| h.and_then(|h| matches.iter().position(|&i| i == h));
+    let list_id = scroll.list_id();
     let opened = state.shown.with(|s| s.track(open, cx.frame_time()));
     let list = if open {
         if state.reveal.take() {
@@ -435,7 +436,8 @@ pub fn combo_box<S: 'static, T: AsRef<str>>(
                 field(s).accept(i, &labels);
                 hooks.changed(s);
             }
-        });
+        })
+        .a11y_id(list_id.clone());
         let list = motion::popup(list, &theme.motion, t, (0.5, 0.0))
             .exit(motion::popup_exit(&theme.motion, (0.5, 0.0)));
         let dismiss = cx.register(move |s| field(s).close());
@@ -474,6 +476,10 @@ pub fn combo_box<S: 'static, T: AsRef<str>>(
             .align_self(crate::core::Align::Stretch)
             .on_tap(cx, move |s| field(s).toggle());
         frame.push(chevron);
+    }
+    // The field controls its list while it shows (`Element::controls`).
+    if list.is_some() {
+        el = el.controls(list_id);
     }
     if let (Some((content, dismiss)), Some(id)) = (list, el.focus) {
         cx.overlay(OverlaySpec {

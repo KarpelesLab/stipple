@@ -416,6 +416,7 @@ pub fn tree<S: 'static>(
             })
             .gap(theme.spacing.xs)
             .role(Role::TreeItem)
+            .a11y_level(node.depth + 1)
             .selected(row.selected);
         if node.has_children {
             el = el.expanded(node.expanded);

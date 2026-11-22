@@ -183,44 +183,12 @@ impl A11yNode {
     }
 
     /// The scroll that brings the node at `path` (under this one) into view
-    /// in the nearest scroll container around it: the least movement that
-    /// shows it whole (its start, when it's longer than the viewport).
-    /// `None` when it is in view already or no container holds it.
+    /// in the scroll containers around it: the least movement that shows
+    /// it whole (its start, when it's longer than the viewport), outermost
+    /// first (see [`reveal`](super::reveal)). `None` when it is in view
+    /// already or no container holds it.
     pub(crate) fn scroll_into_view_events(&self, path: &[usize]) -> Option<Vec<Event>> {
-        let target = self.at_path(path)?;
-        // The innermost container on the way down (not the node itself).
-        let mut container = None;
-        let mut at = self;
-        for &i in path {
-            if at.scroll.is_some() {
-                container = Some(at);
-            }
-            at = at.children.get(i)?;
-        }
-        let c = container?;
-        let s = c.scroll?;
-        let (cx, cy, cw, ch) = c.bounds;
-        let (tx, ty, tw, th) = target.bounds;
-        // Along the axis: the viewport's span and the target's.
-        let (v0, v1, t0, t1) = if s.horizontal {
-            (cx, cx + cw, tx, tx + tw)
-        } else {
-            (cy, cy + ch, ty, ty + th)
-        };
-        // How far the content must move towards the start (positive scrolls
-        // forward, which moves content up / left).
-        let mut by = if t0 < v0 {
-            t0 - v0
-        } else if t1 > v1 {
-            (t1 - v1).min(t0 - v0)
-        } else {
-            0.0
-        };
-        // Right to left, the offset grows to the left.
-        if s.horizontal && s.rtl {
-            by = -by;
-        }
-        c.scroll_by_events(by)
+        Some(self.reveal(path)?.events).filter(|e| !e.is_empty())
     }
 }
 

@@ -127,6 +127,7 @@ pub struct TabBar<S> {
     on_rename: Option<IndexFn<S>>,
     on_detach: Option<DetachFn<S>>,
     on_receive: Option<ReceiveFn<S>>,
+    panel: Option<String>,
 }
 
 impl<S> std::fmt::Debug for TabBar<S> {
@@ -155,7 +156,16 @@ impl<S> TabBar<S> {
             on_rename: None,
             on_detach: None,
             on_receive: None,
+            panel: None,
         }
+    }
+
+    /// The [`a11y_id`](Element::a11y_id) of the panel showing the selected
+    /// tab's content: the selected tab [`controls`](Element::controls) it,
+    /// so a screen reader can jump from the tab to its content.
+    pub fn panel(mut self, id: impl Into<String>) -> Self {
+        self.panel = Some(id.into());
+        self
     }
 
     /// Which tab is selected.
@@ -735,6 +745,9 @@ pub fn tab_bar<S: 'static>(
         }
         if let Some(menu) = tab.menu {
             el = el.context_menu(cx, menu);
+        }
+        if is_sel && let Some(panel) = &bar.panel {
+            el = el.controls(panel.clone());
         }
         strip.push(el.role(Role::Tab).selected(is_sel).a11y_label(tab.label));
     }
