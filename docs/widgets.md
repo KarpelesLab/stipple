@@ -697,8 +697,20 @@ least) and sits where the scroll offset puts it. With a mouse:
   pointer goes until the release;
 - pressing the track before or after the thumb pages a viewport (less a
   tenth of it, at most 40 pixels, so a line stays in view) back or on;
+  held, it pages again after the platform's delay and on at its repeat
+  rate until the thumb reaches the pointer (it waits while the pointer is
+  off the track, and goes on when it comes back further along);
+- where the bar has arrow buttons (a square at each end), pressing one
+  steps 40 pixels back or on, and held, it keeps stepping at the same pace
+  to the end (an arrow at its end is drawn faded);
 - the thumb grows and darkens under the pointer, and darker still while
-  dragged.
+  dragged; an arrow darkens under the pointer and fills while pressed.
+
+The repeat timing is the look's `repeat_delay` and `repeat_interval`
+(seconds), after each platform's own bars: 0.2 s then every 0.05 s on
+Windows (Win32's), 0.5 s then 0.05 s on macOS (AppKit's), 0.25 s then 0.05 s
+elsewhere (the browsers'). The App runs the repeats on its clock, a timer
+waking the loop for each, so they are App-tested without waiting.
 
 A press on a bar is the bar's: it doesn't tap, select or focus what lies
 under it. A finger never takes the bar (it drags the content), and the bars
@@ -710,7 +722,8 @@ convention (`ScrollBarLook::platform()`):
 
 | | Kind | Shown | Gutter |
 |---|---|---|---|
-| Linux, Windows, the web | `CLASSIC`: a 6 px thumb (8 under the pointer) on a faint track | always, while the content overflows | 12 px |
+| Linux, the web | `CLASSIC`: a 6 px thumb (8 under the pointer) on a faint track | always, while the content overflows | 12 px |
+| Windows | `WINDOWS`: `CLASSIC` with arrow buttons at its ends | always, while the content overflows | 12 px |
 | macOS | `OVERLAY`: a 7 px thumb (11, with a track, under the pointer) | while scrolling, then fades out | none |
 | iOS, Android | `TOUCH`: a 3 px indicator, not draggable | while scrolling, then fades out | none |
 
@@ -725,7 +738,10 @@ app) and while the pointer is over it, stays a moment (0.8 s) and fades out
 along the theme's `motion.scroll_bar` (instantly under reduced motion). At
 rest it isn't drawn, so screenshots of an idle macOS or phone app show none,
 as the platforms do. `Theme::native()` on macOS follows *Show scroll bars*
-in System Settings: *Always* gives the classic bar.
+in System Settings: *Always* gives the classic bar (`MAC_LEGACY`, with
+AppKit's repeat timing). Arrow buttons are the look's `arrows` (on only in
+`WINDOWS`; an overlay or touch bar never shows them): any theme turns them
+on or off with `ScrollBarLook::arrows`.
 
 The colors come from the palette: the text color faded (the thumb at about
 35%, 50% under the pointer, 63% dragged; the track 6%), so a bar matches
@@ -740,10 +756,85 @@ let theme = Theme::light().scroll_bar(ScrollBarLook::CLASSIC.width(14.0).thumb(8
 # let _ = theme;
 ```
 
-The bars aren't in the accessibility tree: the containers' content is, and
-screen readers scroll it through the rows they move to. Not done yet: holding
-a press on the track to keep paging, arrow buttons, scroll bars on scrolling
-grids taking a gutter (theirs is drawn over the content), and skinned bars.
+### Scrolling both ways and grids
+
+`scroll_both(cx)` is a viewport that scrolls down and sideways (a large
+picture, a wide sheet of cells): a column like `scroll`, whose content may be
+wider than it (a child with a `min_width` or a `width` past it). A vertical
+wheel scrolls it down, a horizontal one (or Shift+wheel, a sideways
+trackpad swipe) across, a finger both ways. While its content overflows
+each way it has two bars, the vertical one on the trailing side and the
+horizontal one along the bottom, each stopping short of the corner square
+where they meet (drawn in the track's color, and taking presses so they
+don't fall through to the content). With classic bars it keeps both
+gutters: its content scrolls a gutter further down while it overflows
+sideways (so the horizontal bar never covers the last row) and a gutter
+further sideways while the vertical bar shows (so it never covers the last
+column). Right to left, the content starts at the right, the vertical bar
+and the corner are on the left, and the horizontal thumb starts at the
+right. `text_view`'s long lines scroll the same way, with the same corner
+(it keeps its own room below the lines).
+
+A scrolling `grid` (`grid(..).scrollable(id)`) whose rows overflow keeps a
+classic bar's gutter too: its columns share the width the bar leaves (on the
+trailing side, mirrored right to left with the cells).
+
+### Skins and the native theme
+
+A theme's skin (`Theme::skin`) dresses the bars with `Skin::scroll_bar`, a
+`ScrollBarSkin`: nine-slice images for the track, the thumb (per state, in a
+`StateSkin`: hovered and pressed frames), the four arrow buttons
+(`ScrollBarArrows`: up, down, left, right, each per state) and the corner.
+The parts it has no image for keep the theme's colors. The thumb's image
+fills the thumb's box across the whole strip (the colored pill is inset);
+images fade with an overlay bar.
+
+```rust
+use std::sync::Arc;
+use stipple::prelude::*;
+use stipple::render::{NineSlice, Pixmap};
+use stipple::style::{ScrollBarSkin, Skin, StateSkin};
+
+let atlas = Arc::new(Pixmap::new(PhysicalSize::new(48, 16)));
+let part = |x: f64| NineSlice::new(atlas.clone(), Insets::uniform(4.0))
+    .region(Rect::from_xywh(x, 0.0, 16.0, 16.0));
+let skin = Skin::new()
+    .scroll_bar(ScrollBarSkin::new().track(part(0.0)).thumb(
+        StateSkin::new(part(16.0)).hovered(part(32.0)),
+    ))
+    .leak();
+let theme = Theme::light().skin(skin);
+# let _ = theme;
+```
+
+Under `Theme::native()`, where the OS draws the other controls and the bar
+is a classic one, the OS draws its parts (bitmaps cached by part, state and
+size, as the other controls'): on Windows the visual styles' `SCROLLBAR`
+parts (the track, the thumb in its normal, hot and pressed states, the arrow
+buttons; Explorer's dark ones in the dark appearance); on macOS a legacy
+`NSScroller`'s track and knob (AppKit's bars have no arrow buttons, and the
+corner is Stipple's). A skin wins over the native look. Linux, Android and
+the web keep Stipple's colors.
+
+### Accessibility
+
+Each bar is a node of the accessibility tree: `Role::ScrollBar`, after its
+container's content, at its strip, its `AccessNode::scroll_bar` saying which
+way it goes (`horizontal`) and its value (the container's offset, from 0 to
+the largest offset). A container scrolling both ways has two. Every
+platform exposes them (see [accessibility.md](accessibility.md#scroll-bars)):
+AT-SPI a scroll bar with the `HORIZONTAL` or `VERTICAL` state and `Value`,
+UI Automation a `ScrollBar` control with its `Orientation` and the
+`RangeValue` pattern, macOS its `AXScrollBar`, Android a node with its
+`RangeInfo`, the web an ARIA `scrollbar` with `aria-orientation`,
+`aria-valuenow`, `aria-valuemin`, `aria-valuemax` and `aria-controls`.
+Setting the value (AT-SPI's `CurrentValue`, UIA's `SetValue`) scrolls the
+container there. iOS has no scroll bar elements (VoiceOver scrolls with
+three fingers), so they're left out there.
+
+Not done yet: a table that scrolls sideways (its columns wider than it, its
+header following), and the OS's own drawing of the corner and of a horizontal
+bar's arrows on macOS (it has none).
 
 ## Themes and the native theme
 

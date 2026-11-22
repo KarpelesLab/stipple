@@ -41,8 +41,13 @@ Stipple does layout, input, the caret and selection, and the labels.
 | `text_field`, `text_area` frames | ✅ | ✅ | ✅ |
 | `select` button (as a push button) | ✅ | ✅ | ✅ |
 | `number_input` field frame | ✅ | ✅ | ✅ |
+| scroll bars (classic: track, thumb, arrows) | ✅ | ✅ ² | — ³ |
 
-¹ The platform has no such control.
+¹ The platform has no such control. ² A legacy `NSScroller`'s track and
+knob, when *Show scroll bars* is *Always* (the overlay scrollers stay
+Stipple's); AppKit's bars have no arrows. ³ iOS's scroll indicators aren't
+a control the app can draw. Scroll bars are only ever pictures (never live
+controls); see [Scroll bars](widgets.md#skins-and-the-native-theme).
 
 Each control is drawn in its current state, so hover, pressed and focus look the
 way the OS draws them. A change cross-fades from the old state's picture to the

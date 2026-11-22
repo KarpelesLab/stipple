@@ -492,11 +492,50 @@ fn gutter_layout(
             || measured
                 .iter()
                 .all(|m| axis.cross(*m) <= axis.cross(narrowed) + 0.5);
-        if content > axis.main(avail) + 0.5 && fits {
+        // Content scrolling sideways too, with both gutters kept, scrolls a
+        // gutter further down (below it, the horizontal bar's).
+        let below = if both_gutters(el) && wider_than(&measured, narrowed.width) {
+            g
+        } else {
+            0.0
+        };
+        if content + below > axis.main(avail) + 0.5 && fits {
             return (narrowed, measured);
         }
     }
     (avail, measure_in(avail))
+}
+
+/// Whether `el` scrolls both ways keeping a gutter for each bar
+/// ([`Element::scrollable_both`]), while the app's bars take one.
+fn both_gutters(el: &Element) -> bool {
+    el.scroll_gutters
+        && el.scroll.is_some()
+        && el.scroll_x.is_some()
+        && crate::core::scroll_bar::gutter() > 0.0
+}
+
+/// Whether any of `measured` is wider than `width`.
+fn wider_than(measured: &[Size], width: f64) -> bool {
+    measured.iter().any(|m| m.width > width + 0.5)
+}
+
+/// How much further than its content `el` scrolls sideways and down (see
+/// [`LayoutNode::scroll_tail`]), its children `measured` in `avail` out of
+/// `inner`: the vertical bar's gutter sideways, where it took one and the
+/// content is wider than what's left, and the horizontal bar's down, while
+/// the content is wider.
+fn scroll_tail(el: &Element, inner: Size, avail: Size, measured: &[Size]) -> (f64, f64) {
+    if !both_gutters(el) || !wider_than(measured, avail.width) {
+        return (0.0, 0.0);
+    }
+    let g = crate::core::scroll_bar::gutter();
+    let beside = if avail.width < inner.width - 0.5 {
+        g
+    } else {
+        0.0
+    };
+    (beside, g)
 }
 
 /// The shortest a scroll container that fills its parent shrinks to, unless
@@ -830,6 +869,7 @@ fn layout_element(
         native_a11y: None,
         scroll: el.scroll,
         scroll_x: el.scroll_x.filter(|_| el.scroll.is_some()),
+        scroll_tail: (0.0, 0.0),
         scroll_horizontal: el.scroll.is_some()
             && matches!(
                 el.kind,
@@ -863,19 +903,38 @@ fn layout_element(
         children,
     } = &el.kind
     {
-        let inner = bounds.inset(el.layout.padding);
+        let mut inner = bounds.inset(el.layout.padding);
         // A scrolling grid's rows overflow at natural size instead of sharing
         // the viewport height.
-        let g = grid_geometry(
-            columns,
-            rows,
-            *column_gap,
-            *row_gap,
-            children,
-            inner.size,
-            el.scroll.is_none(),
-            font,
-        );
+        let geometry = |room: Size| {
+            grid_geometry(
+                columns,
+                rows,
+                *column_gap,
+                *row_gap,
+                children,
+                room,
+                el.scroll.is_none(),
+                font,
+            )
+        };
+        let mut g = geometry(inner.size);
+        // One whose rows overflow keeps a gutter on its trailing side for
+        // its bar (laid out narrower; mirrored right to left with the rest).
+        let gutter = crate::core::scroll_bar::gutter();
+        if el.scroll.is_some()
+            && gutter > 0.0
+            && tracks_end(&g.rows) > inner.height() + 0.5
+            && inner.width() > gutter
+        {
+            inner = Rect::from_xywh(
+                inner.min_x(),
+                inner.min_y(),
+                inner.width() - gutter,
+                inner.height(),
+            );
+            g = geometry(inner.size);
+        }
         node.children.reserve(children.len());
         for (k, child) in children.iter().enumerate() {
             let (row, col, rs, cs) = g.cells[k];
@@ -990,6 +1049,7 @@ fn layout_element(
     // Main-axis distribution. A scroll container whose content overflows
     // keeps a gutter across for its scroll bar (see `core::scroll_bar`).
     let (avail, mut measured) = gutter_layout(el, axis, *gap, inner.size, children, font);
+    node.scroll_tail = scroll_tail(el, inner.size, avail, &measured);
     let settled = settle_row_aspect(el, axis, *gap, main_avail, children, &mut measured);
     // A wrapping stack flows children onto lines that fit the main axis; each
     // line is then laid out like an unwrapped stack whose cross extent is the
@@ -1763,7 +1823,12 @@ pub(crate) fn apply_scroll(
             let max_x = scroll_range_x(node, 0.0);
             let off = offsets.entry(x).or_insert(0.0);
             *off = off.clamp(0.0, max_x);
-            shift.dx -= *off;
+            // Right to left, the content starts at the right and moves right.
+            if node.rtl {
+                shift.dx += *off;
+            } else {
+                shift.dx -= *off;
+            }
         }
         if shift != Vec2::ZERO {
             for child in &mut node.children {
@@ -1788,7 +1853,9 @@ pub(crate) fn scroll_range(node: &LayoutNode, applied: f64) -> f64 {
             .iter()
             .map(|c| c.bounds.max_y())
             .fold(b.min_y(), f64::max);
-        bottom + applied - b.min_y()
+        // Below it, a container scrolling both ways keeps its horizontal
+        // bar's gutter.
+        bottom + applied - b.min_y() + node.scroll_tail.1
     } else if node.rtl {
         // Laid out right to left, the content overflows to the left.
         let left = node
@@ -1814,16 +1881,38 @@ pub(crate) fn scroll_range(node: &LayoutNode, applied: f64) -> f64 {
 }
 
 /// How far the sideways scrolling ([`scroll_x`](LayoutNode::scroll_x)) of
-/// vertical scroll container `node` can go, its children shifted left by
-/// `applied`: how far they reach past its right edge.
+/// vertical scroll container `node` can go, its children shifted by
+/// `applied` (left; right, right to left): how far they reach past its
+/// right edge (its left one), and the vertical bar's gutter beside them
+/// for one that keeps both (see [`LayoutNode::scroll_tail`]).
 pub(crate) fn scroll_range_x(node: &LayoutNode, applied: f64) -> f64 {
     let b = node.bounds;
-    let right = node
-        .children
-        .iter()
-        .map(|c| c.bounds.max_x())
-        .fold(b.min_x(), f64::max);
-    (right + applied - b.max_x()).max(0.0)
+    let past = if node.rtl {
+        let left = node
+            .children
+            .iter()
+            .map(|c| c.bounds.min_x())
+            .fold(b.max_x(), f64::min);
+        b.min_x() - (left - applied)
+    } else {
+        let right = node
+            .children
+            .iter()
+            .map(|c| c.bounds.max_x())
+            .fold(b.min_x(), f64::max);
+        right + applied - b.max_x()
+    };
+    if past < 0.5 {
+        return 0.0;
+    }
+    past + node.scroll_tail.0
+}
+
+/// Whether container `node`'s offset by `id` counts from the right: a
+/// right-to-left sideways strip, or a right-to-left container's sideways
+/// scrolling.
+pub(crate) fn scrolls_from_right(node: &LayoutNode, id: ScrollId) -> bool {
+    node.rtl && (node.scroll_horizontal || node.scroll_x == Some(id))
 }
 
 /// How far `node` can scroll by `id`: along its axis for its scroll, or

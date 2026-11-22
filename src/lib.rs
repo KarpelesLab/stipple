@@ -91,6 +91,8 @@ mod pointer_tests;
 mod reactivity_tests;
 pub mod render;
 #[cfg(test)]
+mod scroll_bar_more_tests;
+#[cfg(test)]
 mod scroll_bar_tests;
 #[cfg(test)]
 mod select_tests;
@@ -3033,7 +3035,7 @@ impl<S: 'static> Pane<S> {
             .tree
             .as_ref()
             .and_then(|t| crate::core::find_scroll(t, id))
-            .is_some_and(|n| n.scroll_horizontal && n.rtl)
+            .is_some_and(|n| crate::core::scrolls_from_right(n, id))
         {
             delta = -delta;
         }
@@ -3074,7 +3076,7 @@ impl<S: 'static> Pane<S> {
         // content by it (see `apply_scroll`).
         let off = self.scroll_offsets.get(&id).copied().unwrap_or(0.0);
         let max = crate::core::scroll_range_for(node, id, off);
-        let delta = if node.scroll_horizontal && node.rtl {
+        let delta = if crate::core::scrolls_from_right(node, id) {
             -delta
         } else {
             delta
@@ -4432,6 +4434,8 @@ impl<S: 'static> App<S> {
                     let flung = self.pane_fling(idx);
                     // A finger held down long enough opens the context menu.
                     let held = self.pane_long_press(idx, Some(window));
+                    // A press held on a scroll bar pages (or steps) again.
+                    let held = self.pane_scroll_bar_repeat(idx) | held;
                     // Updates and timers ran above (the loop wakes again at
                     // the next timer); re-render if they did, or if this
                     // window changed since it last presented (another
@@ -5283,8 +5287,8 @@ pub mod prelude {
     pub use crate::widgets::{
         Button, EditBuffer, TextInput, Toggle, Variant, button, checkbox, column, dialog, divider,
         grid, heading, label, open_menu, panel, paragraph, progress_bar, radio, row, scroll,
-        scroll_horizontal, slider, spacer, spinner, swatch, switch, tabs, text_area, text_field,
-        tooltip, viewport,
+        scroll_both, scroll_horizontal, slider, spacer, spinner, swatch, switch, tabs, text_area,
+        text_field, tooltip, viewport,
     };
     pub use crate::widgets::{
         Chip, ColorPicker, PasswordField, Tab, TabBar, TabBarState, TabIndicator, chip,
@@ -5364,6 +5368,14 @@ pub(crate) fn to_platform_a11y(node: &crate::core::AccessNode) -> crate::platfor
         Role::Tab => A11yRole::Tab,
         Role::PasswordField => A11yRole::PasswordField,
         Role::Dialog => A11yRole::Dialog,
+        Role::ScrollBar => A11yRole::ScrollBar,
+    };
+    let scroll = |s: crate::core::AccessScroll| crate::platform::access::A11yScroll {
+        offset: s.offset,
+        max: s.max,
+        viewport: s.viewport,
+        horizontal: s.horizontal,
+        rtl: s.rtl,
     };
     crate::platform::A11yNode {
         role,
@@ -5383,13 +5395,8 @@ pub(crate) fn to_platform_a11y(node: &crate::core::AccessNode) -> crate::platfor
         id: node.id.clone(),
         labelled_by: node.labelled_by.clone(),
         placeholder: node.placeholder.clone(),
-        scroll: node.scroll.map(|s| crate::platform::access::A11yScroll {
-            offset: s.offset,
-            max: s.max,
-            viewport: s.viewport,
-            horizontal: s.horizontal,
-            rtl: s.rtl,
-        }),
+        scroll: node.scroll.map(scroll),
+        scroll_bar: node.scroll_bar.map(scroll),
         native_view: node.native_view,
         children: node.children.iter().map(to_platform_a11y).collect(),
     }

@@ -200,6 +200,7 @@ pub(super) fn role(role: A11yRole) -> u32 {
         Tab => 37,           // PAGE_TAB
         PasswordField => 40, // PASSWORD_TEXT
         Dialog => 16,        // DIALOG
+        ScrollBar => 48,     // SCROLL_BAR
     }
 }
 

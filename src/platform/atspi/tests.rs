@@ -871,3 +871,54 @@ fn a_toast_appearing_is_announced_and_a_scroll_changes_the_value() {
     assert_eq!(got[0].kind, "accessible-value");
     assert_eq!(got[0].any, Value::F64(120.0));
 }
+
+#[test]
+fn a_scroll_bar_is_a_scroll_bar_with_its_orientation_and_a_value() {
+    use crate::platform::access::A11yScroll;
+    let mut tree = scroll_tree();
+    let bar = A11yNode {
+        scroll_bar: Some(A11yScroll {
+            offset: 40.0,
+            max: 300.0,
+            viewport: 100.0,
+            horizontal: false,
+            rtl: false,
+        }),
+        ..leaf(A11yRole::ScrollBar, "", (88.0, 0.0, 12.0, 100.0))
+    };
+    tree.children[0].children.push(bar);
+    let mut b = Bridge::new();
+    b.bus = ":1.7".into();
+    b.win_mut(3).root = Some(Arc::new(tree));
+    let path = node_path(3, &[0, 3]);
+    let accessible = "org.a11y.atspi.Accessible";
+    let role = ok(call(&mut b, &path, accessible, "GetRole", Body::new()), "u");
+    assert_eq!(read_u32(&role, &mut 0).unwrap(), 48, "SCROLL_BAR");
+    let st = ok(
+        call(&mut b, &path, accessible, "GetState", Body::new()),
+        "au",
+    );
+    let lo = read_u32(&st, &mut 4).unwrap();
+    assert!(lo & (1 << 29) != 0, "VERTICAL");
+    assert!(lo & (1 << 14) == 0, "not HORIZONTAL");
+    let value = "org.a11y.atspi.Value";
+    assert_eq!(f64_prop(&mut b, &path, value, "CurrentValue"), 40.0);
+    assert_eq!(f64_prop(&mut b, &path, value, "MaximumValue"), 300.0);
+    assert_eq!(f64_prop(&mut b, &path, value, "MinimumValue"), 0.0);
+    // Setting it scrolls its container: a wheel at the bar.
+    let mut body = Body::new();
+    body.str(value)
+        .str("CurrentValue")
+        .variant(&Value::F64(100.0));
+    ok(
+        call(
+            &mut b,
+            &path,
+            "org.freedesktop.DBus.Properties",
+            "Set",
+            body,
+        ),
+        "",
+    );
+    assert_eq!(last_wheel(&mut b), (0.0, 60.0));
+}

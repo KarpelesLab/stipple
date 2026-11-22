@@ -251,6 +251,22 @@ if depth:
             check(bool(moved) and wait_for(shown),
                   "...and brought it into view ({}; row {}, pane {})".format(
                       moved, extents(row20), (px, py, pw, ph)))
+        # Its scroll bar: the pane's last child, vertical, its value the
+        # offset; setting it scrolls the list.
+        bars = [pane.getChildAtIndex(i) for i in range(pane.childCount)]
+        bars = [b for b in bars if b is not None and b.getRole() == pyatspi.ROLE_SCROLL_BAR]
+        check(len(bars) == 1, "the pane has a scroll bar ({})".format(len(bars)))
+        if bars:
+            bar = bars[0]
+            check(bar.getState().contains(pyatspi.STATE_VERTICAL), "...vertical")
+            bv = bar.queryValue()
+            check(bv.maximumValue == pane.queryValue().maximumValue,
+                  "...over the pane's range ({} of 0..{})".format(bv.currentValue, bv.maximumValue))
+            n = len(log_lines(said))
+            bv.currentValue = 0.0
+            moved = offsets(await_log(said, n), said)
+            check(bool(moved) and moved[-1] == 0,
+                  "setting the scroll bar's value to 0 scrolled the list back ({})".format(moved))
     # The sideways strip of chips.
     # (Its chips have no tap handler: labels in panels.)
     chip = named(elements, pyatspi.ROLE_LABEL, "Chip 0")

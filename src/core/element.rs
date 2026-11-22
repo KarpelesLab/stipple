@@ -407,6 +407,9 @@ pub struct Element {
     /// A vertical scroll container that also scrolls sideways, by this id
     /// (see [`scrollable_x`](Element::scrollable_x)).
     pub(crate) scroll_x: Option<ScrollId>,
+    /// A container scrolling both ways keeps gutters for both its bars (see
+    /// [`scrollable_both`](Element::scrollable_both)).
+    pub(crate) scroll_gutters: bool,
     /// When `true`, children are clipped to this element's painted bounds. Set
     /// implicitly by [`Element::scrollable`] and via [`Element::clip`].
     pub(crate) clip: bool,
@@ -479,6 +482,7 @@ impl Element {
             native: None,
             scroll: None,
             scroll_x: None,
+            scroll_gutters: false,
             clip: false,
             cursor: None,
             semantics: None,
@@ -515,6 +519,7 @@ impl Element {
             native: None,
             scroll: None,
             scroll_x: None,
+            scroll_gutters: false,
             clip: false,
             cursor: None,
             semantics: None,
@@ -589,6 +594,7 @@ impl Element {
             native: None,
             scroll: None,
             scroll_x: None,
+            scroll_gutters: false,
             clip: false,
             cursor: None,
             semantics: None,
@@ -627,6 +633,7 @@ impl Element {
             native: None,
             scroll: None,
             scroll_x: None,
+            scroll_gutters: false,
             clip: false,
             cursor: None,
             semantics: None,
@@ -673,6 +680,7 @@ impl Element {
             native: None,
             scroll: None,
             scroll_x: None,
+            scroll_gutters: false,
             clip: false,
             cursor: None,
             semantics: None,
@@ -1858,6 +1866,17 @@ impl Element {
         self.scroll_x = Some(id);
         self.clip = true;
         self
+    }
+
+    /// [`scrollable_x`](Element::scrollable_x), keeping a classic bar's
+    /// gutter for each bar: content wider than the container (less the
+    /// vertical bar's gutter) scrolls that much further sideways, and while
+    /// it does the content scrolls a gutter further down, so neither bar
+    /// covers its last column or row. A [`text_view`](crate::widgets::text_view)
+    /// keeps its own.
+    pub(crate) fn scrollable_both(mut self, id: ScrollId) -> Self {
+        self.scroll_gutters = true;
+        self.scrollable_x(id)
     }
 
     /// Mark this element selected (or not) for assistive technologies. Implies

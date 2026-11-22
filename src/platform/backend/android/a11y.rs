@@ -80,6 +80,8 @@ struct Node {
     visible: bool,
     /// For a scroll container, where it is scrolled.
     scroll: Option<A11yScroll>,
+    /// For a scroll bar, the scrolling it shows (its range info).
+    bar: Option<A11yScroll>,
 }
 
 /// The tree the provider serves. `nodes[0]` is the root (the host view).
@@ -181,6 +183,7 @@ pub(super) fn update(root: &A11yNode, content: ARect, scale: f64) -> Changes {
             hint: n.hint().unwrap_or_default().to_string(),
             visible,
             scroll: n.scroll,
+            bar: n.scroll_bar,
         });
         let children: Vec<i32> = n
             .children
@@ -264,6 +267,9 @@ pub(super) fn announce(jni: &Jni, changes: Changes) {
         send_event(jni, id, TYPE_ANNOUNCEMENT);
     }
 }
+
+/// `AccessibilityNodeInfo.RangeInfo.RANGE_TYPE_FLOAT`.
+const RANGE_TYPE_FLOAT: i32 = 1;
 
 /// The Android widget class a role reads as.
 fn class_name(role: A11yRole) -> &'static str {
@@ -523,6 +529,34 @@ fn node_info(jni: &Jni, id: i32) -> Option<JObject> {
     }
     if scrollable(&node) {
         set_bool(jni, info, c"setScrollable", true);
+    }
+    // A scroll bar's value: the offset in its range (`RangeInfo`, as a
+    // seek bar's), which TalkBack reads as a percentage.
+    if let Some(bar) = node.bar
+        && let Some(range) = jni.call_static_object(
+            c"android/view/accessibility/AccessibilityNodeInfo$RangeInfo",
+            c"obtain",
+            c"(IFFF)Landroid/view/accessibility/AccessibilityNodeInfo$RangeInfo;",
+            &[
+                JValue {
+                    i: RANGE_TYPE_FLOAT,
+                },
+                JValue { f: 0.0 },
+                JValue {
+                    f: bar.max.max(0.0) as f32,
+                },
+                JValue {
+                    f: bar.offset as f32,
+                },
+            ],
+        )
+    {
+        let _ = jni.call_void(
+            info,
+            c"setRangeInfo",
+            c"(Landroid/view/accessibility/AccessibilityNodeInfo$RangeInfo;)V",
+            &[JValue { l: range }],
+        );
     }
     let mut actions = vec![if a11y_focused {
         ACTION_CLEAR_ACCESSIBILITY_FOCUS

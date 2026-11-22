@@ -91,7 +91,9 @@ fn item(node: &A11yNode) -> Item {
         traits |= SELECTED;
     }
     let is_element = match role {
-        Separator => false,
+        // UIKit's scroll views have no scroll bar elements: VoiceOver
+        // scrolls with three fingers (`accessibilityScroll:`).
+        Separator | ScrollBar => false,
         _ if is_container(role) => node.children.is_empty() && !node.name.is_empty(),
         Text => !node.name.is_empty(),
         _ => true,

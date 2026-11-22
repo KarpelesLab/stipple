@@ -31,7 +31,7 @@ How to build, package and run on each platform, and what works there today.
 | Scroll wheel and trackpad | ✅ ⁶ | ✅ ⁶ | ✅ ⁶ | ✅ iPad ⁸⁰ | mouse wheel ¹⁰ | ✅ ⁶ |
 | Raw pointer events (every button, click counts, lines vs pixels, pointer leaving) | ✅ ³⁶ | ✅ ³⁶ | ✅ ³⁶ | touch | ✅ mouse ³⁶ | ✅ ³⁶ |
 | Touch scrolling (drag, fling, sideways strips) and multi-touch events | — | — | — | ✅ ²⁷ | ✅ ¹⁹ | ✅ ⁶⁰ |
-| Scroll bars (drag the thumb, page on the track) | ✅ ⁷⁴ | ✅ ⁷⁴ | overlay ⁷⁴ | indicator ⁷⁴ | indicator ⁷⁴ | ✅ ⁷⁴ |
+| Scroll bars (drag the thumb, page on the track, hold to repeat, arrows, two-way areas) | ✅ ⁷⁴ | ✅ ⁷⁴ | overlay ⁷⁴ | indicator ⁷⁴ | indicator ⁷⁴ | ✅ ⁷⁴ |
 | Touch gestures: long press for the context menu, pinch and two-finger pan (`on_pinch`) | — | — | — | ✅ ⁶⁰ | ✅ ⁶⁰ | ✅ ⁶⁰ |
 | Editing text with a finger: tap for the caret, word selection, selection handles, the edit menu | — | — | — | ✅ ⁷⁷ | ✅ ⁷⁷ | ✅ ⁷⁷ |
 | Modifiers and shortcuts (Ctrl/Cmd, Shift-select) | ✅ ⁶ | ✅ ⁶ | ✅ ⁶ | hardware keyboard ¹⁰ | ✅ ¹⁰ | ✅ ¹² |
@@ -598,10 +598,20 @@ signed-in Play Store). Desktops and the web have no store and answer
 Windows and the web; on macOS an overlay bar shown while scrolling (classic
 under `Theme::native()` when *Show scroll bars* is *Always*); on iOS and
 Android a thin indicator shown while scrolling, which a finger doesn't drag.
-App-tested (dragging, paging, hover, the virtualized table's and tree's
-extents); on X11, CI drags `tabledemo`'s thumb with `xdotool`. The other
-backends deliver the same pointer events, unchecked there. Not in the
-accessibility tree. See [widgets.md](widgets.md#scroll-bars).
+Pressing and holding the track pages after the platform's delay until the
+thumb reaches the pointer; arrow buttons (on by default on Windows) step and
+repeat; `scroll_both` areas have two bars, a corner and both gutters, and a
+scrolling grid keeps a gutter; all mirrored right to left. A theme's skin
+dresses the parts; under `Theme::native()` Windows' visual styles and
+macOS's legacy `NSScroller` draw them (build-checked only). Each bar is a
+`Role::ScrollBar` node (orientation, value and range) on AT-SPI, UIA, AX,
+Android and the web (AT-SPI and the web's data unit-tested, the others
+build-checked). App-tested (dragging, paging, holding on the test clock,
+arrows, hover, two-way areas left to right and mirrored, the virtualized
+table's and tree's extents, skins); on X11, CI drags `tabledemo`'s thumb with
+`xdotool` and holds a press on `scrolldemo`'s track. The other backends
+deliver the same pointer events, unchecked there. See
+[widgets.md](widgets.md#scroll-bars).
 ⁷⁵ Laid out by the shared CPU text path, so the same everywhere; unit- and
 App-tested (no character box over a shape's opaque pixels, pieces of a line
 on both sides of a shape, floats, wrap sides, bidi, selection across the

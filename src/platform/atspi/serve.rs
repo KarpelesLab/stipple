@@ -42,6 +42,7 @@ mod state {
     pub const EXPANDED: u32 = 10;
     pub const FOCUSABLE: u32 = 11;
     pub const FOCUSED: u32 = 12;
+    pub const HORIZONTAL: u32 = 14;
     pub const MODAL: u32 = 16;
     pub const RESIZABLE: u32 = 21;
     pub const SELECTABLE: u32 = 22;
@@ -49,6 +50,7 @@ mod state {
     pub const SENSITIVE: u32 = 24;
     pub const SHOWING: u32 = 25;
     pub const SINGLE_LINE: u32 = 26;
+    pub const VERTICAL: u32 = 29;
     pub const VISIBLE: u32 = 30;
     pub const CHECKABLE: u32 = 41;
     pub const HAS_POPUP: u32 = 42;
@@ -137,7 +139,7 @@ impl Node<'_> {
     /// container is scrolled (logical pixels from its start), with its range
     /// and step.
     fn value_range(&self) -> Option<ValueRange> {
-        if let Some(s) = self.node.scroll {
+        if let Some(s) = self.node.scroll.or(self.node.scroll_bar) {
             return Some(ValueRange {
                 current: s.offset,
                 min: 0.0,
@@ -190,7 +192,7 @@ impl Node<'_> {
         if !v.is_finite() {
             return None;
         }
-        if let Some(s) = self.node.scroll {
+        if let Some(s) = self.node.scroll.or(self.node.scroll_bar) {
             return Some(self.node.scroll_by_events(s.to(v)).unwrap_or_default());
         }
         self.value()?;
@@ -263,6 +265,14 @@ impl Node<'_> {
         }
         if n.role == ComboBox {
             bits.push(state::HAS_POPUP);
+        }
+        // A scroll bar's orientation.
+        if let Some(s) = n.scroll_bar {
+            bits.push(if s.horizontal {
+                state::HORIZONTAL
+            } else {
+                state::VERTICAL
+            });
         }
         let mut set = [0u32; 2];
         for b in bits {
@@ -1180,5 +1190,6 @@ fn role_name(r: A11yRole) -> &'static str {
         Tab => "page tab",
         PasswordField => "password text",
         Dialog => "dialog",
+        ScrollBar => "scroll bar",
     }
 }

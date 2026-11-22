@@ -177,6 +177,54 @@ unsafe fn make_view(deco: NativeDeco, frame: CgRect) -> Id {
 }
 
 pub fn render(deco: NativeDeco, size: PhysicalSize, scale: f64) -> Option<Pixmap> {
+    capture(size, scale, |frame| unsafe { make_view(deco, frame) })
+}
+
+/// A scroll bar's track or thumb, from a legacy (always shown) `NSScroller`
+/// of that size: with no knob for the track, and a knob filling it for the
+/// thumb. AppKit's bars have no arrow buttons, and their corner is the
+/// window's background: those stay Stipple's.
+pub fn scroll_part(
+    part: super::ScrollPart,
+    _state: super::NativeState,
+    dark: bool,
+    size: PhysicalSize,
+    scale: f64,
+) -> Option<Pixmap> {
+    use super::ScrollPart;
+    let proportion = match part {
+        ScrollPart::Track { .. } => 1.0_f64,
+        ScrollPart::Thumb { .. } => 0.999_f64,
+        ScrollPart::Arrow(_) | ScrollPart::Corner => return None,
+    };
+    capture(size, scale, |frame| unsafe {
+        let alloc: Id = msg!(class("NSScroller"), "alloc", () -> Id);
+        let s: Id = msg!(alloc, "initWithFrame:", (frame: CgRect) -> Id);
+        if s.is_null() {
+            return s;
+        }
+        // NSScrollerStyleLegacy.
+        let legacy = 0_i64;
+        msg!(s, "setScrollerStyle:", (legacy: i64) -> ());
+        let yes = true;
+        msg!(s, "setEnabled:", (yes: bool) -> ());
+        msg!(s, "setKnobProportion:", (proportion: f64) -> ());
+        let zero = 0.0_f64;
+        msg!(s, "setDoubleValue:", (zero: f64) -> ());
+        let name = nsstring(if dark {
+            "NSAppearanceNameDarkAqua"
+        } else {
+            "NSAppearanceNameAqua"
+        });
+        let appearance: Id = msg!(class("NSAppearance"), "appearanceNamed:", (name: Id) -> Id);
+        msg!(s, "setAppearance:", (appearance: Id) -> ());
+        s
+    })
+}
+
+/// Capture the view `make` creates for a frame of `size` physical pixels
+/// (`scale` per point) into a bitmap. `make`'s view is released after.
+fn capture(size: PhysicalSize, scale: f64, make: impl FnOnce(CgRect) -> Id) -> Option<Pixmap> {
     with_pool(|| unsafe {
         let (w, h) = (size.width as i64, size.height as i64);
         let logical = CgSize {
@@ -189,7 +237,7 @@ pub fn render(deco: NativeDeco, size: PhysicalSize, scale: f64) -> Option<Pixmap
             width: logical.width,
             height: logical.height,
         };
-        let view = make_view(deco, frame);
+        let view = make(frame);
         if view.is_null() {
             return None;
         }

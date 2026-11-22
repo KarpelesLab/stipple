@@ -180,6 +180,18 @@ impl<S: 'static> App<S> {
         event: &Event,
         now: Instant,
     ) -> PointerInput {
+        let out = self.pane_pointer_input_inner(idx, event, now);
+        // A press held on a scroll bar repeats on a timer.
+        self.sync_scroll_bar_timer(idx);
+        out
+    }
+
+    fn pane_pointer_input_inner(
+        &mut self,
+        idx: usize,
+        event: &Event,
+        now: Instant,
+    ) -> PointerInput {
         let App {
             state,
             theme,

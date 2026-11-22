@@ -148,11 +148,12 @@ impl A11yNode {
         out
     }
 
-    /// Scroll this scroll container by `by` logical pixels along its axis
-    /// (positive: towards the end): a wheel at its middle. `None` when it
-    /// isn't a scroll container, or `by` goes nowhere.
+    /// Scroll this scroll container (or the container of this scroll bar)
+    /// by `by` logical pixels along its axis (positive: towards the end): a
+    /// wheel at its middle. `None` when it isn't a scroll container or bar,
+    /// or `by` goes nowhere.
     pub(crate) fn scroll_by_events(&self, by: f64) -> Option<Vec<Event>> {
-        let s = self.scroll?;
+        let s = self.scroll.or(self.scroll_bar)?;
         // Clamp to the range, so a request past an end does what it can.
         let by = s.to(s.offset + by);
         if by.abs() < 0.5 {
@@ -171,13 +172,13 @@ impl A11yNode {
 
     /// Scroll this container a page forward (towards its end) or back.
     pub(crate) fn scroll_page_events(&self, forward: bool) -> Option<Vec<Event>> {
-        let page = self.scroll?.page();
+        let page = self.scroll.or(self.scroll_bar)?.page();
         self.scroll_by_events(if forward { page } else { -page })
     }
 
     /// Scroll this container to `fraction` (`0..=1`) of its range.
     pub(crate) fn scroll_to_fraction_events(&self, fraction: f64) -> Option<Vec<Event>> {
-        let s = self.scroll?;
+        let s = self.scroll.or(self.scroll_bar)?;
         self.scroll_by_events(s.to(fraction.clamp(0.0, 1.0) * s.max))
     }
 

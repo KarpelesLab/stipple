@@ -303,7 +303,67 @@ fn parts(deco: NativeDeco, w: i32, h: i32, scale: f64) -> Vec<Part> {
 
 pub fn render(deco: NativeDeco, size: PhysicalSize, scale: f64) -> Option<Pixmap> {
     let (w, h) = (size.width as i32, size.height as i32);
-    let parts = parts(deco, w, h, scale);
+    draw_parts(&parts(deco, w, h, scale), deco.dark, size)
+}
+
+// vsstyle.h's SCROLLBAR parts.
+const SBP_ARROWBTN: i32 = 1;
+const SBP_THUMBBTNHORZ: i32 = 2;
+const SBP_THUMBBTNVERT: i32 = 3;
+const SBP_UPPERTRACKHORZ: i32 = 5;
+const SBP_UPPERTRACKVERT: i32 = 7;
+const SBP_LOWERTRACKVERT: i32 = 6;
+
+/// A scroll bar's part, from the visual styles' `SCROLLBAR` class (the
+/// dark one Explorer uses in the dark appearance).
+pub fn scroll_part(
+    part: super::ScrollPart,
+    state: NativeState,
+    dark: bool,
+    size: PhysicalSize,
+    _scale: f64,
+) -> Option<Pixmap> {
+    use super::{ArrowDir, ScrollPart};
+    let i = interaction(state);
+    let (part, state) = match part {
+        ScrollPart::Track { vertical: true } => (SBP_UPPERTRACKVERT, 1),
+        ScrollPart::Track { vertical: false } => (SBP_UPPERTRACKHORZ, 1),
+        // SCRBS_NORMAL 1, HOT 2, PRESSED 3.
+        ScrollPart::Thumb { vertical: true } => (SBP_THUMBBTNVERT, i),
+        ScrollPart::Thumb { vertical: false } => (SBP_THUMBBTNHORZ, i),
+        // ABS_UPNORMAL 1.. ABS_DOWNNORMAL 5.., ABS_LEFTNORMAL 9..,
+        // ABS_RIGHTNORMAL 13.., each normal, hot, pressed, disabled.
+        ScrollPart::Arrow(dir) => {
+            let base = match dir {
+                ArrowDir::Up => 1,
+                ArrowDir::Down => 5,
+                ArrowDir::Left => 9,
+                ArrowDir::Right => 13,
+            };
+            (SBP_ARROWBTN, base + i - 1)
+        }
+        // The corner is the track's color.
+        ScrollPart::Corner => (SBP_LOWERTRACKVERT, 1),
+    };
+    let rect = Rect {
+        left: 0,
+        top: 0,
+        right: size.width as i32,
+        bottom: size.height as i32,
+    };
+    let parts = [Part {
+        class: "SCROLLBAR",
+        dark_class: Some("DarkMode_Explorer::SCROLLBAR"),
+        part,
+        state,
+        rect,
+    }];
+    draw_parts(&parts, dark, size)
+}
+
+/// Draw `parts` in order into a `size` bitmap.
+fn draw_parts(parts: &[Part], dark: bool, size: PhysicalSize) -> Option<Pixmap> {
+    let (w, h) = (size.width as i32, size.height as i32);
     if parts.is_empty() {
         return None;
     }
@@ -337,11 +397,9 @@ pub fn render(deco: NativeDeco, size: PhysicalSize, scale: f64) -> Option<Pixmap
 
         let mut draw = |background: u8| -> Vec<u8> {
             pixels.fill(background);
-            for p in &parts {
+            for p in parts {
                 let mut theme = std::ptr::null_mut();
-                if deco.dark
-                    && let Some(dark) = p.dark_class
-                {
+                if dark && let Some(dark) = p.dark_class {
                     theme = OpenThemeData(std::ptr::null_mut(), wide(dark).as_ptr());
                 }
                 if theme.is_null() {

@@ -518,6 +518,30 @@ pub(super) unsafe fn scroll_bar(
     }
 }
 
+/// A [`ScrollBar`](crate::platform::A11yRole::ScrollBar) node of the
+/// tree that no scroll area's own bar stands for (a container scrolling
+/// both ways has one bar of its own, its vertical one: this is its
+/// horizontal one): its orientation and its value, `0..=1`.
+///
+/// # Safety
+/// `el` is one of our elements.
+pub(super) unsafe fn scroll_bar_node(el: Id, node: &A11yNode) {
+    let Some(s) = node.scroll_bar else {
+        return;
+    };
+    unsafe {
+        let orientation = if s.horizontal {
+            ORIENTATION_HORIZONTAL
+        } else {
+            ORIENTATION_VERTICAL
+        };
+        store_i64(el, "setAccessibilityOrientation:", orientation);
+        store_id(el, "setAccessibilityValue:", number_f64(s.fraction()));
+        store_id(el, "setAccessibilityMinValue:", number_f64(0.0));
+        store_id(el, "setAccessibilityMaxValue:", number_f64(1.0));
+    }
+}
+
 /// What an element says of its value, for the in-process dump: `value=…`
 /// (and `subrole=…`), or nothing.
 pub(super) fn describe(el: Id) -> String {

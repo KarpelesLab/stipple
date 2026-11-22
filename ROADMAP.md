@@ -2240,8 +2240,22 @@ Most input only works on X11 today.
   draggable); colors from the palette, solid under `high_contrast`.
   Mirrored right to left. Unit and App tests (geometry, gutter, drag, paging,
   hover, overlay, table and tree extents); `visual-table` drags the
-  `tabledemo` thumb on X11. Not yet: press-and-hold paging, arrow buttons,
-  a gutter for scrolling grids, scroll-bar accessibility roles, skins.*
+  `tabledemo` thumb on X11. Press-and-hold paging on the track (after the
+  look's `repeat_delay`, every `repeat_interval`: Win32's, AppKit's or the
+  browsers' timing, until the thumb reaches the pointer) and arrow buttons
+  (`ScrollBarLook::arrows`, on in `ScrollBarLook::WINDOWS`, the Windows
+  default: a 40 px step, repeating while held), driven by an App timer and
+  tested on the test clock; `scroll_both` (two bars, the corner square, both
+  gutters, mirrored right to left, which also fixed a right-to-left
+  container's sideways scrolling) and a scrolling grid's gutter; each bar a
+  `Role::ScrollBar` node (`AccessNode::scroll_bar`: orientation, value,
+  range) on AT-SPI (`ROLE_SCROLL_BAR`, orientation state, settable `Value`),
+  UIA (`ScrollBar`, `Orientation`, `RangeValue`), AX, Android (`RangeInfo`)
+  and the web (ARIA `scrollbar`); `Skin::scroll_bar` (`ScrollBarSkin`:
+  track, thumb, arrows, corner) and, under `Theme::native`, Windows' visual
+  styles and macOS's legacy `NSScroller` drawing the parts (build-checked).
+  `visual-scroll` holds a press on `scrolldemo`'s track (non-blocking). Not
+  yet: a table scrolling sideways with its header.*
 - ✅ Combo box and searchable select (#85, #97): `combo_box` + `ComboBox`
   (free text with the matching suggestions below, Up/Down/Enter/Tab/Escape, a
   ▾ listing them all), `ComboBox::inline_completion` (the first

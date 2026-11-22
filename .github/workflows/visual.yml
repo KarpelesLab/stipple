@@ -900,7 +900,8 @@ jobs:
 
   # Scroll containers: a tall list clipped to a fixed-height viewport, wheel-
   # scrolled with xdotool. Screenshot before/after and assert the visible frame
-  # changed (content moved) — proving offset + clip work end to end.
+  # changed (content moved) — proving offset + clip work end to end. Then a
+  # press held on the scroll bar's track pages until the thumb reaches it.
   visual-scroll:
     name: Visual test (Scroll / X11)
     runs-on: ubuntu-latest
@@ -965,6 +966,46 @@ jobs:
           diff=$(compare -metric AE visual_output/scroll-settled.png visual_output/scroll-dragged.png null: 2>&1 || true)
           echo "changed pixels after a mouse drag: $diff"
           [ "$(echo "$diff" | awk '{printf "%d", $1}')" -lt 200 ]
+
+      # A press held on the scroll bar's track repeats: held at the track's
+      # top it pages back until the thumb is there, held at its bottom it
+      # pages on until the thumb reaches the pointer (some four pages: one
+      # click moves the thumb some 45 px). The bar is at x 368, from y 80 to
+      # 320; the dark theme's thumb is lighter than its track.
+      - name: Hold a press on the scroll bar's track (non-blocking)
+        continue-on-error: true
+        env:
+          DISPLAY: ":99"
+        run: |
+          luma() { convert "$1" -crop 1x1+"$2"+"$3" +repage -format '%[fx:int(255*luminance)]' info:; }
+          shot() { import -window root -crop 420x360+0+0 +repage "$1"; }
+          xdotool mousemove 368 90 mousedown 1
+          sleep 1.5
+          xdotool mouseup 1
+          xdotool mousemove 200 30
+          sleep 1
+          shot visual_output/scroll-held-top.png
+          top=$(luma visual_output/scroll-held-top.png 368 100)
+          low=$(luma visual_output/scroll-held-top.png 368 310)
+          echo "held at the top: thumb end $top, track end $low"
+          [ "$top" -gt "$low" ]
+          xdotool mousemove 368 310 click 1
+          xdotool mousemove 200 30
+          sleep 1
+          shot visual_output/scroll-clicked.png
+          clicked=$(luma visual_output/scroll-clicked.png 368 310)
+          echo "one click on the track's end: $clicked there (still the track)"
+          [ "$clicked" -eq "$low" ]
+          xdotool mousemove 368 310 mousedown 1
+          sleep 1.5
+          xdotool mouseup 1
+          xdotool mousemove 200 30
+          sleep 1
+          shot visual_output/scroll-held-bottom.png
+          top=$(luma visual_output/scroll-held-bottom.png 368 100)
+          low=$(luma visual_output/scroll-held-bottom.png 368 310)
+          echo "held at the bottom: track end $top, thumb end $low"
+          [ "$low" -gt "$top" ]
 
       - name: Stop the app and Xvfb
         if: always()
@@ -3305,6 +3346,16 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "uiademo --patterns failed" }
           .github\scripts\uia-patterns.ps1 .\target\release\examples\touchdemo.exe visual_output
 
+      # touchdemo's list and strip of chips overflow: each has a scroll bar,
+      # a ScrollBar control (with Orientation and RangeValue) after its
+      # content. Not yet seen on the runner, so it doesn't fail the job.
+      - name: Scroll bars through UI Automation (non-blocking)
+        continue-on-error: true
+        shell: powershell
+        run: |
+          .github\scripts\uia-roles.ps1 -Exe target\release\examples\touchdemo.exe `
+            -Title "Stipple Touch" -Out visual_output -Expect "ScrollBar|*","Pane|*"
+
       - name: Timers and background work wake the event loop
         shell: bash
         run: |
@@ -4964,7 +5015,9 @@ jobs:
       # ATSPI_WALK_DEPTH=1, on a fresh touchdemo): the list of rows is a
       # scroll pane whose "scroll forward" action, Value (set to 0) and
       # Component.ScrollTo on "Row 20" scroll it (the app logs the offsets,
-      # accessible-value events follow); the strip of chips scrolls too; the
+      # accessible-value events follow), and its scroll bar child (a vertical
+      # ROLE_SCROLL_BAR over the same range) scrolls it back when its Value
+      # is set to 0; the strip of chips scrolls too; the
       # "Remember" check box is checked by its action (state and event); and
       # a tap on "Row 2" raises a toast, which arrives as an
       # object:announcement and a polite live-region notification. Passes

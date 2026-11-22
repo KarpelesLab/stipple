@@ -197,8 +197,9 @@ is set; otherwise it follows the parent:
 While its content overflows, a scroll container shows a scroll bar. On
 Linux, Windows and the web it keeps a gutter for it: the content is laid
 out that much narrower (shorter, sideways), and a container sized by its
-content grows by that much instead. See
-[Scroll bars](widgets.md#scroll-bars).
+content grows by that much instead. A scrolling grid keeps the gutter
+too, and `scroll_both` (down and sideways) keeps one for each of its bars.
+See [Scroll bars](widgets.md#scroll-bars).
 
 ## Window size limits
 

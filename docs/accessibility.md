@@ -63,6 +63,32 @@ out, outside the viewport, so a screen reader has to bring it into view first
 (they do, on most platforms, before activating); a container inside another
 under its middle can take a wheel meant for the outer one.
 
+### Scroll bars
+
+Each scroll bar is a node too, after its container's content (so the
+content keeps its places): `Role::ScrollBar`, at the bar's strip (where a
+classic bar is, while an overlay one is hidden), with
+`AccessNode::scroll_bar`, an `AccessScroll` for the way it goes: its
+orientation (`horizontal`) and its value (`offset`, from 0 to `max`). A
+container scrolling both ways ([`scroll_both`](widgets.md#scrolling-both-ways-and-grids),
+`text_view`) has two, its vertical and its horizontal one. Setting a bar's
+value scrolls its container there, by the same wheel as the other scroll
+actions.
+
+| Platform | What a scroll bar is |
+| --- | --- |
+| Windows | a `ScrollBar` control with its `Orientation` and the `RangeValue` pattern (`Value` the offset, `Minimum` 0, `Maximum` the largest offset, `LargeChange` a page, `SmallChange` a line; `SetValue` scrolls) |
+| macOS | the scroll area's `AXScrollBar` (above; settable), and an `AXScrollBar` with its `AXOrientation` and `AXValue` for a two-way area's horizontal bar |
+| iOS | left out: UIKit has no scroll bar elements |
+| Android | a node with its `RangeInfo` (a float range, 0 to the largest offset, at the offset) |
+| Linux | a scroll bar (`ROLE_SCROLL_BAR`) with the `HORIZONTAL` or `VERTICAL` state and `Value` (settable) |
+| Web | an ARIA `scrollbar` with `aria-orientation`, `aria-valuenow`, `aria-valuemin`, `aria-valuemax`, and `aria-controls` naming its container |
+
+Unit-tested: the AT-SPI role, states and `Value` (set too), the ARIA
+overlay's data, and App tests (`src/scroll_bar_more_tests.rs`) of the tree's
+bars and of setting one through the platform mirror. UIA's, macOS's and
+Android's are build-checked only.
+
 ## Toasts
 
 A toast is an `Alert` node. When one appears (a name the tree before didn't
@@ -658,5 +684,5 @@ compositor outside CI.
 Not covered: no text attributes, character extents are the node's box split
 evenly (not the glyphs'), only labelled-by / label-for relations (and only
 where the app declares them), a spin button's `Value` has no range, and a
-scroll pane has no scroll bar children (its `Value` stands for them); nodes
+scroll pane's `Value` and its scroll bar children's say the same; nodes
 scrolled out of view still say `showing`. Relations are AT-SPI's only.

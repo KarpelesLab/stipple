@@ -190,7 +190,11 @@ positions given to tap and context handlers are real window positions.
 
 Scroll bars mirror too: a vertical container's bar (and the gutter a classic
 one keeps) is on its left, and a right-to-left sideways strip, which starts
-at the right, has its thumb start at the right of its bar. Layouts built from absolute positions (`Anchor::At`, custom
+at the right, has its thumb start at the right of its bar. A container
+scrolling both ways (`scroll_both`) starts at the right: its content
+overflows to the left, the vertical bar and the corner square are on the
+left, the horizontal thumb starts at the right, and a horizontal arrow
+button at the right steps back (towards the start). Layouts built from absolute positions (`Anchor::At`, custom
 drawing) aren't mirrored; compute those from the window's right edge.
 
 `LayoutNode::rtl` says whether a laid-out node was mirrored, and

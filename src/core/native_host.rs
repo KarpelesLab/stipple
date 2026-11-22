@@ -465,12 +465,9 @@ impl Walk {
         // scrollers' while scrolling) passes under the live controls
         // rather than turning every row it crosses into a picture for as
         // long as the list moves.
-        if let Some(bar) = &node.scroll_bar
-            && let Some((track, _)) = bar.track
-        {
-            self.cover(clips.cut(m.map_rect(track)));
-            if bar.thumb_color.a > 0 && bar.thumb.width() > 0.0 {
-                self.cover(clips.cut(m.map_rect(bar.thumb)));
+        for bar in [&node.scroll_bar, &node.scroll_bar_x].into_iter().flatten() {
+            if bar.track.is_some() || bar.dress != crate::core::scroll_bar::Dress::Plain {
+                self.cover(clips.cut(m.map_rect(bar.covers())));
             }
         }
     }
@@ -1144,11 +1141,7 @@ mod tests {
         let mut tree = scrolled_list(&mut cx, 2, 95.0, 0.0, None);
         // A thumb over the rows' right edge, as iOS draws its indicator.
         let thumb = Rect::from_xywh(74.0, 2.0, 4.0, 40.0);
-        let mut bar = BarPaint {
-            track: None,
-            thumb,
-            thumb_color: Color::BLACK,
-        };
+        let mut bar = BarPaint::test(None, thumb, Color::BLACK);
         tree.children[0].scroll_bar = Some(Box::new(bar.clone()));
         let mut host = NativeHost::default();
         host.plan(&mut tree, on());

@@ -1716,6 +1716,12 @@ pub struct LayoutNode {
     /// [`Element::scrollable_x`](crate::core::Element::scrollable_x)): its
     /// children are shifted left by this id's offset too.
     pub(crate) scroll_x: Option<ScrollId>,
+    /// How much further than its content a container that scrolls both ways
+    /// scrolls sideways and down: the gutters its vertical and horizontal
+    /// bars keep (see [`widgets::scroll_both`](crate::widgets::scroll_both)),
+    /// so neither covers the content's last column or row. (0, 0) for
+    /// every other node.
+    pub(crate) scroll_tail: (f64, f64),
     /// Whether the scroll container scrolls sideways: a horizontal stack made
     /// [`scrollable`](crate::core::Element::scrollable) (its offset then
     /// counts from the left, or from the right when laid out right to left).
@@ -1810,6 +1816,7 @@ impl LayoutNode {
             native_a11y: None,
             scroll: None,
             scroll_x: None,
+            scroll_tail: (0.0, 0.0),
             scroll_horizontal: false,
             clip: false,
             cursor: None,
@@ -2419,6 +2426,7 @@ mod tests {
             native_a11y: None,
             scroll: None,
             scroll_x: None,
+            scroll_tail: (0.0, 0.0),
             scroll_horizontal: false,
             clip: false,
             cursor: None,
@@ -2490,6 +2498,7 @@ mod tests {
             native_a11y: None,
             scroll: None,
             scroll_x: None,
+            scroll_tail: (0.0, 0.0),
             scroll_horizontal: false,
             clip: false,
             cursor: None,

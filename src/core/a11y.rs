@@ -127,6 +127,11 @@ pub enum Role {
     PasswordField,
     /// A modal dialog asking the user something (a drawn message box).
     Dialog,
+    /// A scroll container's scroll bar: one per way it scrolls while its
+    /// content overflows, after its content. Its
+    /// [`scroll_bar`](AccessNode::scroll_bar) says which way and where it is
+    /// (the offset its value, 0 to the largest offset its range).
+    ScrollBar,
 }
 
 impl Role {
@@ -245,6 +250,11 @@ pub struct AccessNode {
     /// For a scroll container (an [`Element::scrollable`](crate::core::Element::scrollable)
     /// group, or the list, tree or table around one), where it is scrolled.
     pub scroll: Option<AccessScroll>,
+    /// For a [`Role::ScrollBar`], the scrolling it shows: its orientation
+    /// ([`horizontal`](AccessScroll::horizontal)) and value (the
+    /// [`offset`](AccessScroll::offset), from 0 to
+    /// [`max`](AccessScroll::max)). Setting it scrolls its container.
+    pub scroll_bar: Option<AccessScroll>,
     /// When a live OS control stands for this node (under
     /// [`Theme::native`](crate::style::Theme::native), in a window that
     /// hosts them), its id: the platform exposes that control here.
@@ -394,6 +404,7 @@ fn build(node: &LayoutNode, cx: &Ctx<'_>, is_root: bool) -> AccessNode {
         labelled_by: sem.and_then(|s| s.labelled_by.clone()),
         placeholder: sem.and_then(|s| s.placeholder.clone()),
         scroll: scroll_of(node, cx.offsets),
+        scroll_bar: None,
         native_view: node.native_a11y.or(node.native_live),
         children,
     };
@@ -401,8 +412,56 @@ fn build(node: &LayoutNode, cx: &Ctx<'_>, is_root: bool) -> AccessNode {
     if out.native_view.is_some() {
         out.children.clear();
     }
+    // Its scroll bars, after its content (so the content keeps its places).
+    if role.is_container() {
+        out.children.extend(scroll_bars_of(node, cx.offsets));
+    }
     hoist_scroll(&mut out);
     out
+}
+
+/// The scroll bars of scroll container `node` at `offsets`, as
+/// [`Role::ScrollBar`] nodes: one each way its content overflows, at the
+/// strip the frame drew it in (where a classic bar would be, while an
+/// overlay one is hidden).
+fn scroll_bars_of(node: &LayoutNode, offsets: &HashMap<ScrollId, f64>) -> Vec<AccessNode> {
+    if node.scroll.is_none() {
+        return Vec::new();
+    }
+    let look = crate::style::ScrollBarLook::CLASSIC;
+    let drawn = [&node.scroll_bar, &node.scroll_bar_x];
+    crate::core::scroll_bar::bars(node, offsets, &look)
+        .into_iter()
+        .zip(drawn)
+        .filter_map(|(bar, drawn)| {
+            let (_, g) = bar?;
+            let bounds = drawn.as_ref().map_or(g.strip, |b| b.strip);
+            Some(AccessNode {
+                role: Role::ScrollBar,
+                name: String::new(),
+                bounds,
+                focused: false,
+                selected: false,
+                expanded: None,
+                checked: None,
+                caret: None,
+                text_selection: None,
+                id: None,
+                labelled_by: None,
+                placeholder: None,
+                scroll: None,
+                scroll_bar: Some(AccessScroll {
+                    offset: g.offset,
+                    max: g.max,
+                    viewport: g.viewport,
+                    horizontal: g.horizontal,
+                    rtl: g.reversed,
+                }),
+                native_view: None,
+                children: Vec::new(),
+            })
+        })
+        .collect()
 }
 
 /// Whether the field `node` shows its placeholder in place of a value.

@@ -16,10 +16,10 @@ use crate::render::Color;
 
 mod motion;
 mod scroll_bar;
-mod skin;
+pub(crate) mod skin;
 pub use motion::MotionTokens;
 pub use scroll_bar::ScrollBarLook;
-pub use skin::{BarSkin, Skin, StateSkin, ToggleSkin};
+pub use skin::{BarSkin, ScrollBarArrows, ScrollBarSkin, Skin, StateSkin, ToggleSkin};
 
 /// Chainable setters for an input struct's public fields, one per field:
 /// `fn field(mut self, field: Type) -> Self`. Used inside an `impl` block.
@@ -400,7 +400,7 @@ impl Theme {
         // scrolling.
         match look.overlay_scrollers {
             Some(true) => theme.scroll_bar = ScrollBarLook::OVERLAY,
-            Some(false) => theme.scroll_bar = ScrollBarLook::CLASSIC,
+            Some(false) => theme.scroll_bar = ScrollBarLook::MAC_LEGACY,
             None => {}
         }
         theme.font_size(metrics.1)

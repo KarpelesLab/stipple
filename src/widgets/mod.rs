@@ -317,6 +317,37 @@ pub fn scroll_horizontal<S>(cx: &mut Cx<S>) -> Element {
         .align(Align::Start, Align::Stretch)
 }
 
+/// A viewport that scrolls both ways (a large picture, a wide grid of
+/// cells, a spreadsheet): a column, like [`scroll`], whose content may also
+/// be wider than it (a child with a [`min_width`](Element::min_width) or a
+/// fixed [`width`](Element::width) past it). A vertical wheel scrolls it
+/// down, a horizontal one (or Shift+wheel, or a sideways trackpad swipe)
+/// sideways, and a finger both ways. While the content overflows each way,
+/// it shows a bar along that edge: the vertical one on the trailing side,
+/// the horizontal one along the bottom, each stopping short of the corner
+/// square where they meet. With classic bars both keep a gutter, so neither
+/// covers the content: it scrolls as much further sideways and down. Its
+/// width follows the space there is, not the content's; its height
+/// follows [`scroll`]'s rule. Right to left, the content starts at the
+/// right and the vertical bar is on the left.
+///
+/// ```
+/// use stipple::prelude::*;
+/// use stipple::widgets::scroll_both;
+/// # fn view(cx: &mut Cx<()>) -> Element {
+/// scroll_both(cx).height(300.0).child(
+///     Element::boxed(Default::default()).width(2000.0).height(2000.0),
+/// )
+/// # }
+/// ```
+pub fn scroll_both<S>(cx: &mut Cx<S>) -> Element {
+    let id = cx.register_scroll();
+    let x = cx.register_scroll();
+    Element::stack(Axis::Vertical, Vec::new())
+        .scrollable(id)
+        .scrollable_both(x)
+}
+
 /// An embedded-content viewport of `width`×`height` logical pixels for the
 /// given [`ViewportId`], framed with a hairline themed border. The app fills the
 /// reserved rect with externally-rendered pixels (a browser page, video, or a

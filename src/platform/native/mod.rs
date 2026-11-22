@@ -321,6 +321,83 @@ pub(crate) fn render(deco: NativeDeco, size: PhysicalSize, scale: f64) -> Option
     image
 }
 
+/// Where a scroll bar's arrow button points.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum ArrowDir {
+    Up,
+    Down,
+    Left,
+    Right,
+}
+
+/// A part of a scroll bar the OS may draw (see [`render_scroll_part`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum ScrollPart {
+    /// The strip the thumb runs along.
+    Track { vertical: bool },
+    /// The thumb.
+    Thumb { vertical: bool },
+    /// An arrow button.
+    Arrow(ArrowDir),
+    /// The square between a vertical and a horizontal bar.
+    Corner,
+}
+
+/// Have the OS draw scroll bar `part` in `state` at `size` physical pixels
+/// (`scale` per logical pixel), in its dark appearance or not: Windows'
+/// visual styles (`SCROLLBAR` parts), AppKit's legacy `NSScroller` (its
+/// track and knob). `None` where it can't, or on a platform that draws no
+/// controls; the bar's own colors are drawn instead.
+pub(crate) fn render_scroll_part(
+    part: ScrollPart,
+    state: NativeState,
+    dark: bool,
+    size: PhysicalSize,
+    scale: f64,
+) -> Option<Arc<Pixmap>> {
+    if size.width == 0 || size.height == 0 {
+        return None;
+    }
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    if !objc::on_main_thread() {
+        return None;
+    }
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    {
+        type Key = (ScrollPart, NativeState, bool, u32, u32, u32);
+        static PARTS: OnceLock<Mutex<HashMap<Key, Option<Arc<Pixmap>>>>> = OnceLock::new();
+        let key = (
+            part,
+            state,
+            dark,
+            size.width,
+            size.height,
+            (scale * 1000.0) as u32,
+        );
+        let cache = PARTS.get_or_init(Default::default);
+        if let Some(hit) = cache.lock().ok()?.get(&key) {
+            return hit.clone();
+        }
+        let image = os::scroll_part(part, state, dark, size, scale).map(Arc::new);
+        let mut cache = cache.lock().ok()?;
+        if cache.len() >= CACHE_LIMIT {
+            cache.clear(); // a thumb at every length shouldn't grow forever
+        }
+        cache.insert(key, image.clone());
+        image
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        let _ = (part, state, dark, scale);
+        None
+    }
+}
+
+/// Whether this OS draws scroll bar parts ([`render_scroll_part`]).
+pub(crate) fn draws_scroll_bars() -> bool {
+    cfg!(any(target_os = "windows", target_os = "macos"))
+}
+
 type CacheKey = (NativeDeco, u32, u32, u32);
 const CACHE_LIMIT: usize = 1024;
 static CACHE: OnceLock<Mutex<HashMap<CacheKey, Option<Arc<Pixmap>>>>> = OnceLock::new();

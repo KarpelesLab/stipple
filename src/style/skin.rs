@@ -19,6 +19,7 @@ use crate::render::NineSlice;
 /// | [`bar`](Self::bar) | [`stat_bar`](crate::game::ui::stat_bar) / [`health_bar`](crate::game::ui::health_bar), [`progress_bar`](crate::widgets::progress_bar) |
 /// | [`checkbox`](Self::checkbox) | [`checkbox`](crate::widgets::checkbox)'s box |
 /// | [`switch`](Self::switch) | [`switch`](crate::widgets::switch)'s track and knob |
+/// | [`scroll_bar`](Self::scroll_bar) | every scroll container's bar: its track, thumb, arrow buttons and corner |
 ///
 /// A theme is a plain `Copy` value, so it holds a skin by `&'static`
 /// reference: build the skin once, when the game starts, and
@@ -56,6 +57,9 @@ pub struct Skin {
     pub checkbox: Option<ToggleSkin>,
     /// A switch's track, off and on, and its knob.
     pub switch: Option<ToggleSkin>,
+    /// Scroll bars: their track, thumb, arrow buttons and the corner
+    /// between two bars.
+    pub scroll_bar: Option<ScrollBarSkin>,
 }
 
 impl Skin {
@@ -97,6 +101,12 @@ impl Skin {
     /// Dress switches in `skin`.
     pub fn switch(mut self, skin: ToggleSkin) -> Self {
         self.switch = Some(skin);
+        self
+    }
+
+    /// Dress scroll bars in `skin`.
+    pub fn scroll_bar(mut self, skin: ScrollBarSkin) -> Self {
+        self.scroll_bar = Some(skin);
         self
     }
 
@@ -484,4 +494,116 @@ mod tests {
         assert!(style.theme().skin.is_some_and(|t| std::ptr::eq(t, s)));
         assert!(crate::game::ui::GameStyle::neon().theme().skin.is_none());
     }
+}
+
+/// A scroll bar's images, each part's drawn in place of the theme's colors
+/// (a part left `None` keeps them): the [`track`](Self::track) along the
+/// whole strip, the [`thumb`](Self::thumb) (hovered and pressed frames in
+/// its [`StateSkin`]), the four [arrow buttons](ScrollBarArrows) where the
+/// [`ScrollBarLook`](crate::style::ScrollBarLook) shows them, and the
+/// [`corner`](Self::corner) square where a vertical and a horizontal bar
+/// meet. The frames stretch as nine-slices, so one image serves both
+/// orientations of the track and the thumb.
+///
+/// ```
+/// use std::sync::Arc;
+/// use stipple::prelude::*;
+/// use stipple::render::{NineSlice, Pixmap};
+/// use stipple::style::{ScrollBarSkin, Skin, StateSkin};
+///
+/// let atlas = Arc::new(Pixmap::new(PhysicalSize::new(48, 16)));
+/// let part = |x: f64| NineSlice::new(atlas.clone(), Insets::uniform(4.0))
+///     .region(Rect::from_xywh(x, 0.0, 16.0, 16.0));
+/// let skin = Skin::new()
+///     .scroll_bar(ScrollBarSkin::new().track(part(0.0)).thumb(
+///         StateSkin::new(part(16.0)).pressed(part(32.0)),
+///     ))
+///     .leak();
+/// let theme = Theme::light().skin(skin);
+/// assert!(theme.skin.is_some_and(|s| s.scroll_bar.is_some()));
+/// ```
+#[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub struct ScrollBarSkin {
+    /// The strip behind the thumb.
+    pub track: Option<NineSlice>,
+    /// The thumb, per state (hovered under the pointer, pressed while
+    /// dragged).
+    pub thumb: Option<StateSkin>,
+    /// The arrow buttons.
+    pub arrows: Option<ScrollBarArrows>,
+    /// The square between a vertical and a horizontal bar.
+    pub corner: Option<NineSlice>,
+}
+
+impl ScrollBarSkin {
+    /// No images yet: every part keeps the theme's look.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Draw the track as `frame`.
+    pub fn track(mut self, frame: NineSlice) -> Self {
+        self.track = Some(frame);
+        self
+    }
+
+    /// Draw the thumb in `skin`.
+    pub fn thumb(mut self, skin: StateSkin) -> Self {
+        self.thumb = Some(skin);
+        self
+    }
+
+    /// Draw the arrow buttons as `arrows`.
+    pub fn arrows(mut self, arrows: ScrollBarArrows) -> Self {
+        self.arrows = Some(arrows);
+        self
+    }
+
+    /// Draw the corner between two bars as `frame`.
+    pub fn corner(mut self, frame: NineSlice) -> Self {
+        self.corner = Some(frame);
+        self
+    }
+}
+
+/// A scroll bar's four arrow buttons, each per state (see [`ScrollBarSkin`]);
+/// the images show the arrows. Right to left, a horizontal bar's start is on
+/// the right, and the button there is still [`right`](Self::right).
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct ScrollBarArrows {
+    /// The top button of a vertical bar.
+    pub up: StateSkin,
+    /// The bottom button of a vertical bar.
+    pub down: StateSkin,
+    /// The left button of a horizontal bar.
+    pub left: StateSkin,
+    /// The right button of a horizontal bar.
+    pub right: StateSkin,
+}
+
+impl ScrollBarArrows {
+    /// The four buttons.
+    pub fn new(up: StateSkin, down: StateSkin, left: StateSkin, right: StateSkin) -> Self {
+        Self {
+            up,
+            down,
+            left,
+            right,
+        }
+    }
+}
+
+/// The frame of `skin` for a part `hovered` or `pressed`.
+pub(crate) fn part_frame(skin: &StateSkin, hovered: bool, pressed: bool) -> &NineSlice {
+    if pressed && let Some(f) = &skin.pressed {
+        return f;
+    }
+    if (hovered || pressed)
+        && let Some(f) = &skin.hovered
+    {
+        return f;
+    }
+    &skin.normal
 }

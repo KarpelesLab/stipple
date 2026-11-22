@@ -522,6 +522,14 @@ export async function start(canvas, wasmUrl, options = {}) {
     attr(el, "aria-checked", node.c === undefined ? null : node.c ? "true" : "false");
     attr(el, "aria-placeholder", node.p ?? null);
     el._sc = node.sc ?? null;
+    // A scroll bar: its orientation and value (its container's offset, in
+    // CSS pixels), and the container it scrolls (its parent).
+    const sb = node.sb;
+    attr(el, "aria-orientation", sb ? (sb[2] ? "horizontal" : "vertical") : null);
+    attr(el, "aria-valuemin", sb ? 0 : null);
+    attr(el, "aria-valuemax", sb ? sb[1] : null);
+    attr(el, "aria-valuenow", sb ? sb[0] : null);
+    attr(el, "aria-controls", sb && el.parentElement ? idOf(el.parentElement) : null);
     if (FOCUSABLE.has(node.r)) {
       if (el.tabIndex !== -1 || !el.hasAttribute("tabindex")) el.tabIndex = -1;
     } else if (el.hasAttribute("tabindex")) {

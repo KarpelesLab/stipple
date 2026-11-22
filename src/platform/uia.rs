@@ -52,6 +52,7 @@ use core::ffi::c_void;
 
 mod events;
 mod patterns;
+mod scroll_bar;
 mod text;
 
 pub(crate) use events::{plan_events, raise_planned};
@@ -364,6 +365,7 @@ struct Provider {
     expand_vtable: *const patterns::ExpandVtbl,
     scroll_vtable: *const patterns::ScrollVtbl,
     scroll_item_vtable: *const patterns::ScrollItemVtbl,
+    range_vtable: *const scroll_bar::RangeVtbl,
     text_vtable: *const text::TextVtbl,
     refcount: u32,
     /// UTF-16 (NUL-terminated) accessible name, for `SysAllocString`.
@@ -439,6 +441,7 @@ fn control_type(role: A11yRole) -> i32 {
         // UIA marks a password edit with `IsPassword`, not a control type.
         A11yRole::PasswordField => UIA_EditControlTypeId,
         A11yRole::Dialog => UIA_WindowControlTypeId,
+        A11yRole::ScrollBar => scroll_bar::UIA_ScrollBarControlTypeId,
     }
 }
 
@@ -701,6 +704,11 @@ unsafe extern "system" fn get_pattern_provider(
                 &raw mut (*p).scroll_item_vtable as *mut c_void
             }
             UIA_TextPatternId if has.text => &raw mut (*p).text_vtable as *mut c_void,
+            scroll_bar::UIA_RangeValuePatternId
+                if node_of(p).is_some_and(|n| n.scroll_bar.is_some()) =>
+            {
+                &raw mut (*p).range_vtable as *mut c_void
+            }
             _ => core::ptr::null_mut(),
         };
         if !iface.is_null() {
@@ -861,6 +869,7 @@ unsafe extern "system" fn get_property_value(
                 };
             }
             id if patterns::property(p, id, &mut v) => {}
+            id if scroll_bar::property(p, id, &mut v) => {}
             UIA_IsInvokePatternAvailablePropertyId => {
                 v.vt = VT_BOOL;
                 v.val = if (*p).invokable && !(*p).hwnd.is_null() {
@@ -1246,6 +1255,7 @@ impl UiaTree {
                     expand_vtable: &patterns::EXPAND_VTBL,
                     scroll_vtable: &patterns::SCROLL_VTBL,
                     scroll_item_vtable: &patterns::SCROLL_ITEM_VTBL,
+                    range_vtable: &scroll_bar::RANGE_VTBL,
                     text_vtable: &text::TEXT_VTBL,
                     refcount: 1,
                     name,

@@ -1,31 +1,45 @@
 //! Scroll bars in the [`App`](crate::App): which bar the pointer is over, a
-//! thumb being dragged, overlay bars showing while their container scrolls
-//! and fading after, and writing each frame's bars on the laid-out tree. The
-//! geometry is [`core::scroll_bar`](crate::core::scroll_bar)'s.
+//! thumb being dragged, a press held on the track or an arrow repeating,
+//! overlay bars showing while their container scrolls and fading after, and
+//! writing each frame's bars on the laid-out tree. The geometry is
+//! [`core::scroll_bar`](crate::core::scroll_bar)'s.
 //!
 //! A left press on a bar (on the topmost layer under the pointer) is the
 //! bar's, ahead of the element handlers: on the thumb it starts a drag that
 //! scrolls the container proportionally until the release; on the track it
-//! pages a viewport towards the press. Its moves and release are the bar's
-//! too. Bars that aren't [interactive](crate::style::ScrollBarLook::interactive)
+//! pages a viewport towards the press, and on an arrow button it steps a
+//! line. Held there, it repeats after the look's
+//! [`repeat_delay`](crate::style::ScrollBarLook::repeat_delay), every
+//! [`repeat_interval`](crate::style::ScrollBarLook::repeat_interval): the
+//! track pages until the thumb reaches the pointer, an arrow steps to the
+//! end, and either waits while the pointer is off what it pressed. A timer
+//! wakes the loop for each repeat. Its moves and release are the bar's too.
+//! Bars that aren't [interactive](crate::style::ScrollBarLook::interactive)
 //! (touch platforms') take nothing, and neither does a finger anywhere: it
 //! scrolls by dragging the content.
 
 use std::collections::HashMap;
 use std::time::Duration;
 
-use crate::Pane;
 use crate::core::ScrollId;
-use crate::core::scroll_bar::{self, Part};
+use crate::core::scroll_bar::{self, Dress, Part};
 use crate::geometry::{Affine, Point, Rect};
+use crate::platform::time::Instant;
 use crate::style::Theme;
+use crate::{App, Pane};
 
 /// A press held on a scroll bar.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Held {
     id: ScrollId,
+    /// The part pressed.
+    part: Part,
     /// For a drag of the thumb: where along the thumb it was grabbed.
     grab: Option<f64>,
+    /// Where the pointer is now (window coordinates).
+    pointer: Point,
+    /// When a press on the track or an arrow repeats next.
+    next: Option<Instant>,
 }
 
 /// One window's scroll bars between frames.
@@ -40,6 +54,9 @@ pub(crate) struct ScrollBars {
     active: HashMap<ScrollId, Duration>,
     /// Each container's offset as last drawn, to see it scroll.
     seen: HashMap<ScrollId, f64>,
+    /// The timer waking the loop for the held press's next repeat, and when
+    /// it is due.
+    pub(crate) timer: Option<(crate::core::TimerId, Instant)>,
 }
 
 impl ScrollBars {
@@ -47,6 +64,11 @@ impl ScrollBars {
     /// bar's).
     pub(crate) fn holding(&self) -> bool {
         self.held.is_some()
+    }
+
+    /// When the held press repeats next, if it does.
+    fn deadline(&self) -> Option<Instant> {
+        self.held.and_then(|h| h.next)
     }
 
     /// How visible container `id`'s bar is at `now`: fully for a classic
@@ -99,6 +121,21 @@ impl ScrollBars {
     }
 }
 
+/// What `theme`'s bars are drawn with: its skin's images where it has a
+/// scroll bar skin, else the OS's parts under the native theme (a classic
+/// bar, where the OS draws them), else its colors.
+fn dress(theme: &Theme) -> Dress {
+    if let Some(skin) = theme.skin.and_then(|s| s.scroll_bar.as_ref()) {
+        return Dress::Skin(skin);
+    }
+    if theme.native && !theme.scroll_bar.overlay && crate::platform::native::draws_scroll_bars() {
+        return Dress::Native {
+            dark: theme.is_dark(),
+        };
+    }
+    Dress::Plain
+}
+
 impl<S: 'static> Pane<S> {
     /// Write this frame's scroll bars on `tree` (laid out and scrolled) as of
     /// `now`, returning where they changed (window coordinates).
@@ -114,9 +151,10 @@ impl<S: 'static> Pane<S> {
         let stamp = scroll_bar::Stamp {
             look: theme.scroll_bar,
             palette: theme.palette,
+            dress: dress(theme),
             offsets: &self.scroll_offsets,
             hover: bars.hover,
-            pressed: bars.held.filter(|h| h.grab.is_some()).map(|h| h.id),
+            pressed: bars.held.map(|h| (h.id, h.part)),
             level: &level,
         };
         let mut changed = Vec::new();
@@ -182,7 +220,8 @@ impl<S: 'static> Pane<S> {
 
     /// A left press at `pos`: if it is on a scroll bar, it's the bar's — a
     /// press on the thumb starts dragging it, one on the track pages towards
-    /// the press. Returns whether the bar took it.
+    /// the press, one on an arrow steps; held, the last two repeat. Returns
+    /// whether the bar took it.
     pub(crate) fn scroll_bar_press(&mut self, theme: &Theme, pos: Point) -> bool {
         let Some((id, part)) = self.bar_under(theme, pos) else {
             return false;
@@ -199,33 +238,76 @@ impl<S: 'static> Pane<S> {
         let Some((g, local)) = self.bar_geometry(theme, id, pos) else {
             return false;
         };
-        let grab = match part {
-            Part::Thumb => Some(g.along(local) - g.thumb_start()),
-            Part::Before | Part::After => {
-                self.scroll_bar_to(id, g.paged(part));
-                None
+        let look = theme.scroll_bar;
+        let (grab, next) = match part {
+            Part::Thumb => (Some(g.along(local) - g.thumb_start()), None),
+            _ => {
+                self.scroll_bar_to(id, g.pressed(part, look.arrow_step));
+                (None, repeat_after(look.repeat_delay))
             }
         };
-        self.scroll_bars.held = Some(Held { id, grab });
+        self.scroll_bars.held = Some(Held {
+            id,
+            part,
+            grab,
+            pointer: pos,
+            next,
+        });
         self.scroll_bars.hover = Some((id, part));
         self.dirty = true;
         true
     }
 
     /// The pointer moved to `pos` with a press held on a bar: a dragged
-    /// thumb follows it. Returns whether to repaint.
+    /// thumb follows it; a held track or arrow press repeats where it is
+    /// now. Returns whether to repaint.
     pub(crate) fn scroll_bar_drag(&mut self, theme: &Theme, pos: Point) -> bool {
-        let Some(Held {
-            id,
-            grab: Some(grab),
-        }) = self.scroll_bars.held
-        else {
+        let Some(held) = self.scroll_bars.held.as_mut() else {
             return false;
+        };
+        held.pointer = pos;
+        let (id, part, grab) = (held.id, held.part, held.grab);
+        let Some(grab) = grab else {
+            // Off what it pressed, the press shows it isn't held there.
+            let over = self
+                .bar_under(theme, pos)
+                .filter(|&(i, p)| i == id && p == part);
+            let changed = over != self.scroll_bars.hover;
+            self.scroll_bars.hover = over;
+            self.dirty |= changed;
+            return changed;
         };
         let Some((g, local)) = self.bar_geometry(theme, id, pos) else {
             return false;
         };
         self.scroll_bar_to(id, g.offset_for(g.along(local) - grab))
+    }
+
+    /// A held press on the track or an arrow repeats if it is due at `now`:
+    /// once more towards the pointer while it is still on what it pressed
+    /// (on the track, on the same side of the thumb: paging stops once the
+    /// thumb reaches it). Returns whether the container scrolled.
+    pub(crate) fn scroll_bar_repeat(&mut self, theme: &Theme, now: Instant) -> bool {
+        let Some(held) = self.scroll_bars.held else {
+            return false;
+        };
+        let Some(due) = held.next else {
+            return false;
+        };
+        if now < due {
+            return false;
+        }
+        let look = theme.scroll_bar;
+        if let Some(h) = self.scroll_bars.held.as_mut() {
+            h.next = repeat_after(look.repeat_interval);
+        }
+        let Some((g, local)) = self.bar_geometry(theme, held.id, held.pointer) else {
+            return false;
+        };
+        if g.part_at(local) != Some(held.part) {
+            return false;
+        }
+        self.scroll_bar_to(held.id, g.pressed(held.part, look.arrow_step))
     }
 
     /// The press held on a bar lifted at `pos`. Returns whether to repaint.
@@ -260,5 +342,52 @@ impl<S: 'static> Pane<S> {
         self.scroll_bars.hover = over;
         self.dirty = true;
         true
+    }
+}
+
+/// When a repeat `seconds` from now is due, if the look repeats at all.
+fn repeat_after(seconds: f64) -> Option<Instant> {
+    (seconds.is_finite() && seconds >= 0.0)
+        .then(|| crate::platform::time::now() + Duration::from_secs_f64(seconds.max(0.001)))
+}
+
+impl<S: 'static> App<S> {
+    /// Keep a timer running for the next repeat of a press held on a scroll
+    /// bar, so the loop wakes for it; drop it once nothing repeats.
+    pub(crate) fn sync_scroll_bar_timer(&mut self, idx: usize) {
+        let bars = &mut self.panes[idx].scroll_bars;
+        let due = bars.deadline();
+        match (due, bars.timer) {
+            (Some(due), Some((_, at))) if at == due => {}
+            (due, old) => {
+                if let Some((timer, _)) = old {
+                    self.handle.cancel(timer);
+                }
+                let bars = &mut self.panes[idx].scroll_bars;
+                bars.timer = due.map(|due| {
+                    // A millisecond late rather than early.
+                    let wait = due.saturating_duration_since(crate::platform::time::now())
+                        + Duration::from_millis(1);
+                    (self.handle.after(wait, |_: &mut S| {}), due)
+                });
+            }
+        }
+    }
+
+    /// A press held on a scroll bar of window `idx` repeats, if it is due.
+    /// Returns whether to repaint.
+    pub(crate) fn pane_scroll_bar_repeat(&mut self, idx: usize) -> bool {
+        let now = crate::platform::time::now();
+        let App { theme, panes, .. } = self;
+        let paged = panes[idx].scroll_bar_repeat(theme, now);
+        // The timer that woke the loop for it is spent.
+        if let Some((timer, at)) = panes[idx].scroll_bars.timer
+            && at <= now
+        {
+            panes[idx].scroll_bars.timer = None;
+            self.handle.cancel(timer);
+        }
+        self.sync_scroll_bar_timer(idx);
+        paged
     }
 }

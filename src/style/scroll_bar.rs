@@ -64,6 +64,19 @@ pub struct ScrollBarLook {
     /// Solid colors: the thumb in the text color, for high contrast (set by
     /// [`Theme::high_contrast`](crate::style::Theme::high_contrast)).
     pub strong: bool,
+    /// Arrow buttons at the bar's ends, each a square as wide as the bar:
+    /// a press steps [`arrow_step`](Self::arrow_step) back or on, and keeps
+    /// stepping while held. On by default only where the platform's own bars
+    /// have them (Windows); an overlay bar never shows them.
+    pub arrows: bool,
+    /// How far an arrow press scrolls (logical pixels).
+    pub arrow_step: f64,
+    /// How long a press on the track or an arrow is held before it repeats
+    /// (seconds): the platform's delay.
+    pub repeat_delay: f64,
+    /// How often a held press repeats after that (seconds), paging until the
+    /// thumb reaches the pointer (stepping until the end, for an arrow).
+    pub repeat_interval: f64,
 }
 
 impl ScrollBarLook {
@@ -77,6 +90,18 @@ impl ScrollBarLook {
         min_thumb: 24.0,
         interactive: true,
         strong: false,
+        arrows: false,
+        arrow_step: 40.0,
+        repeat_delay: 0.25,
+        repeat_interval: 0.05,
+    };
+
+    /// Windows' bar: [`CLASSIC`](Self::CLASSIC) with arrow buttons, and
+    /// Win32's repeat timing (0.2 s, then every 0.05 s).
+    pub const WINDOWS: ScrollBarLook = ScrollBarLook {
+        arrows: true,
+        repeat_delay: 0.2,
+        ..Self::CLASSIC
     };
 
     /// macOS's overlay bar: a 7 px thumb over the content's edge, shown
@@ -89,6 +114,10 @@ impl ScrollBarLook {
         min_thumb: 24.0,
         interactive: true,
         strong: false,
+        arrows: false,
+        arrow_step: 40.0,
+        repeat_delay: 0.5,
+        repeat_interval: 0.05,
     };
 
     /// A touch screen's scroll indicator (iOS, Android): a 3 px line over
@@ -101,6 +130,10 @@ impl ScrollBarLook {
         min_thumb: 36.0,
         interactive: false,
         strong: false,
+        arrows: false,
+        arrow_step: 40.0,
+        repeat_delay: 0.5,
+        repeat_interval: 0.05,
     };
 
     super::setters!(
@@ -111,23 +144,49 @@ impl ScrollBarLook {
         min_thumb: f64,
         interactive: bool,
         strong: bool,
+        arrows: bool,
+        arrow_step: f64,
+        repeat_delay: f64,
+        repeat_interval: f64,
     );
 
     /// The platform's bar, as the built-in themes use it: [`OVERLAY`] on
-    /// macOS, [`TOUCH`] on iOS and Android, [`CLASSIC`] elsewhere (Windows,
-    /// Linux, the web).
+    /// macOS, [`TOUCH`] on iOS and Android, [`WINDOWS`] (arrow buttons) on
+    /// Windows, [`CLASSIC`] elsewhere (Linux, the web).
     ///
     /// [`OVERLAY`]: Self::OVERLAY
     /// [`TOUCH`]: Self::TOUCH
+    /// [`WINDOWS`]: Self::WINDOWS
     /// [`CLASSIC`]: Self::CLASSIC
     pub const fn platform() -> Self {
         #[cfg(target_os = "macos")]
         let look = Self::OVERLAY;
         #[cfg(any(target_os = "ios", target_os = "android"))]
         let look = Self::TOUCH;
-        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android")))]
+        #[cfg(target_os = "windows")]
+        let look = Self::WINDOWS;
+        #[cfg(not(any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "android",
+            target_os = "windows"
+        )))]
         let look = Self::CLASSIC;
         look
+    }
+
+    /// The legacy (always shown) bar of macOS, as `Theme::native` takes it
+    /// when *Show scroll bars* is *Always*: [`CLASSIC`](Self::CLASSIC) with
+    /// AppKit's repeat timing (0.5 s, then every 0.05 s).
+    pub const MAC_LEGACY: ScrollBarLook = ScrollBarLook {
+        repeat_delay: 0.5,
+        ..Self::CLASSIC
+    };
+
+    /// Whether arrow buttons show at the bar's ends: [`arrows`](Self::arrows)
+    /// on a bar that the pointer uses and that isn't an overlay.
+    pub fn shows_arrows(&self) -> bool {
+        self.arrows && !self.overlay && self.interactive
     }
 
     /// The gutter a scroll container keeps beside its content for the bar
@@ -175,6 +234,37 @@ impl ScrollBarLook {
             }
         });
         (thumb, track)
+    }
+
+    /// An arrow button's colors in `palette`: the arrow's, and the button's
+    /// fill (none at rest), the pointer over it (`hovered`), held down
+    /// (`pressed`), or at the end it scrolls towards (`spent`: faded).
+    pub(crate) fn arrow_colors(
+        &self,
+        palette: &Palette,
+        hovered: bool,
+        pressed: bool,
+        spent: bool,
+    ) -> (Color, Option<Color>) {
+        let ink = palette.text;
+        let alpha = |a: u8| Color::rgba(ink.r, ink.g, ink.b, a);
+        let glyph = if spent {
+            alpha(0x40)
+        } else if self.strong || pressed {
+            ink
+        } else if hovered {
+            alpha(0xc0)
+        } else {
+            alpha(0x90)
+        };
+        let fill = if pressed {
+            Some(alpha(0x30))
+        } else if hovered {
+            Some(alpha(0x18))
+        } else {
+            None
+        };
+        (glyph, fill)
     }
 }
 

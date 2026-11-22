@@ -720,6 +720,7 @@ fn ax_role(role: crate::platform::access::A11yRole) -> &'static str {
         // `AXTextField` with the `AXSecureTextField` subrole, in AppKit.
         PasswordField => "AXTextField",
         Dialog => "AXGroup",
+        ScrollBar => "AXScrollBar",
     }
 }
 
@@ -799,9 +800,22 @@ unsafe fn build_ax_element(
     if !node.children.is_empty() || bar.is_some() {
         let arr = unsafe { msg_id(class("NSMutableArray"), sel("array")) };
         for (i, child) in node.children.iter().enumerate() {
+            // The scroll area's own bar (`ax_value::scroll_bar`, settable;
+            // a list's, when the list took its body's scroll) stands for
+            // the tree's bar along its axis: only the other way's is kept.
+            if let Some(bar) = child.scroll_bar
+                && node
+                    .scroll
+                    .is_none_or(|own| own.horizontal == bar.horizontal)
+            {
+                continue;
+            }
             path.push(i);
             let ce = unsafe { build_ax_element(child, el, view, root, path) };
             path.pop();
+            if child.scroll_bar.is_some() && !ce.is_null() {
+                unsafe { ax_value::scroll_bar_node(ce, child) };
+            }
             unsafe { msg_void_id(arr, sel("addObject:"), ce) };
         }
         if let Some(bar) = bar {

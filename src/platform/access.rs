@@ -79,6 +79,9 @@ pub enum A11yRole {
     PasswordField,
     /// A modal dialog.
     Dialog,
+    /// A scroll container's scroll bar ([`A11yNode::scroll_bar`] says which
+    /// way, and where it is).
+    ScrollBar,
 }
 
 /// Where a scroll container is scrolled — mirrors `stipple::core::AccessScroll`.
@@ -127,6 +130,9 @@ pub struct A11yNode {
     pub placeholder: Option<String>,
     /// For a scroll container, where it is scrolled.
     pub scroll: Option<A11yScroll>,
+    /// For a [`A11yRole::ScrollBar`], the scrolling it shows: its
+    /// orientation, and its value (the offset, from 0 to the largest).
+    pub scroll_bar: Option<A11yScroll>,
     /// The live OS control that stands for this node (see
     /// [`NativeView`](crate::platform::native::NativeView)), by id: the
     /// bridge exposes that control here, as the OS's own accessibility
@@ -154,6 +160,7 @@ impl A11yNode {
             labelled_by: None,
             placeholder: None,
             scroll: None,
+            scroll_bar: None,
             native_view: None,
             children: Vec::new(),
         }
@@ -301,16 +308,18 @@ pub(crate) fn aria_role(role: A11yRole) -> &'static str {
         // ARIA has no password role; the overlay's textbox stands for it.
         A11yRole::PasswordField => "textbox",
         A11yRole::Dialog => "alertdialog",
+        A11yRole::ScrollBar => "scrollbar",
     }
 }
 
 /// The tree as the JSON `web/stipple.js` turns into its ARIA overlay: per
 /// node `{"r": role, "n": name, "b": [x, y, w, h], "f": focused, "s":
 /// selected, "e": expanded, "c": checked, "sc": [offset, max, sideways,
-/// right to left], "k": [children]}`, with `r` an ARIA role (see
-/// [`aria_role`]; an unnamed group gets none), the booleans as 0/1, and `s`,
-/// `e`, `c`, `sc` (a scroll container's, in whole CSS pixels) and `k` left
-/// out where they don't apply. Bounds are in whole CSS pixels.
+/// right to left], "sb": [value, max, sideways], "k": [children]}`, with
+/// `r` an ARIA role (see [`aria_role`]; an unnamed group gets none), the
+/// booleans as 0/1, and `s`, `e`, `c`, `sc` (a scroll container's, in whole
+/// CSS pixels), `sb` (a scroll bar's) and `k` left out where they don't
+/// apply. Bounds are in whole CSS pixels.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 pub(crate) fn aria_json(node: &A11yNode) -> String {
     use std::fmt::Write;
@@ -371,6 +380,15 @@ pub(crate) fn aria_json(node: &A11yNode) -> String {
                 s.max.round(),
                 u8::from(s.horizontal),
                 u8::from(s.rtl)
+            );
+        }
+        if let Some(s) = n.scroll_bar {
+            let _ = write!(
+                out,
+                ",\"sb\":[{},{},{}]",
+                s.offset.round(),
+                s.max.round(),
+                u8::from(s.horizontal)
             );
         }
         if !n.children.is_empty() {
