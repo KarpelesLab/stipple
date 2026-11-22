@@ -474,10 +474,20 @@ impl<S> AppHandle<S> {
         self.window(WindowRequest::Beep);
     }
 
-    /// Show `label` as a badge on the application's Dock icon (macOS), or
-    /// remove it with `None`.
+    /// Show `label` as a badge on the application's icon, or remove it with
+    /// `None`: the Dock tile's badge on macOS, an overlay icon on the
+    /// taskbar button on Windows (the number, or a dot for a longer label),
+    /// the launcher's count on Linux (numbers only). See
+    /// `docs/window-lifecycle.md`.
     pub fn set_badge(&self, label: Option<&str>) {
         self.window(WindowRequest::Badge(label.map(str::to_string)));
+    }
+
+    /// Show how far a long task has got, from 0 to 1, as a bar on the
+    /// application's icon (the Dock tile, the taskbar button, the Linux
+    /// launcher), or remove it with `None`.
+    pub fn set_progress(&self, progress: Option<f64>) {
+        self.window(WindowRequest::Progress(progress));
     }
 
     /// Open `url` in the user's default app for it (a browser for `https:`, the

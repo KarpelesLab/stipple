@@ -9,8 +9,9 @@
 //!   `AppHandle::close_window`.
 //! - The view shows whether the window has keyboard focus (a solid or hollow
 //!   caret). A second after it loses focus, the "bell" rings: a beep, an
-//!   attention request and a Dock badge counting the bells, cleared when the
-//!   window is focused again.
+//!   attention request and a badge on the app's icon counting the bells, cleared when the
+//!   window is focused again. While work is running, the app's icon shows
+//!   a progress bar (`AppHandle::set_progress`).
 //! - At start it prints what the app is and where its files go
 //!   (`platform::app_info`, `platform::dirs`).
 //!
@@ -31,6 +32,10 @@ struct State {
     /// Bells rung while the window was away.
     bells: u32,
 }
+
+/// How far the running work has got, shown on the app's icon (the Dock
+/// tile, the taskbar button, the Linux launcher).
+const WORK_PROGRESS: f64 = 0.4;
 
 fn say(what: std::fmt::Arguments<'_>) {
     println!("lifecycle: {what}");
@@ -62,12 +67,14 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
         ),
     ])
     .gap(theme.spacing.sm);
-    let busy = checkbox(
-        cx,
-        "Work is running (closing asks first)",
-        state.busy,
-        |s| s.busy = !s.busy,
-    );
+    let busy = checkbox(cx, "Work is running (closing asks first)", state.busy, {
+        let handle = handle.clone();
+        // Running work shows as a progress bar on the app's icon.
+        move |s| {
+            s.busy = !s.busy;
+            handle.set_progress(s.busy.then_some(WORK_PROGRESS));
+        }
+    });
     let beep = button(cx, "Beep").on_tap(cx, {
         let handle = handle.clone();
         move |_| handle.beep()
@@ -146,6 +153,7 @@ fn main() {
         Err(e) => say(format_args!("dirs unavailable: {e}")),
     }
     let handle = app.handle();
+    handle.set_progress(Some(WORK_PROGRESS));
     let on_close = handle.clone();
     let on_focus = handle.clone();
     app.on_close_requested(move |s, id| {

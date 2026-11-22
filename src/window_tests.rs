@@ -148,6 +148,18 @@ impl Window for FakeWindow {
             .borrow_mut()
             .push(format!("increments {} {step:?}", self.id));
     }
+    fn set_badge(&self, label: Option<&str>) {
+        self.desk
+            .log
+            .borrow_mut()
+            .push(format!("badge {} {label:?}", self.id));
+    }
+    fn set_progress(&self, progress: Option<f64>) {
+        self.desk
+            .log
+            .borrow_mut()
+            .push(format!("progress {} {progress:?}", self.id));
+    }
     fn set_keep_awake(&self, on: bool) {
         self.desk
             .log
@@ -450,6 +462,27 @@ fn keep_awake_and_orientations_reach_the_window() {
             "awake 100 true",
             "orientations 100 Orientations(LANDSCAPE_LEFT | LANDSCAPE_RIGHT)"
         ]
+    );
+}
+
+#[test]
+fn the_badge_and_progress_reach_the_primary_window() {
+    let app = App::new(doc(), titled).no_font();
+    let handle = app.handle();
+    // Asked for before the window opens: applied once it does.
+    handle.set_progress(Some(0.4));
+    let mut run = run(app);
+    assert!(
+        run.desk
+            .take_log()
+            .contains(&"progress 100 Some(0.4)".to_string())
+    );
+    handle.set_badge(Some("3"));
+    handle.set_progress(None);
+    run.wake();
+    assert_eq!(
+        run.desk.take_log(),
+        ["badge 100 Some(\"3\")", "progress 100 None"]
     );
 }
 

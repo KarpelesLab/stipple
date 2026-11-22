@@ -47,6 +47,7 @@ mod owned;
 /// `WM_MOUSELEAVE` and the double-click settings.
 mod pointer;
 /// The notification-area icon and notification balloons.
+mod taskbar;
 mod tray;
 /// Input methods through the Text Services Framework.
 mod tsf;
@@ -1296,6 +1297,9 @@ unsafe fn handle_message(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) -> Lresul
     if tray::taskbar_created(hwnd, msg) {
         return 0;
     }
+    if taskbar::button_created(hwnd, msg) {
+        return 0;
+    }
     match msg {
         WM_SETCURSOR if (lp & 0xffff) as u16 == HTCLIENT => {
             let mut cursor = CTX.with(|c| c.borrow().cursor);
@@ -1633,6 +1637,7 @@ unsafe fn handle_message(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) -> Lresul
         attention::WM_QUERYENDSESSION => attention::query_end_session(hwnd),
         WM_DESTROY => {
             tsf::forget(hwnd);
+            taskbar::forget(hwnd);
             crate::platform::native::os_views::forget(hwnd);
             if pointer::locked() == Some(hwnd) {
                 pointer::lock(hwnd, false);
@@ -1964,6 +1969,12 @@ impl Window for WinWindow {
     fn beep(&self) {
         attention::beep();
     }
+    fn set_badge(&self, label: Option<&str>) {
+        taskbar::set_badge(self.hwnd, label);
+    }
+    fn set_progress(&self, progress: Option<f64>) {
+        taskbar::set_progress(self.hwnd, progress);
+    }
     fn set_icon(&self, icon: Option<&crate::render::Pixmap>) {
         set_window_icon(self.hwnd, icon);
     }
@@ -2251,6 +2262,8 @@ where
     unsafe { SetProcessDpiAwarenessContext(PER_MONITOR_AWARE_V2) };
     pointer::read_double_click(unsafe { GetDpiForSystem() });
     register_class()?;
+    // Before any window shows, so its TaskbarButtonCreated is heard.
+    taskbar::install();
     let hwnd = create_window(&attrs)?;
     tray::install(hwnd);
     let mut windows = vec![WinWindow { hwnd }];

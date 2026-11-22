@@ -1566,6 +1566,9 @@ impl Window for MacWindow {
     fn set_badge(&self, label: Option<&str>) {
         lifecycle::set_badge(label);
     }
+    fn set_progress(&self, progress: Option<f64>) {
+        lifecycle::set_progress(progress);
+    }
     fn set_drop_accepted(&self, accepted: bool) {
         CTX.with(|c| c.borrow_mut().drop_accepted = accepted);
     }

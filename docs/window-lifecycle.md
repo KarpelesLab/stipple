@@ -100,9 +100,9 @@ A window counts as focused until the platform says otherwise; X11 and Wayland
 start every window unfocused until the server or compositor focuses it. iOS
 doesn't report focus.
 
-## Attention, the bell and the badge
+## Attention, the bell, the badge and progress
 
-Three calls on the app's handle (or `WindowRequest`s for `AppHandle::window`)
+Four calls on the app's handle (or `WindowRequest`s for `AppHandle::window`)
 go to the primary window:
 
 - `request_attention(UserAttention::Informational | Critical)` asks for the
@@ -111,16 +111,42 @@ go to the primary window:
 - `beep()` sounds the system's alert sound, as an audible bell.
 - `set_badge(Some("3"))` shows a short label on the application's icon, and
   `set_badge(None)` removes it.
+- `set_progress(Some(0.4))` shows how far a long task has got (0 to 1) as a
+  bar on the application's icon, and `set_progress(None)` removes it.
 
-| | Attention | Beep | Badge |
-|---|---|---|---|
-| X11 | the ICCCM urgency hint (`WM_HINTS`) and `_NET_WM_STATE_DEMANDS_ATTENTION`, both cleared on focus | the core `Bell` request | — |
-| Wayland | an `xdg_activation_v1` activation, which compositors show as urgent for a window that isn't focused | `xdg_system_bell_v1`, where the compositor has it; else nothing (Wayland has no other bell) | — |
-| Windows | `FlashWindowEx`: the taskbar button flashes three times, or until the window comes to the front for `Critical` | `MessageBeep` | — |
-| macOS | `requestUserAttention:`: the Dock icon bounces once, or until the app is activated | `NSBeep` | the Dock tile's `badgeLabel` |
+| | Attention | Beep | Badge | Progress |
+|---|---|---|---|---|
+| X11 | the ICCCM urgency hint (`WM_HINTS`) and `_NET_WM_STATE_DEMANDS_ATTENTION`, both cleared on focus; the launcher entry's `urgent` | the core `Bell` request | the launcher entry's `count` (numbers only) | the launcher entry's `progress` |
+| Wayland | an `xdg_activation_v1` activation, which compositors show as urgent for a window that isn't focused; the launcher entry's `urgent` | `xdg_system_bell_v1`, where the compositor has it; else nothing (Wayland has no other bell) | the launcher entry's `count` | the launcher entry's `progress` |
+| Windows | `FlashWindowEx`: the taskbar button flashes three times, or until the window comes to the front for `Critical` | `MessageBeep` | an overlay icon on the window's taskbar button (`ITaskbarList3::SetOverlayIcon`) | the taskbar button's bar (`SetProgressValue` / `SetProgressState`) |
+| macOS | `requestUserAttention:`: the Dock icon bounces once, or until the app is activated | `NSBeep` | the Dock tile's `badgeLabel` | an `NSProgressIndicator` over the Dock tile's icon |
 
-The Windows taskbar's overlay icon (`ITaskbarList3::SetOverlayIcon`) and the
-Unity `LauncherEntry` badge on Linux aren't wired up.
+**Windows.** The taskbar shows a picture, not text, so Stipple draws the
+overlay icon itself (16 pixels at 96 dpi, scaled with the window's dpi): a
+red disc with the label in white when it is a number (`99+` past 99) or one
+or two characters, and the disc alone, a dot, for a longer label. The label
+is the icon's accessible description. Calls made before the window's
+taskbar button exists are applied when the taskbar says it made it
+(`TaskbarButtonCreated`, also sent when Explorer restarts).
+
+**Linux.** The badge, the progress and the urgent flag go to the dock or
+task manager as the `com.canonical.Unity.LauncherEntry` signal `Update`,
+broadcast on the session bus with the whole state each time (`count`,
+`count-visible`, `progress`, `progress-visible`, `urgent`). Ubuntu's Dock
+(Dash to Dock), KDE Plasma's task manager, Plank, Latte and Unity listen for
+it; other desktops show nothing. A launcher has no room for text: only a
+label that is a whole number shows (as the count). The urgent flag follows
+`request_attention` and clears when a window gets the focus. The launcher
+matches the signal's `application://<id>.desktop` to the `.desktop` file the
+app was launched from, where `<id>` is the Flatpak's id (`$FLATPAK_ID`),
+else the id the app gave (`App::app_info`, which is also the Wayland app id
+and the X11 `WM_CLASS`), else the file a GLib launcher started it from
+(`$GIO_LAUNCHED_DESKTOP_FILE`), else the executable's name. Name the
+`.desktop` file after the app's id.
+
+**macOS.** With a progress, the Dock tile's content becomes the app's icon
+with a bar along its bottom (the badge still draws over it); without one, it
+goes back to the plain icon.
 
 ## Window decorations on Wayland
 
@@ -459,7 +485,8 @@ closed tab, restoring its session after a restart) brings its
 is running": close it once and it cancels and asks you to close again; close
 it again and it checks for a moment, then closes itself. It shows whether it
 has the focus, and a second after it loses the focus it rings the bell, asks
-for attention and counts the bells in the Dock badge.
+for attention and counts the bells in the badge on the app's icon; while
+"work is running", the icon shows a progress bar.
 
 ## What CI checks
 
@@ -485,7 +512,10 @@ for attention and counts the bells in the Dock badge.
 - **X11** (Xvfb, with a script standing in for the window manager): a
   `WM_DELETE_WINDOW` the app cancels, then one it confirms, after which the app
   closes the window itself; focus moving to another window and back; the
-  urgency hint set by the bell (`xprop WM_HINTS`) and cleared on focus.
+  urgency hint set by the bell (`xprop WM_HINTS`) and cleared on focus. On a
+  private session bus, `dbus-monitor` reads the launcher entry's `Update`
+  signals: the progress at start, then the bell's count and the urgent flag
+  (non-blocking).
 - **Wayland** (headless sway): the window asks for and gets server-side
   decorations; focus moves to another window and back (`activated`);
   `swaymsg kill` (`xdg_toplevel.close`) is cancelled, then confirmed. Whether
@@ -498,10 +528,15 @@ for attention and counts the bells in the Dock badge.
   against a scripted compositor, as are the decoration negotiation and the
   activation request.
 - **Windows**: `WM_QUERYENDSESSION` is refused and reaches the app, then
-  `WM_CLOSE` is confirmed and the app closes its window.
+  `WM_CLOSE` is confirmed and the app closes its window. A self-test
+  (`STIPPLE_WIN_TASKBAR`) sets an overlay icon (a count and a dot) and a
+  progress once the taskbar button exists, and checks each call succeeds
+  (non-blocking); the taskbar can't be read back, so what it shows isn't
+  checked.
 - **macOS**: an in-process self-test sends `performClose:` and `terminate:`
-  through AppKit, which reach the app through the delegates, and sets the Dock
-  badge and reads it back.
+  through AppKit, which reach the app through the delegates, sets the Dock
+  badge and reads it back, and sets a progress and reads the bar's value
+  back from the tile's content view.
 
 - **iOS** (the simulator): `touchdemo`'s self-test is sent to the background
   (CI launches another app) and brought back (launched again), and checks it

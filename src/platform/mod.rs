@@ -43,6 +43,9 @@ pub(crate) mod awake;
 /// Predictive back: whether the app would go back, and the gesture's progress.
 pub(crate) mod back;
 pub mod backend;
+/// The badge picture drawn for a Windows taskbar button's overlay icon.
+#[cfg(any(target_os = "windows", test))]
+pub(crate) mod badge;
 /// The app's directories (data, config, cache, temp) and bundle information
 /// (identifier, name, version, build number).
 mod bundle;

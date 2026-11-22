@@ -99,6 +99,9 @@ pub enum WindowRequest {
     Beep,
     /// Show a short badge on the application's icon, or remove it.
     Badge(Option<String>),
+    /// Show how far a long task has got (0 to 1) on the application's icon,
+    /// or remove the bar (`None`).
+    Progress(Option<f64>),
     /// Lock the pointer (`true`): hide the cursor, hold it in place and send
     /// relative motion as [`Event::PointerDelta`](crate::platform::Event::PointerDelta),
     /// or release it (`false`).
@@ -152,6 +155,7 @@ impl WindowRequest {
             WindowRequest::Attention(kind) => window.request_attention(*kind),
             WindowRequest::Beep => window.beep(),
             WindowRequest::Badge(label) => window.set_badge(label.as_deref()),
+            WindowRequest::Progress(progress) => window.set_progress(*progress),
             WindowRequest::Title(title) => window.set_title(title),
             WindowRequest::Position(at) => window.set_position(*at),
             WindowRequest::InnerSize(size) => window.set_inner_size(*size),
@@ -776,9 +780,16 @@ pub trait Window {
     fn beep(&self) {}
 
     /// Show `label` (a count, say) as a badge on the application's icon, or
-    /// remove it (`None`): the Dock tile's badge on macOS. Default: a no-op
-    /// (the other platforms have no badge Stipple sets yet).
+    /// remove it (`None`): the Dock tile's badge on macOS, an overlay icon
+    /// on the window's taskbar button on Windows, the launcher entry's count
+    /// on Linux (numbers only). Default: a no-op.
     fn set_badge(&self, _label: Option<&str>) {}
+
+    /// Show `progress` (0 to 1) as a bar on the application's icon, or
+    /// remove it (`None`): a bar over the Dock tile on macOS, the taskbar
+    /// button's progress on Windows, the launcher entry's on Linux. Default:
+    /// a no-op.
+    fn set_progress(&self, _progress: Option<f64>) {}
     /// Show (`true`) or hide (`false`) the window without closing it.
     /// Default: a no-op. The app hides its last window instead of closing it
     /// when it should keep running with none (see

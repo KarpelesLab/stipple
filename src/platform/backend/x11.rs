@@ -1271,6 +1271,13 @@ impl Window for X11Window {
     fn request_attention(&self, kind: Option<crate::platform::UserAttention>) {
         let mut conn = self.conn.lock().unwrap();
         let _ = attention::set_urgent(&mut conn, self.window, kind);
+        crate::platform::shell::launcher::set_urgent(kind.is_some());
+    }
+    fn set_badge(&self, label: Option<&str>) {
+        crate::platform::shell::launcher::set_badge(label);
+    }
+    fn set_progress(&self, progress: Option<f64>) {
+        crate::platform::shell::launcher::set_progress(progress);
     }
     fn beep(&self) {
         let _ = self.conn.lock().unwrap().send(&attention::bell_request());

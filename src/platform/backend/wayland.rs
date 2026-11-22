@@ -1507,6 +1507,13 @@ impl Window for WaylandWindow {
             attention::request(&mut conn, self.surface);
             let _ = conn.stream.flush();
         }
+        crate::platform::shell::launcher::set_urgent(kind.is_some());
+    }
+    fn set_badge(&self, label: Option<&str>) {
+        crate::platform::shell::launcher::set_badge(label);
+    }
+    fn set_progress(&self, progress: Option<f64>) {
+        crate::platform::shell::launcher::set_progress(progress);
     }
     fn beep(&self) {
         let mut conn = self.conn.lock().unwrap();
@@ -2685,6 +2692,9 @@ where
                 // A held key stops repeating when the window loses focus.
                 if !focused {
                     keys.reset();
+                } else {
+                    // The user looked: no longer urgent on the launcher.
+                    crate::platform::shell::launcher::focused();
                 }
                 if handler(Event::FocusChanged(focused), win) == ControlFlow::Exit {
                     break;

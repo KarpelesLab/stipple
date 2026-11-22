@@ -10,8 +10,9 @@ use std::cell::Cell;
 use std::ffi::c_void;
 
 use super::{
-    CTX, Class, Id, Sel, class, class_addMethod, msg_id, msg_u64, msg_void, msg_void_id, nsstring,
-    objc_allocateClassPair, objc_getClass, objc_msgSend, objc_registerClassPair, sel,
+    CTX, CgPoint, CgRect, CgSize, Class, Id, Sel, class, class_addMethod, msg_f64, msg_id, msg_u64,
+    msg_void, msg_void_bool, msg_void_id, msg_void_u64, nsstring, objc_allocateClassPair,
+    objc_getClass, objc_msgSend, objc_registerClassPair, sel,
 };
 use crate::platform::UserAttention;
 use crate::platform::event::Event;
@@ -31,6 +32,8 @@ const NS_TERMINATE_NOW: u64 = 1;
 thread_local! {
     /// The attention request in progress (its id from `requestUserAttention:`).
     static ATTENTION: Cell<Option<i64>> = const { Cell::new(None) };
+    /// The progress bar over the Dock tile, while one shows.
+    static PROGRESS: Cell<Id> = const { Cell::new(std::ptr::null_mut()) };
 }
 
 /// Queue `event` for the loop, which delivers it once AppKit returns.
@@ -177,6 +180,100 @@ pub(super) fn set_badge(label: Option<&str>) {
     }
 }
 
+/// Show `progress` (0 to 1) as a bar over the Dock tile, or remove it. The
+/// tile's content becomes the app's icon with an `NSProgressIndicator` along
+/// its bottom (the badge still draws over it); without a progress, the tile
+/// goes back to the plain icon.
+pub(super) fn set_progress(progress: Option<f64>) {
+    unsafe {
+        let app = shared_app();
+        let tile = msg_id(app, sel("dockTile"));
+        let bar = PROGRESS.get();
+        match progress.filter(|p| !p.is_nan()) {
+            None => {
+                if !bar.is_null() {
+                    msg_void_id(tile, sel("setContentView:"), std::ptr::null_mut());
+                    msg_void(bar, sel("release"));
+                    PROGRESS.set(std::ptr::null_mut());
+                }
+            }
+            Some(p) => {
+                let bar = if bar.is_null() {
+                    let bar = progress_view(app, tile);
+                    PROGRESS.set(bar);
+                    bar
+                } else {
+                    bar
+                };
+                let set: unsafe extern "C" fn(Id, Sel, f64) =
+                    std::mem::transmute(objc_msgSend as *const c_void);
+                set(bar, sel("setDoubleValue:"), p.clamp(0.0, 1.0));
+            }
+        }
+        msg_void(tile, sel("display"));
+    }
+}
+
+/// The Dock tile's content with a progress bar: an `NSImageView` of the
+/// app's icon, filling the tile, with the bar along its bottom. Returns the
+/// bar (retained).
+unsafe fn progress_view(app: Id, tile: Id) -> Id {
+    unsafe {
+        let size_of: unsafe extern "C" fn(Id, Sel) -> CgSize =
+            std::mem::transmute(objc_msgSend as *const c_void);
+        let mut size = size_of(tile, sel("size"));
+        if size.width <= 0.0 || size.height <= 0.0 {
+            size = CgSize {
+                width: 128.0,
+                height: 128.0,
+            };
+        }
+        let init_frame: unsafe extern "C" fn(Id, Sel, CgRect) -> Id =
+            std::mem::transmute(objc_msgSend as *const c_void);
+        let full = CgRect {
+            origin: CgPoint { x: 0.0, y: 0.0 },
+            size,
+        };
+        let view = init_frame(
+            msg_id(class("NSImageView"), sel("alloc")),
+            sel("initWithFrame:"),
+            full,
+        );
+        msg_void_id(
+            view,
+            sel("setImage:"),
+            msg_id(app, sel("applicationIconImage")),
+        );
+        let along = CgRect {
+            origin: CgPoint {
+                x: size.width * 0.1,
+                y: size.height * 0.06,
+            },
+            size: CgSize {
+                width: size.width * 0.8,
+                height: (size.height * 0.16).max(8.0),
+            },
+        };
+        let bar = init_frame(
+            msg_id(class("NSProgressIndicator"), sel("alloc")),
+            sel("initWithFrame:"),
+            along,
+        );
+        // NSProgressIndicatorStyleBar, determinate, from 0 to 1.
+        msg_void_u64(bar, sel("setStyle:"), 0);
+        msg_void_bool(bar, sel("setIndeterminate:"), false);
+        let set: unsafe extern "C" fn(Id, Sel, f64) =
+            std::mem::transmute(objc_msgSend as *const c_void);
+        set(bar, sel("setMinValue:"), 0.0);
+        set(bar, sel("setMaxValue:"), 1.0);
+        msg_void_id(view, sel("addSubview:"), bar);
+        msg_void_id(tile, sel("setContentView:"), view);
+        // The tile holds the view, the view the bar; we keep the bar.
+        msg_void(view, sel("release"));
+        bar
+    }
+}
+
 /// Play the system alert sound.
 pub(super) fn beep() {
     unsafe { NSBeep() };
@@ -200,6 +297,18 @@ pub(super) unsafe fn self_test(window: Id) {
         let tile = msg_id(shared_app(), sel("dockTile"));
         let label = super::nsstring_to_string(msg_id(tile, sel("badgeLabel")));
         set_badge(None);
+        // A progress bar over the tile, read back from its content view.
+        set_progress(Some(0.5));
+        let content = msg_id(tile, sel("contentView"));
+        let bar = PROGRESS.get();
+        let progress = if content.is_null() || bar.is_null() {
+            -1.0
+        } else {
+            msg_f64(bar, sel("doubleValue"))
+        };
+        set_progress(None);
+        let cleared = msg_id(tile, sel("contentView")).is_null();
+        println!("Cocoa dock progress: value={progress} cleared={cleared}");
         // The close request is the window's, the quit the app's.
         let pending: Vec<Event> = CTX.with(|c| {
             let c = c.borrow();

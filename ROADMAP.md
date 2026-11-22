@@ -1773,8 +1773,12 @@ Most input only works on X11 today.
   `WindowAttributes::decorations(false)` turns them off. CI cancels and
   confirms closes on X11, Wayland (sway), Windows and macOS, follows focus on
   X11 and Wayland, reads the X11 urgency hint and the macOS badge, and checks
-  Weston gets a decorated buffer. Not yet: the Windows taskbar overlay badge
-  and the Linux launcher badge. See
+  Weston gets a decorated buffer. The badge and a progress bar
+  (`AppHandle::set_progress`) also show on the Windows taskbar button
+  (`ITaskbarList3`'s overlay icon, drawn by Stipple, and its progress) and the
+  Linux launcher (the `com.canonical.Unity.LauncherEntry` signal: count,
+  progress, urgent), and the progress over the macOS Dock tile; CI reads the
+  Linux signals with `dbus-monitor` and checks the Windows calls succeed. See
   [docs/window-lifecycle.md](docs/window-lifecycle.md).
 - ✅ Mouse cursor shapes (`CursorIcon`): text inputs show the I-beam, tap and
   drag targets the pointing hand, and `.cursor(...)` picks any other (resize

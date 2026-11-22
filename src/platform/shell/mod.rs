@@ -18,6 +18,8 @@ use crate::platform::event::Event;
 use std::path::Path;
 
 #[cfg(target_os = "linux")]
+pub(crate) mod launcher;
+#[cfg(target_os = "linux")]
 #[allow(unsafe_code)]
 pub(crate) mod linux;
 #[cfg(target_os = "linux")]

@@ -6976,6 +6976,35 @@ jobs:
           grep -q 'lifecycle: check done, closing' "$LOG"
           grep -q 'lifecycle: event loop exited' "$LOG"
 
+      # The launcher entry (com.canonical.Unity.LauncherEntry.Update) on a
+      # private session bus, read with dbus-monitor: the work's progress at
+      # start, then the bell's count and urgent flag, cleared on focus.
+      - name: Launcher entry over D-Bus (count, progress, urgent)
+        continue-on-error: true
+        run: |
+          export DISPLAY=:99
+          xdpyinfo > /dev/null 2>&1 || { Xvfb :99 -noreset -screen 0 1024x768x24 & sleep 2; }
+          mkdir -p visual_output
+          dbus-run-session -- bash -ex <<'EOF'
+          MON=visual_output/launcher-monitor.log
+          dbus-monitor --session "type='signal',interface='com.canonical.Unity.LauncherEntry'" > "$MON" 2>&1 &
+          DM=$!
+          sleep 1
+          ./target/release/examples/lifecycle > visual_output/launcher-app.log 2>&1 &
+          APP=$!
+          sleep 4
+          python3 .github/scripts/x11-window.py focus-away 3
+          xdotool search --name "Stipple lifecycle" windowfocus
+          sleep 1.5
+          kill "$APP" "$DM" || true
+          cat "$MON"
+          grep -q 'string "application://com.karpeleslab.stipple.lifecycle.desktop"' "$MON"
+          grep -q 'member=Update' "$MON"
+          grep -q 'double 0.4' "$MON"
+          grep -q 'int64 1' "$MON"
+          grep -A1 '"urgent"' "$MON" | grep -q 'boolean true'
+          EOF
+
       - name: Upload screenshots + log
         uses: actions/upload-artifact@v4
         if: always()
@@ -7301,6 +7330,24 @@ jobs:
       - name: Refuse a logoff, then close
         shell: powershell
         run: .github\scripts\lifecycle-windows.ps1 .\target\release\examples\lifecycle.exe visual_output
+      # ITaskbarList3: the overlay icon (a count, a dot) and the progress,
+      # set once the taskbar button exists. The taskbar can't be read back,
+      # so this checks each call succeeds.
+      - name: Taskbar badge and progress
+        continue-on-error: true
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path visual_output | Out-Null
+          $env:STIPPLE_WIN_TASKBAR = "1"
+          $env:STIPPLE_DEBUG_TASKBAR = "1"
+          $p = Start-Process -FilePath .\target\release\examples\lifecycle.exe -PassThru `
+            -RedirectStandardOutput visual_output\taskbar.log -RedirectStandardError visual_output\taskbar.err
+          Start-Sleep -Seconds 6
+          Stop-Process -Id $p.Id -Force
+          Start-Sleep -Seconds 1
+          Get-Content visual_output\taskbar.log, visual_output\taskbar.err
+          $text = Get-Content visual_output\taskbar.log -Raw
+          if ($text -notmatch [regex]::Escape("Win32 taskbar: overlay=0x0 dot=0x0 progress=0x0 restored=0x0/0x0")) { throw "a taskbar call failed (or no TaskbarButtonCreated)" }
       - name: Upload log
         uses: actions/upload-artifact@v4
         if: always()
@@ -7364,6 +7411,10 @@ jobs:
           grep -q 'lifecycle: close vetoed' lifecycle-macos.log
           grep -q 'lifecycle: close confirmed, checking' lifecycle-macos.log
           grep -q 'lifecycle: event loop exited' lifecycle-macos.log
+      # The Dock tile's progress bar, read back from its content view.
+      - name: Dock progress
+        continue-on-error: true
+        run: grep -q 'Cocoa dock progress: value=0.5 cleared=true' lifecycle-macos.log
 
   # After a fully green push to master, commit the fresh screenshots so the README
   # always shows what the code renders today. Pushes made with GITHUB_TOKEN don't

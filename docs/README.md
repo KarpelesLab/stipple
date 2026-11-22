@@ -90,6 +90,7 @@ How to build, package and run on each platform, and what works there today.
 | State kept across process death (`App::save_state`) | — | — | — | ✅ ⁶⁵ | ✅ ⁵⁹ | ✅ reload ⁶⁵ |
 | Window focus (`Cx::window_focused`) | ✅ ³⁷ | ✅ ³⁸ | ✅ ³⁸ | ❌ | ✅ | ✅ |
 | Attention requests, beep, badge | ✅ ³⁹ | ✅ ³⁹ | ✅ Dock badge ³⁹ | — | — | — |
+| Badge and progress on the app's icon (`set_badge`, `set_progress`) | launcher entry ⁹⁹ | taskbar button ⁹⁹ | Dock tile ⁹⁹ | — | — | — |
 | Title bar on Wayland (xdg-decoration, or drawn) | ✅ ⁴⁰ | — | — | — | — | — |
 | Scenes rendered on the GPU (`stipple::gpu`, experimental) | Vulkan, GLES2 ⁴⁷ | Direct3D 11 ⁴⁷ | Metal ⁴⁷ | Metal ⁴⁷ | Vulkan, GLES2 ⁴⁷ | WebGPU, WebGL2 ⁴⁷ |
 | The GPU by default (`Renderer::Auto`), on a hardware GPU | Vulkan, on X11 ⁸³ | ❌ ⁸³ | Metal ⁸³ | ❌ ⁸³ | ❌ ⁸³ | WebGPU, WebGL2 ⁸³ |
@@ -871,6 +872,16 @@ them; `App::layout_limits(false)` opts out and `App::natural_size(true)`
 opens at the content's natural size. Unit- and App-tested; CI reads the X11
 hints back with `xprop`. Wayland, Windows and macOS only build it. See
 [layout.md](layout.md#window-size-limits).
+
+⁹⁹ The badge and the progress: on Linux the `com.canonical.Unity.LauncherEntry`
+`Update` D-Bus signal (count, progress, urgent; numbers only, matched to the
+app's `.desktop` file by its id), which Ubuntu's Dock, KDE Plasma, Plank and
+Latte show; on Windows `ITaskbarList3`'s overlay icon, drawn by Stipple (the
+count, or a dot), and its progress bar; on macOS the Dock tile's badge and an
+`NSProgressIndicator` over its icon. CI reads the Linux signals with
+`dbus-monitor`, checks the Windows calls succeed (the taskbar can't be read
+back) and reads the macOS badge and bar back. See
+[window-lifecycle.md](window-lifecycle.md#attention-the-bell-the-badge-and-progress).
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled;
