@@ -177,7 +177,7 @@ pub(crate) mod wake;
 mod window;
 
 pub(crate) use access::{A11yNode, A11yRole};
-pub use assets::{AssetError, AssetReader, Assets, assets, set_assets_dir};
+pub use assets::{AssetError, AssetFd, AssetReader, Assets, assets, set_assets_dir};
 pub use back::{BackEdge, BackGesture, back_enabled, set_back_enabled};
 pub(crate) use bundle::declared_name;
 pub use bundle::{AppDirs, AppInfo, app_info, dirs, set_app_info};

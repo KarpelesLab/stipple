@@ -24,6 +24,7 @@ unsafe extern "C" {
     fn AAsset_seek64(asset: *mut c_void, offset: i64, whence: c_int) -> i64;
     fn AAsset_getLength64(asset: *mut c_void) -> i64;
     fn AAsset_close(asset: *mut c_void);
+    fn AAsset_openFileDescriptor64(asset: *mut c_void, start: *mut i64, len: *mut i64) -> c_int;
 }
 
 fn c_path(path: &str) -> Result<CString, AssetError> {
@@ -134,4 +135,26 @@ pub(super) fn list(dir: &str) -> Result<Vec<String>, AssetError> {
         Some(names)
     })
     .ok_or_else(no_activity)
+}
+
+/// The asset as a range of the APK, for an asset stored uncompressed:
+/// `AAsset_openFileDescriptor64` hands over a new descriptor of the APK
+/// (the caller's to close), the asset's offset in it and its length. A
+/// compressed one has no such range.
+pub(super) fn open_fd(path: &str) -> Result<(std::fs::File, u64, u64), AssetError> {
+    use std::os::fd::FromRawFd;
+    let asset =
+        open_mode(path, AASSET_MODE_UNKNOWN)?.ok_or_else(|| AssetError::NotFound(path.into()))?;
+    let (mut start, mut len) = (0i64, 0i64);
+    let fd = unsafe { AAsset_openFileDescriptor64(asset.0, &mut start, &mut len) };
+    if fd < 0 {
+        return Err(AssetError::Compressed(path.into()));
+    }
+    // SAFETY: the descriptor is a new one, ours to close.
+    let file = unsafe { std::fs::File::from_raw_fd(fd) };
+    Ok((
+        file,
+        u64::try_from(start).unwrap_or(0),
+        u64::try_from(len).unwrap_or(0),
+    ))
 }

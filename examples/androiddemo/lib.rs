@@ -490,6 +490,19 @@ mod app {
             files.exists("img/dot.svg"),
             files.read("nope.txt").err().map(|e| e.to_string()),
         );
+        // An asset as a range of the APK (AAsset_openFileDescriptor64):
+        // media/dot.png is stored uncompressed, so it has one, whose bytes
+        // read through the descriptor are the asset's; img/dot.svg is
+        // deflated, so it hasn't (aapt stores hello.txt: too small to gain).
+        let fd = files.open_fd("media/dot.png").map(|fd| {
+            let same = fd.read_all().ok() == files.read("media/dot.png").ok();
+            (fd.offset() > 0, fd.len(), same)
+        });
+        println!(
+            "androiddemo: asset fd media/dot.png={:?} img/dot.svg={:?}",
+            fd.map_err(|e| e.to_string()),
+            files.open_fd("img/dot.svg").err().map(|e| e.to_string()),
+        );
     }
 
     /// `platform::secure_store` (an AndroidKeyStore key sealing files in

@@ -763,7 +763,10 @@ compressed entry inflates it first). `build-apk.sh` packs
 `examples/androiddemo/assets/` (or `$STIPPLE_APK_ASSETS`). Stipple reads them
 through the activity's `AAssetManager` (`AAssetManager_open`, `AAsset_read`,
 `AAssetDir` for listings), with no JNI; a read before the activity exists
-fails with `AssetError::Unavailable`. Play's base module is limited in size,
+fails with `AssetError::Unavailable`. `assets().open_fd(path)` hands an
+uncompressed asset over as the APK's descriptor with the asset's offset and
+length (`AAsset_openFileDescriptor64`), for `MediaPlayer`, `AMediaExtractor`
+or `mmap`. Play's base module is limited in size,
 and Play Asset Delivery (asset packs downloaded after install) isn't
 supported yet.
 

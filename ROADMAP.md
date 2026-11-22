@@ -2049,8 +2049,13 @@ Most input only works on X11 today.
   threads. `build-apk.sh` packs `assets/`, CI's iOS bundle carries one, the
   site serves and preloads each example's. CI reads them on the Android
   emulator, the iOS simulator, Linux and headless Chrome; Windows is
-  build-checked. Not yet: Play Asset Delivery, iOS on-demand resources,
-  `AAsset_openFileDescriptor`._ See
+  build-checked. `Assets::open_fd` hands out an asset as a file range (the
+  APK and the offset and length of an uncompressed asset,
+  `AAsset_openFileDescriptor64`; the asset's own file elsewhere), read back
+  through the descriptor on the Android emulator. Not yet: Play Asset
+  Delivery, iOS on-demand resources (Play's fast-follow and on-demand packs
+  need Google's Java library, on-demand resources the App Store's
+  hosting)._ See
   [docs/os-integration.md](docs/os-integration.md#packaged-assets).
 - ✅ Store packaging (`cargo-stipple`, #50): _a manifest in `Cargo.toml`
   (`[package.metadata.stipple]`) to a signed `.aab` (proto resources from

@@ -220,9 +220,12 @@ def _find_lock(start):
 
 # --- Files -----------------------------------------------------------------
 
-# Formats that are already compressed: stored as they are, so reading them
-# doesn't inflate them first.
-STORED = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".ogg", ".mp3", ".opus", ".flac", ".mp4", ".m4a"}
+# Already-compressed media, stored as they are: reading them needs no
+# inflating, and Assets::open_fd hands them out as a range of the APK.
+STORED = {
+    ".png", ".jpg", ".jpeg", ".webp", ".gif", ".ogg", ".mp3", ".opus", ".flac", ".aac", ".wav",
+    ".mp4", ".m4a", ".m4v", ".webm", ".mkv", ".3gp",
+}
 
 
 def walk(root):

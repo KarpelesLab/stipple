@@ -5774,6 +5774,9 @@ jobs:
           print(f"{h:08x}")' examples/touchdemo/assets/hello.txt)
           grep -qF "touchdemo: asset hello.txt bytes=$size fnv1a=$fnv text=\"Hello from a packaged asset.\"" "$LOG"
           grep -qF 'touchdemo: assets list=["hello.txt"] img=["dot.svg"] exists=true missing=Some("no asset \"nope.txt\"")' "$LOG"
+          # Assets::open_fd (not blocking yet): the asset's own file, from 0.
+          grep -qE "touchdemo: asset fd hello.txt=Ok\(\(0, $size, true, true\)\)" "$LOG" \
+            || echo "::warning::touchdemo: Assets::open_fd didn't give hello.txt's file"
           grep -qF 'touchdemo: loaded img/dot.svg Ok("16x16")' "$LOG"
           # The view adopts UIKeyInput and takes the keyboard while the field
           # has focus...

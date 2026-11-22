@@ -545,9 +545,32 @@ decodes as it plays, so `assets().read("theme.ogg")` costs the file's size,
 not the decoded track's. An image decodes to 4 bytes a pixel, so a 2048×2048
 background is 16 MB however small its PNG was (see [Images](images.md#memory)).
 
+**As a file descriptor.** A media player, `mmap` or a decoder in another
+library wants a file, not bytes. `assets().open_fd(path)` gives an
+`AssetFd`: an open `File`, the asset's `offset` in it and its `len`. On
+Android the file is the APK and the asset a range of it
+(`AAsset_openFileDescriptor64`), so pass all three on
+(`MediaPlayer.setDataSource(fd, offset, length)`,
+`AMediaExtractor_setDataSourceFd`) or `pread` only that range; only an asset
+stored uncompressed has one, and a compressed one fails with
+`AssetError::Compressed` (`cargo-stipple` stores images, sounds and video
+uncompressed; with `aapt`, `-0 <ext>`). Elsewhere the asset is a file of its
+own: offset 0, its whole length, and `path()` for an API that takes a path
+or URL (`AVPlayer`). On the web there's no file (`AssetError::NoFile`).
+`read_all()` reads the range back.
+
+```rust
+let fd = assets().open_fd("video/intro.mp4")?;
+let (file, offset, len) = (fd.file(), fd.offset(), fd.len());
+```
+
 Not there yet: Play Asset Delivery and iOS on-demand resources (files
-downloaded after install), and `AAsset_openFileDescriptor` for handing an
-uncompressed asset's file descriptor to a decoder.
+downloaded after install). Install-time asset packs need only a bundle
+module (`bundletool` merges them into the assets), but fast-follow and
+on-demand packs are fetched through Google's Play Asset Delivery library
+(`AssetPackManager`, Java), and iOS's on-demand resources need asset tags
+compiled into the bundle and hosted by the App Store
+(`NSBundleResourceRequest`); none of them is done.
 
 ## Notifications
 

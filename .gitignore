@@ -13,6 +13,7 @@ Cargo.lock
 *.raw
 *.log
 !examples/imagedemo/assets/*.png
+!examples/androiddemo/assets/**/*.png
 
 # Python bytecode (tools/site)
 __pycache__/

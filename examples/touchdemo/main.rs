@@ -1342,6 +1342,20 @@ mod selftest {
             files.exists("img/dot.svg"),
             files.read("nope.txt").err().map(|e| e.to_string()),
         ));
+        // The asset as a file range: on iOS its own file in the bundle.
+        let fd = files.open_fd("hello.txt").map(|fd| {
+            let path = fd.path().is_some_and(|p| p.ends_with("assets/hello.txt"));
+            (
+                fd.offset(),
+                fd.len(),
+                path,
+                fd.read_all().ok() == files.read("hello.txt").ok(),
+            )
+        });
+        log(&format!(
+            "touchdemo: asset fd hello.txt={:?}",
+            fd.map_err(|e| e.to_string())
+        ));
         handle.load_asset("img/dot.svg", Svg::parse, |_, r| {
             let size = r.map(|s| format!("{}x{}", s.size().width, s.size().height));
             log(&format!("touchdemo: loaded img/dot.svg {size:?}"));

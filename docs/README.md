@@ -54,6 +54,7 @@ How to build, package and run on each platform, and what works there today.
 | Window size limits, maximize, fullscreen | ✅ ⁹ | ✅ ¹⁰ | ✅ ¹⁰ | — | fullscreen ¹⁰ | ❌ |
 | Window size limits from the content's layout | ✅ ⁹⁸ | ✅ ⁹⁸ | ✅ ⁹⁸ | — | — | — |
 | Windows reopen where they were left (`App::remember_window`) | X11, Wayland: size and state ¹⁰⁰ | ✅ ¹⁰⁰ | ✅ ¹⁰⁰ | — | — | — |
+| Packaged assets as a file range for media players and `mmap` (`Assets::open_fd`) | ✅ ¹⁰² | ✅ ¹⁰² | ✅ ¹⁰² | ✅ ¹⁰² | `AAsset_openFileDescriptor64` ¹⁰² | — ¹⁰² |
 | Window icon | ✅ ⁹ | ✅ ¹⁰ | Dock icon ¹⁰ | — | — | ❌ |
 | Several windows, opened and closed at run time | ✅ ⁴⁵ | ✅ ⁴⁵ | ✅ ⁴⁵ | — | — | — |
 | Window titles at run time | ✅ ⁴⁵ | ✅ ⁴⁵ | ✅ ⁴⁵ | — | — | ❌ |
@@ -939,6 +940,15 @@ the value's place (`platform::access`), a spin button by typing the number.
 App tests set them through those events; from outside, the AT-SPI walk and
 the UIA checks, the Android probe and the AX check (`axprobe --ranges`) pass
 in CI and are required (iOS is build-checked). See [accessibility.md](accessibility.md#range-values-tables-and-captions).
+
+¹⁰² `assets().open_fd(path)`: an open `File`, the asset's offset and length.
+On Android the APK and the asset's range in it, for an asset stored
+uncompressed (a compressed one is `AssetError::Compressed`); elsewhere the
+asset's own file, with its path; the web has none. The Android emulator
+reads an uncompressed PNG back through the descriptor and sees a compressed
+file refused; the desktop path is unit-tested; iOS logs it in the simulator
+self-test (not blocking). See
+[os-integration.md](os-integration.md#packaged-assets).
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled;

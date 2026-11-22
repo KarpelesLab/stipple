@@ -181,6 +181,10 @@ for b in open(sys.argv[1], "rb").read():
 print(f"{h:08x}")' "$asset_src")"
 wait_for "androiddemo: asset hello.txt bytes=$asset_size fnv1a=$asset_fnv text=\"Hello from a packaged asset\.\"" 5
 wait_for 'androiddemo: assets list=\[[^]]*"hello\.txt"[^]]*\] img=\["dot\.svg"\] svg=Ok\("16x16"\) streamed=Ok\(\([0-9]+, "from a packaged asset\."\)\) exists=true missing=Some\("no asset \\"nope\.txt\\""\)' 5
+# Assets::open_fd: an uncompressed asset as a range of the APK, read back
+# through the descriptor; a compressed one refused.
+dot_size="$(wc -c < "$(dirname "$asset_src")/media/dot.png" | tr -d ' ')"
+wait_for "androiddemo: asset fd media/dot.png=Ok\\(\\(true, $dot_size, true\\)\\) img/dot.svg=Some\\(\"asset \\\\\"img/dot\\.svg\\\\\" is compressed" 5
 # platform::store without the Play Billing Library in the APK: an error that
 # says so, not a crash (.github/billing/android/test-billing.sh runs it with
 # a stand-in for the library).

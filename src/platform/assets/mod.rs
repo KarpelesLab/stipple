@@ -28,6 +28,13 @@ pub enum AssetError {
     /// The app has nowhere to read assets from: no assets directory on the
     /// desktop, no activity yet on Android. Says where it looked.
     Unavailable(String),
+    /// [`Assets::open_fd`]: the asset is in the APK compressed, so it isn't
+    /// a range of a file. Store it uncompressed (`cargo-stipple` stores
+    /// images, sounds and video; `aapt -0 <ext>`, `noCompress` in Gradle),
+    /// or read it with [`Assets::open`].
+    Compressed(String),
+    /// [`Assets::open_fd`] on the web, where assets aren't files.
+    NoFile(String),
     /// The file is there but couldn't be read.
     Io {
         /// The asset's path.
@@ -57,6 +64,13 @@ impl std::fmt::Display for AssetError {
                 )
             }
             AssetError::Unavailable(why) => write!(f, "no assets: {why}"),
+            AssetError::Compressed(p) => {
+                write!(
+                    f,
+                    "asset {p:?} is compressed in the package: it isn't a file range"
+                )
+            }
+            AssetError::NoFile(p) => write!(f, "asset {p:?} isn't in a file here"),
             AssetError::Io { path, message } => write!(f, "asset {path:?}: {message}"),
             AssetError::Decode { path, message } => {
                 write!(f, "asset {path:?} doesn't decode: {message}")
@@ -281,6 +295,50 @@ impl Assets {
         }
     }
 
+    /// The asset at `path` as a range of an open file, for code that wants a
+    /// file descriptor rather than bytes: a media player
+    /// (`MediaPlayer.setDataSource(fd, offset, length)`, `AMediaExtractor_setDataSourceFd`),
+    /// `mmap`, a decoder in another library.
+    ///
+    /// On Android the file is the APK itself and the asset a range of it
+    /// (`AAsset_openFileDescriptor64`), which only an asset stored
+    /// uncompressed has ([`AssetError::Compressed`] otherwise; `cargo-stipple`
+    /// stores images, sounds and video uncompressed). Elsewhere the asset is
+    /// a file of its own: offset 0, its whole length, and its
+    /// [`path`](AssetFd::path). On the web there's no file
+    /// ([`AssetError::NoFile`]).
+    pub fn open_fd(&self, path: &str) -> Result<AssetFd, AssetError> {
+        let p = clean(path, false)?;
+        #[cfg(target_os = "android")]
+        {
+            android::open_fd(p).map(|(file, offset, len)| AssetFd {
+                file,
+                offset,
+                len,
+                path: None,
+            })
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            Err(AssetError::NoFile(p.into()))
+        }
+        #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
+        {
+            let full = root()?.join(p);
+            let file = std::fs::File::open(&full).map_err(|e| AssetError::io(p, &e))?;
+            let meta = file.metadata().map_err(|e| AssetError::io(p, &e))?;
+            if meta.is_dir() {
+                return Err(AssetError::NotFound(p.into()));
+            }
+            Ok(AssetFd {
+                file,
+                offset: 0,
+                len: meta.len(),
+                path: Some(full),
+            })
+        }
+    }
+
     /// Whether there's an asset (a file, not a directory) at `path`. On the
     /// web, whether one was preloaded there.
     pub fn exists(&self, path: &str) -> bool {
@@ -423,6 +481,63 @@ mod worker {
     }
 }
 
+/// An asset as a range of an open file ([`Assets::open_fd`]): the bytes
+/// from [`offset`](AssetFd::offset), [`len`](AssetFd::len) of them. On
+/// Android the file is the whole APK, so read only that range (`pread`, or
+/// hand the descriptor, offset and length on); elsewhere it's the asset's
+/// own file, from 0.
+#[derive(Debug)]
+pub struct AssetFd {
+    file: std::fs::File,
+    offset: u64,
+    len: u64,
+    path: Option<PathBuf>,
+}
+
+impl AssetFd {
+    /// The open file (on Unix, `as_raw_fd` gives its descriptor).
+    pub fn file(&self) -> &std::fs::File {
+        &self.file
+    }
+
+    /// The file, to own (it closes when dropped).
+    pub fn into_file(self) -> std::fs::File {
+        self.file
+    }
+
+    /// Where the asset starts in the file.
+    pub fn offset(&self) -> u64 {
+        self.offset
+    }
+
+    /// The asset's length, in bytes.
+    pub fn len(&self) -> u64 {
+        self.len
+    }
+
+    /// Whether the asset is empty.
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// The file's path, where the asset is a file of its own (not on
+    /// Android, where it's inside the APK): for an API that takes a path
+    /// or URL (`AVPlayer`, a desktop media library).
+    pub fn path(&self) -> Option<&std::path::Path> {
+        self.path.as_deref()
+    }
+
+    /// The asset's bytes, read from its range of the file (moves the file's
+    /// position).
+    pub fn read_all(&self) -> std::io::Result<Vec<u8>> {
+        let mut f = &self.file;
+        f.seek(SeekFrom::Start(self.offset))?;
+        let mut out = Vec::with_capacity(usize::try_from(self.len).unwrap_or(0));
+        f.take(self.len).read_to_end(&mut out)?;
+        Ok(out)
+    }
+}
+
 /// An open asset, read as it goes ([`Assets::open`]). It implements
 /// [`Read`] and [`Seek`].
 pub struct AssetReader {
@@ -559,6 +674,13 @@ mod tests {
         assert_eq!(a.list("art/").unwrap(), ["a.bin", "b.bin"]);
         assert!(a.list("missing").unwrap().is_empty());
         assert!(matches!(a.open("art"), Err(AssetError::NotFound(_))));
+
+        let fd = a.open_fd("art/a.bin").unwrap();
+        assert_eq!((fd.offset(), fd.len()), (0, 5));
+        assert_eq!(fd.path(), Some(dir.join("art/a.bin").as_path()));
+        assert_eq!(fd.read_all().unwrap(), [1, 2, 3, 4, 5]);
+        assert!(matches!(a.open_fd("art"), Err(AssetError::NotFound(_))));
+        assert!(matches!(a.open_fd("nope"), Err(AssetError::NotFound(_))));
 
         let mut r = a.open("art/a.bin").unwrap();
         assert_eq!(r.len(), 5);
