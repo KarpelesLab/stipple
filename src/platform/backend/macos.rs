@@ -1802,6 +1802,7 @@ impl Window for MacWindow {
         }
     }
     fn open_window(&self, attrs: WindowAttributes) -> Option<WindowId> {
+        let attrs = unsafe { geometry::kept_on_screen(attrs) };
         let w = unsafe { create_window(&attrs) }.ok()?;
         let parent = owned::parent_of(&attrs);
         unsafe {
@@ -2193,6 +2194,7 @@ where
         // Quitting from the Dock or by logging out asks the app first.
         lifecycle::install_app_delegate(app);
 
+        let attrs = geometry::kept_on_screen(attrs);
         let primary = create_window(&attrs)?;
         let (window, view) = (primary.window, primary.view);
         handler(Event::RedrawRequested, &*primary); // populate the framebuffer + a11y tree

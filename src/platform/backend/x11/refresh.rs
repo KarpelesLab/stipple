@@ -18,12 +18,21 @@ const MODE_INTERLACE: u32 = 0x10;
 const MODE_DOUBLE_SCAN: u32 = 0x20;
 
 /// The refresh interval of the fastest active monitor, or `None` if RandR is
-/// missing or reports nothing usable. Call before any window is mapped, so the
-/// replies don't interleave with events.
-pub(super) fn interval(conn: &mut Conn) -> Option<Duration> {
-    let major = query_extension(conn, b"RANDR").ok()??;
-    let hz = fastest_refresh(conn, major).ok()??;
-    (hz.is_finite() && (10.0..=500.0).contains(&hz)).then(|| Duration::from_secs_f64(1.0 / hz))
+/// missing or reports nothing usable; and where each active monitor is on
+/// the screen (`[x, y, width, height]`, physical pixels), empty when
+/// unknown. Call before any window is mapped, so the replies don't
+/// interleave with events.
+pub(super) fn interval(conn: &mut Conn) -> (Option<Duration>, Vec<[i32; 4]>) {
+    let Some(major) = query_extension(conn, b"RANDR").ok().flatten() else {
+        return (None, Vec::new());
+    };
+    let Ok(Some((hz, monitors))) = fastest_refresh(conn, major) else {
+        return (None, Vec::new());
+    };
+    let interval = hz
+        .filter(|hz| hz.is_finite() && (10.0..=500.0).contains(hz))
+        .map(|hz| Duration::from_secs_f64(1.0 / hz));
+    (interval, monitors)
 }
 
 /// Send a request and read its reply: the 32-byte header plus any extra words.
@@ -42,7 +51,11 @@ pub(super) fn round_trip(conn: &mut Conn, req: Vec<u8>) -> io::Result<Option<Vec
     Ok(Some(reply))
 }
 
-fn fastest_refresh(conn: &mut Conn, major: u8) -> io::Result<Option<f64>> {
+/// The fastest active CRTC's refresh rate, and every active CRTC's
+/// rectangle.
+type Crtcs = (Option<f64>, Vec<[i32; 4]>);
+
+fn fastest_refresh(conn: &mut Conn, major: u8) -> io::Result<Option<Crtcs>> {
     // Clients must state the version they speak before other requests.
     let mut req = vec![major, RR_QUERY_VERSION, 0, 0];
     req.extend_from_slice(&1u32.to_le_bytes());
@@ -81,6 +94,7 @@ fn fastest_refresh(conn: &mut Conn, major: u8) -> io::Result<Option<f64>> {
     };
 
     let mut fastest: Option<f64> = None;
+    let mut monitors = Vec::new();
     for crtc in crtc_ids {
         let mut req = vec![major, RR_GET_CRTC_INFO, 0, 0];
         req.extend_from_slice(&crtc.to_le_bytes());
@@ -90,12 +104,26 @@ fn fastest_refresh(conn: &mut Conn, major: u8) -> io::Result<Option<f64>> {
         };
         let mode = rd_u32(&info, 20).unwrap_or(0);
         if mode != 0
+            && let Some(rect) = crtc_rect(&info)
+        {
+            monitors.push(rect);
+        }
+        if mode != 0
             && let Some(hz) = mode_info(mode)
         {
             fastest = Some(fastest.map_or(hz, |f: f64| f.max(hz)));
         }
     }
-    Ok(fastest)
+    Ok(Some((fastest, monitors)))
+}
+
+/// Where a `RRGetCrtcInfo` reply puts its CRTC on the screen: `x`, `y`
+/// (INT16) at 12 and 14, `width`, `height` (CARD16) at 16 and 18.
+fn crtc_rect(info: &[u8]) -> Option<[i32; 4]> {
+    let x = rd_u16(info, 12)? as i16 as i32;
+    let y = rd_u16(info, 14)? as i16 as i32;
+    let (w, h) = (rd_u16(info, 16)? as i32, rd_u16(info, 18)? as i32);
+    (w > 0 && h > 0).then_some([x, y, w, h])
 }
 
 /// The refresh rate of a 32-byte RandR `MODEINFO`, in Hz.
@@ -124,6 +152,18 @@ mod tests {
         m[24..26].copy_from_slice(&vtotal.to_le_bytes());
         m[28..32].copy_from_slice(&flags.to_le_bytes());
         m
+    }
+
+    #[test]
+    fn a_crtcs_rectangle_from_its_info() {
+        let mut info = vec![0u8; 32];
+        info[12..14].copy_from_slice(&(-1280i16).to_le_bytes());
+        info[14..16].copy_from_slice(&0i16.to_le_bytes());
+        info[16..18].copy_from_slice(&1280u16.to_le_bytes());
+        info[18..20].copy_from_slice(&1024u16.to_le_bytes());
+        assert_eq!(crtc_rect(&info), Some([-1280, 0, 1280, 1024]));
+        info[16..18].copy_from_slice(&0u16.to_le_bytes());
+        assert_eq!(crtc_rect(&info), None, "a disabled CRTC");
     }
 
     #[test]

@@ -56,10 +56,11 @@ Add `--features audio` to play Ogg Vorbis, MP3, FLAC and Opus as well as WAV.
   View (List Ctrl/Cmd+1, Grid Ctrl/Cmd+2, the theme, the language), Go
   (Enclosing Folder Alt+Up), Playback (Play/Pause Ctrl/Cmd+P, Stop). Native
   menu bars on Windows and macOS, drawn elsewhere.
-- **Remembered.** The window's size and whether it was maximized (from
-  `App::on_window_change`), the theme, the language, the view, the split
-  positions and the folder, in a file in the app's config directory
-  (`platform::dirs()`).
+- **Remembered.** The window's position, size and whether it was maximized
+  (`App::remember_window`, kept on a monitor that is still there; the size
+  and state also from `App::on_window_change`), the theme, the language, the
+  view, the split positions and the folder, in files in the app's config
+  directory (`platform::dirs()`).
 - **Themes.** The system's (`Theme::native()`: light or dark, the OS's own
   controls on Windows and macOS), or light or dark whatever the system says.
 

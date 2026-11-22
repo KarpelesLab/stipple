@@ -1087,3 +1087,114 @@ fn content_sized_from_the_window_gives_it_no_limits() {
     assert!(run.desk.take_limits().is_empty());
     assert!(!run.desk.take_log().iter().any(|l| l.starts_with("size")));
 }
+
+/// A fresh directory for one test's remembered placements, used by this
+/// thread from now on.
+fn placement_dir(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("stipple-placement-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    crate::app_placement::set_test_dir(Some(dir.clone()));
+    dir
+}
+
+fn read_placement(dir: &std::path::Path, key: &str) -> Option<crate::platform::WindowPlacement> {
+    let text = std::fs::read_to_string(dir.join(format!("{key}.placement"))).ok()?;
+    crate::platform::WindowPlacement::from_text(&text)
+}
+
+#[test]
+fn a_remembered_window_opens_where_it_was_left_and_never_under_its_minimum() {
+    let dir = placement_dir("restore");
+    std::fs::write(
+        dir.join("main.placement"),
+        "x=40\ny=50\nwidth=100\nheight=700\nmaximized=true\n",
+    )
+    .unwrap();
+    let app = App::new((), |_: &(), _: &mut Cx<()>| boxes(300.0))
+        .no_font()
+        .logical_size(Size::new(800.0, 600.0))
+        .natural_size(true)
+        .remember_window("main");
+    let (attrs, _run) = run_opened(app);
+    assert_eq!(attrs.position, Some((40, 50)));
+    assert!(attrs.maximized);
+    assert!(
+        !attrs.natural_size,
+        "the user's size wins over the natural one"
+    );
+    // 100 wide is under the content's 310: raised to it.
+    assert_eq!(attrs.logical_size, Size::new(310.0, 700.0));
+    assert_eq!(attrs.remember.as_deref(), Some("main"));
+
+    // Nothing saved yet (a first run): it opens as asked.
+    placement_dir("fresh");
+    let app = App::new((), |_: &(), _: &mut Cx<()>| boxes(300.0))
+        .no_font()
+        .logical_size(Size::new(800.0, 600.0))
+        .remember_window("main");
+    let (attrs, _run) = run_opened(app);
+    assert_eq!(attrs.position, None);
+    assert_eq!(attrs.logical_size, Size::new(310.0, 600.0));
+    crate::app_placement::set_test_dir(None);
+}
+
+#[test]
+fn a_remembered_window_saves_its_placement_as_it_changes() {
+    let dir = placement_dir("save");
+    let app = App::new(doc(), titled).no_font().remember_window("main");
+    let mut run = run(app);
+    // The window reported itself (200x100, the pretend backend's size).
+    let saved = read_placement(&dir, "main").unwrap();
+    assert_eq!(saved.size, Size::new(200.0, 100.0));
+    // Moved, then maximized: the restored bounds and the state are kept.
+    let mut info = WindowInfo::from_size(PhysicalSize::new(1000, 700), ScaleFactor::IDENTITY);
+    info.maximized = true;
+    info.restored_position = Some(Point::new(30.0, 40.0));
+    info.restored_size = Size::new(640.0, 480.0);
+    run.desk.info.borrow_mut().insert(100, info);
+    run.send(100, Event::WindowChanged);
+    // Minimized, it doesn't say whether it is maximized: not saved.
+    let mut min = info;
+    min.minimized = true;
+    min.maximized = false;
+    run.desk.info.borrow_mut().insert(100, min);
+    run.send(100, Event::WindowChanged);
+    // Changes within a second wait; going away writes the last.
+    drop(run);
+    assert_eq!(
+        read_placement(&dir, "main"),
+        Some(crate::platform::WindowPlacement {
+            position: Some(Point::new(30.0, 40.0)),
+            size: Size::new(640.0, 480.0),
+            maximized: true,
+        })
+    );
+    crate::app_placement::set_test_dir(None);
+}
+
+#[test]
+fn any_window_can_be_remembered_under_its_own_key() {
+    let dir = placement_dir("other");
+    std::fs::write(
+        dir.join("inspector.placement"),
+        "x=900\ny=10\nwidth=300\nheight=500\nmaximized=false\n",
+    )
+    .unwrap();
+    let app = App::new(doc(), titled).no_font();
+    let handle = app.handle();
+    let mut run = run(app);
+    let id = handle.open_window(
+        WindowAttributes::new()
+            .title("Inspector")
+            .layout_limits(false)
+            .remember("inspector"),
+        titled,
+    );
+    run.wake();
+    let info = handle.window_info(id).unwrap();
+    assert_eq!(info.position, Some(Point::new(900.0, 10.0)));
+    assert_eq!(info.inner_size, Size::new(300.0, 500.0));
+    assert!(!info.maximized);
+    crate::app_placement::set_test_dir(None);
+}

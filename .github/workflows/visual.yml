@@ -7005,6 +7005,51 @@ jobs:
           grep -A1 '"urgent"' "$MON" | grep -q 'boolean true'
           EOF
 
+      # App::remember_window: moved and resized, the window opens there on
+      # the next run; a placement on a monitor that's gone comes back on
+      # screen, and one smaller than the content's minimum is raised to it.
+      - name: Window placement across runs
+        continue-on-error: true
+        run: |
+          export DISPLAY=:99
+          xdpyinfo > /dev/null 2>&1 || { Xvfb :99 -noreset -screen 0 1024x768x24 & sleep 2; }
+          export HOME="$RUNNER_TEMP/placement-home" XDG_CONFIG_HOME="$RUNNER_TEMP/placement-home/.config"
+          mkdir -p "$HOME" visual_output
+          F="$HOME/.config/com.karpeleslab.stipple.lifecycle/windows/main.placement"
+          W="Stipple lifecycle"
+          open_app() { ./target/release/examples/lifecycle > "visual_output/placement-$1.log" 2>&1 & APP=$!; sleep 3; }
+          geom() { xwininfo -name "$W" | tee "visual_output/placement-$1.txt"; }
+          open_app 1
+          xdotool search --name "$W" windowmove 150 120
+          sleep 1.5
+          xdotool search --name "$W" windowsize 520 430
+          sleep 1.5
+          kill "$APP"; wait "$APP" || true
+          cat "$F"
+          grep -qx 'x=150' "$F" && grep -qx 'y=120' "$F"
+          grep -qx 'width=520' "$F" && grep -qx 'height=430' "$F"
+          open_app 2
+          geom 2
+          kill "$APP"; wait "$APP" || true
+          grep -q 'Absolute upper-left X: *150' visual_output/placement-2.txt
+          grep -q 'Absolute upper-left Y: *120' visual_output/placement-2.txt
+          grep -q 'Width: 520' visual_output/placement-2.txt
+          grep -q 'Height: 430' visual_output/placement-2.txt
+          # A monitor that's gone (the screen is 1024x768).
+          printf 'x=3000\ny=2000\nwidth=500\nheight=400\nmaximized=false\n' > "$F"
+          open_app 3
+          geom 3
+          kill "$APP"; wait "$APP" || true
+          grep -q 'Absolute upper-left X: *524' visual_output/placement-3.txt
+          grep -q 'Absolute upper-left Y: *368' visual_output/placement-3.txt
+          # Too small for the content: no smaller than its minimum.
+          printf 'x=10\ny=10\nwidth=50\nheight=40\nmaximized=false\n' > "$F"
+          open_app 4
+          geom 4
+          kill "$APP"; wait "$APP" || true
+          [ "$(sed -n 's/.*Width: //p' visual_output/placement-4.txt)" -gt 50 ]
+          [ "$(sed -n 's/.*Height: //p' visual_output/placement-4.txt)" -gt 40 ]
+
       - name: Upload screenshots + log
         uses: actions/upload-artifact@v4
         if: always()
@@ -7348,6 +7393,12 @@ jobs:
           Get-Content visual_output\taskbar.log, visual_output\taskbar.err
           $text = Get-Content visual_output\taskbar.log -Raw
           if ($text -notmatch [regex]::Escape("Win32 taskbar: overlay=0x0 dot=0x0 progress=0x0 restored=0x0/0x0")) { throw "a taskbar call failed (or no TaskbarButtonCreated)" }
+      # App::remember_window: the placement round-trips across runs
+      # (position, size, maximized) and stays on a monitor.
+      - name: Window placement across runs
+        continue-on-error: true
+        shell: powershell
+        run: .github\scripts\placement-windows.ps1 .\target\release\examples\lifecycle.exe visual_output
       - name: Upload log
         uses: actions/upload-artifact@v4
         if: always()

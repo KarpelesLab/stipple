@@ -13,7 +13,8 @@
 //!   window is focused again. While work is running, the app's icon shows
 //!   a progress bar (`AppHandle::set_progress`).
 //! - At start it prints what the app is and where its files go
-//!   (`platform::app_info`, `platform::dirs`).
+//!   (`platform::app_info`, `platform::dirs`). The window opens where it
+//!   was left last time (`App::remember_window`).
 //!
 //! Each step is printed (`lifecycle: ...`), which CI checks.
 
@@ -133,7 +134,9 @@ fn main() {
                 .version(env!("CARGO_PKG_VERSION")),
         )
         .title("Stipple lifecycle")
-        .logical_size(Size::new(420.0, 340.0));
+        .logical_size(Size::new(420.0, 340.0))
+        // Opens where it was left last time (in the app's config directory).
+        .remember_window("main");
     let info = stipple::platform::app_info();
     say(format_args!(
         "app id={} name={:?} version={} build={}",

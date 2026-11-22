@@ -52,6 +52,7 @@ How to build, package and run on each platform, and what works there today.
 | Accessibility | AT-SPI ⁶⁶ | UI Automation ⁶⁷ | NSAccessibility ⁶⁸ | UIAccessibility ⁴⁹ | node provider ⁵⁶ | ARIA ²² |
 | Window size limits, maximize, fullscreen | ✅ ⁹ | ✅ ¹⁰ | ✅ ¹⁰ | — | fullscreen ¹⁰ | ❌ |
 | Window size limits from the content's layout | ✅ ⁹⁸ | ✅ ⁹⁸ | ✅ ⁹⁸ | — | — | — |
+| Windows reopen where they were left (`App::remember_window`) | X11, Wayland: size and state ¹⁰⁰ | ✅ ¹⁰⁰ | ✅ ¹⁰⁰ | — | — | — |
 | Window icon | ✅ ⁹ | ✅ ¹⁰ | Dock icon ¹⁰ | — | — | ❌ |
 | Several windows, opened and closed at run time | ✅ ⁴⁵ | ✅ ⁴⁵ | ✅ ⁴⁵ | — | — | — |
 | Window titles at run time | ✅ ⁴⁵ | ✅ ⁴⁵ | ✅ ⁴⁵ | — | — | ❌ |
@@ -882,6 +883,16 @@ count, or a dot), and its progress bar; on macOS the Dock tile's badge and an
 `dbus-monitor`, checks the Windows calls succeed (the taskbar can't be read
 back) and reads the macOS badge and bar back. See
 [window-lifecycle.md](window-lifecycle.md#attention-the-bell-the-badge-and-progress).
+
+¹⁰⁰ Shared code saves the restored position and size and whether the window
+is maximized (`WindowPlacement`) in the app's config directory and opens it
+there next time, within its size limits (its content's minimum too); the
+backend keeps it on a monitor that is still there (RandR on X11,
+`EnumDisplayMonitors` on Windows, `NSScreen` on macOS). Wayland restores the
+size and maximized state only (the compositor places windows). App-tested;
+CI moves, resizes and reopens the lifecycle example on X11 and Windows (and
+maximizes it on Windows), non-blocking; macOS is build-checked. See
+[window-lifecycle.md](window-lifecycle.md#remembering-where-the-window-was).
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled;

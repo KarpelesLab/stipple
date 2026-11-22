@@ -375,6 +375,12 @@ pub struct WindowAttributes {
     /// Wayland, `_KDE_NET_WM_BLUR_BEHIND_REGION` on X11. Implies
     /// `transparent`.
     pub blur: bool,
+    /// Bring the window back where the user left it, under this key (see
+    /// [`App::remember_window`](crate::App::remember_window)): the App
+    /// opens it at the placement saved under the key, kept on a monitor
+    /// that is still there and no smaller than its minimum, and saves its
+    /// placement as it changes. `None` by default.
+    pub remember: Option<String>,
 }
 
 impl Default for WindowAttributes {
@@ -403,6 +409,7 @@ impl Default for WindowAttributes {
             sheet: false,
             transparent: false,
             blur: false,
+            remember: None,
         }
     }
 }
@@ -479,6 +486,14 @@ impl WindowAttributes {
     /// Open the window maximized.
     pub fn maximized(mut self, maximized: bool) -> Self {
         self.maximized = maximized;
+        self
+    }
+
+    /// Bring the window back where the user left it last time, under `key`
+    /// (one per kind of window: `"main"`, `"inspector"`). See
+    /// [`App::remember_window`](crate::App::remember_window).
+    pub fn remember(mut self, key: impl Into<String>) -> Self {
+        self.remember = Some(key.into());
         self
     }
 

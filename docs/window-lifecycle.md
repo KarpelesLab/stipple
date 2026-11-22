@@ -148,6 +148,58 @@ and the X11 `WM_CLASS`), else the file a GLib launcher started it from
 with a bar along its bottom (the badge still draws over it); without one, it
 goes back to the plain icon.
 
+## Remembering where the window was
+
+`App::remember_window(key)` brings the window back where the user left it
+last time: its position, its size and whether it was maximized. Other
+windows take `WindowAttributes::remember(key)`, one key per kind of window.
+
+```rust,no_run
+use stipple::prelude::*;
+use stipple::platform::AppInfo;
+
+App::new((), |_: &(), cx: &mut Cx<()>| label(cx, "Notes"))
+    .app_info(AppInfo::new("org.example.Notes"))
+    .logical_size(Size::new(800.0, 600.0)) // the first run's size
+    .remember_window("main")
+    .run();
+```
+
+- **Saved.** As the window reports a change (`WindowInfo`), the App saves
+  its placement (`platform::WindowPlacement`): the restored bounds
+  (`restored_position`, `restored_size`, which a maximized or fullscreen
+  window returns to) and `maximized`. It writes a few `key=value` lines to
+  `windows/<key>.placement` in the app's config directory
+  (`platform::dirs().config`, named after the app's id: call `app_info`
+  first), at most once a second while the window moves, and once more when
+  it closes. A minimized window isn't saved (it doesn't say whether it was
+  maximized), nor is fullscreen: a window left fullscreen comes back in its
+  restored bounds.
+- **Restored.** The window opens at the saved placement instead of
+  `logical_size` / `natural_size`, maximized if it was (un-maximizing
+  returns to the saved bounds). The size is brought within the window's
+  limits: never under its `min_size` or its content's minimum
+  (`layout_limits`), never over its maximum. The first run, or one after the
+  file went, opens as the other options say.
+- **Kept on screen.** The backend checks the position against the monitors
+  there now: a window whose title bar can't be reached (its monitor was
+  unplugged, or it is above a monitor's top) moves fully onto the monitor it
+  is most on, else the first; a window larger than that monitor shrinks to
+  it (but not under its minimum). One whose title bar shows somewhere stays
+  where it was, even hanging off an edge.
+
+| | Position | Monitors checked against |
+|---|---|---|
+| X11 | `WM_NORMAL_HINTS`' user position, as other windows | each active RandR CRTC |
+| Wayland | — (the compositor places windows; size and maximized only) | — |
+| Windows | `CreateWindowExW` at the saved outer corner, then `SW_MAXIMIZE` if it was; the restored bounds are read with `GetWindowPlacement` | each monitor's work area (`EnumDisplayMonitors`) |
+| macOS | the frame's top-left corner | each `NSScreen`'s `visibleFrame` |
+
+Phones and the web have no window to place: the call does nothing there. An
+app that keeps its own settings can use `WindowPlacement` directly:
+`WindowPlacement::of(&info)` in `on_window_change`, `to_text` /
+`from_text`, and `apply` to the next run's `WindowAttributes`.
+
 ## Window decorations on Wayland
 
 On X11, Windows and macOS the system draws the title bar. On Wayland it's
@@ -481,8 +533,8 @@ closed tab, restoring its session after a restart) brings its
 
 ## Trying it
 
-`cargo run --example lifecycle` opens a window that asks before closing while "work
-is running": close it once and it cancels and asks you to close again; close
+`cargo run --example lifecycle` opens a window (where it was left last time)
+that asks before closing while "work is running": close it once and it cancels and asks you to close again; close
 it again and it checks for a moment, then closes itself. It shows whether it
 has the focus, and a second after it loses the focus it rings the bell, asks
 for attention and counts the bells in the badge on the app's icon; while
@@ -515,7 +567,9 @@ for attention and counts the bells in the badge on the app's icon; while
   urgency hint set by the bell (`xprop WM_HINTS`) and cleared on focus. On a
   private session bus, `dbus-monitor` reads the launcher entry's `Update`
   signals: the progress at start, then the bell's count and the urgent flag
-  (non-blocking).
+  (non-blocking). The window is moved and resized and opens there on the
+  next run; a placement off the screen comes back on it, and one under the
+  content's minimum is raised to it (non-blocking).
 - **Wayland** (headless sway): the window asks for and gets server-side
   decorations; focus moves to another window and back (`activated`);
   `swaymsg kill` (`xdg_toplevel.close`) is cancelled, then confirmed. Whether
@@ -532,7 +586,9 @@ for attention and counts the bells in the badge on the app's icon; while
   (`STIPPLE_WIN_TASKBAR`) sets an overlay icon (a count and a dot) and a
   progress once the taskbar button exists, and checks each call succeeds
   (non-blocking); the taskbar can't be read back, so what it shows isn't
-  checked.
+  checked. The window is moved, resized and maximized and opens that way on
+  the next run, and a placement off every monitor opens on one
+  (non-blocking).
 - **macOS**: an in-process self-test sends `performClose:` and `terminate:`
   through AppKit, which reach the app through the delegates, sets the Dock
   badge and reads it back, and sets a progress and reads the bar's value

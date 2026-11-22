@@ -898,7 +898,11 @@ fn main() {
     if args.iter().any(|a| a == "--selftest") {
         std::process::exit(selftest::run(&args));
     }
-    build_app(initial_state(&args)).run();
+    // Where the window was left last time: its position too (the settings
+    // keep its size and state for the self-tests, which don't remember).
+    build_app(initial_state(&args))
+        .remember_window("main")
+        .run();
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]

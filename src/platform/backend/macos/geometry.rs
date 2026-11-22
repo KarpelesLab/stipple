@@ -16,6 +16,7 @@ use super::{
     window_for_view,
 };
 use crate::geometry::{Point, Rect, ScaleFactor, Size};
+use crate::platform::WindowAttributes;
 use crate::platform::event::Event;
 use crate::platform::window::{WindowInfo, debug_window};
 
@@ -45,6 +46,46 @@ pub(super) unsafe fn primary_height() -> f64 {
         let first = msg_id_u64(screens, sel("objectAtIndex:"), 0);
         msg_rect(first, sel("frame")).size.height
     }
+}
+
+/// `attrs` with a remembered placement ([`WindowAttributes::remember`])
+/// kept on a screen that is still there (see
+/// [`keep_on_screen`](crate::platform::placement::keep_on_screen)), against
+/// every screen's `visibleFrame`; as they are otherwise.
+///
+/// # Safety
+/// On the main thread.
+pub(super) unsafe fn kept_on_screen(mut attrs: WindowAttributes) -> WindowAttributes {
+    let Some((x, y)) = attrs.position.filter(|_| attrs.remember.is_some()) else {
+        return attrs;
+    };
+    unsafe {
+        let ph = primary_height();
+        let screens = msg_id(class("NSScreen"), sel("screens"));
+        let n = if screens.is_null() {
+            0
+        } else {
+            msg_u64(screens, sel("count"))
+        };
+        let areas: Vec<Rect> = (0..n)
+            .map(|i| {
+                let v = msg_rect(
+                    msg_id_u64(screens, sel("objectAtIndex:"), i),
+                    sel("visibleFrame"),
+                );
+                flip_rect(v.origin.x, v.origin.y, v.size.width, v.size.height, ph)
+            })
+            .collect();
+        let size = attrs.logical_size;
+        let window = Rect::from_xywh(x as f64, y as f64, size.width, size.height);
+        let kept = crate::platform::placement::keep_on_screen(window, attrs.min_size, &areas);
+        debug_window(format_args!(
+            "remembered {window:?} kept as {kept:?} on {areas:?}"
+        ));
+        attrs.position = Some((kept.min_x().round() as i32, kept.min_y().round() as i32));
+        attrs.logical_size = Size::new(kept.width(), kept.height());
+    }
+    attrs
 }
 
 /// Read `window`'s geometry and state from AppKit.

@@ -962,9 +962,9 @@ abstraction is frozen at the end of Phase 2.
   CI runs it on X11, Windows and macOS, with AT-SPI, UI Automation and AX
   walks, all non-blocking and not yet seen passing there. Toolkit additions
   it needed: `Voice::position`/`seek`/`is_paused`, `TableSpec::on_key`, and a
-  focusable `slider` with `Role::Slider`. Not done: slider values as
-  platform range values, restoring the window's position, packaged
-  installers for the three desktops._
+  focusable `slider` with `Role::Slider`. The window's position comes back
+  too (`App::remember_window`). Not done: slider values as platform range
+  values, packaged installers for the three desktops._
 
 ### Phase 4 — Mobile (Android, iOS)
 *Goal: the same toolkit on touch.*
@@ -1759,6 +1759,17 @@ Most input only works on X11 today.
   `AppHandle::window`, on X11, Wayland, Windows and macOS (the Dock icon there).
   CI reads the X11 hints and icon back with `xprop`. See
   [docs/windows-and-cursors.md](docs/windows-and-cursors.md).
+- ✅ Windows that come back where they were left: `App::remember_window(key)`
+  (`WindowAttributes::remember` for other windows) saves the window's
+  restored position and size and whether it is maximized
+  (`WindowPlacement`, from the restored bounds `WindowInfo` reports) to the
+  app's config directory as it changes, and opens it there next time, no
+  smaller than its own or its content's minimum, and moved onto a monitor
+  that is still there (RandR's CRTCs on X11, `EnumDisplayMonitors` on
+  Windows, `NSScreen` on macOS); Wayland keeps the size and state only.
+  App-tested; CI moves, resizes and maximizes the lifecycle example and
+  opens it again on X11 and Windows (non-blocking); macOS is build-checked.
+  See [docs/window-lifecycle.md](docs/window-lifecycle.md#remembering-where-the-window-was).
 - ✅ Window lifecycle: `App::on_close_requested` and `on_quit_requested`
   answer `CloseResponse::Close` or `Cancel` (then `AppHandle::close_window`
   or `exit` once the user confirms), from `WM_DELETE_WINDOW`,

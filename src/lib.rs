@@ -55,6 +55,7 @@ mod app_native_views;
 mod app_network;
 mod app_occlusion;
 mod app_owned;
+mod app_placement;
 mod app_pointer;
 mod app_scroll_bar;
 mod app_select;
@@ -415,6 +416,8 @@ struct Pane<S> {
     attrs: WindowAttributes,
     /// The window's size limits from its content (`App::layout_limits`).
     limits: app_limits::Limits,
+    /// Its placement, kept across runs (`App::remember_window`).
+    placement: app_placement::Memory,
     scale: ScaleFactor,
     // Optional GPU (or other) rasterizer used in place of the software renderer
     // to turn each frame's `Scene` into the `Pixmap` that is presented. Lets a
@@ -634,6 +637,7 @@ impl<S: 'static> Pane<S> {
             handle,
             attrs: WindowAttributes::new(),
             limits: Default::default(),
+            placement: Default::default(),
             scale: ScaleFactor::IDENTITY,
             frame_renderer: None,
             gpu: Default::default(),
@@ -994,6 +998,29 @@ impl<S: 'static> App<S> {
     /// ```
     pub fn natural_size(mut self, on: bool) -> Self {
         self.primary().attrs.natural_size = on;
+        self
+    }
+
+    /// Bring the window back where the user left it last time: its
+    /// position (not on Wayland, which keeps positions from apps), its size
+    /// and whether it was maximized, saved under `key` in the app's config
+    /// directory as the window changes. A position on a monitor that isn't
+    /// there any more comes back onto one that is, a size larger than the
+    /// monitor shrinks to it, and the size is never under the window's
+    /// minimum (its own, or its content's: see
+    /// [`layout_limits`](Self::layout_limits)). The first run opens as the
+    /// other options say. Call [`app_info`](Self::app_info) first: the
+    /// config directory is named after the app's id. Other windows take
+    /// [`WindowAttributes::remember`]. See `docs/window-lifecycle.md`.
+    ///
+    /// ```no_run
+    /// use stipple::prelude::*;
+    /// let app = App::new((), |_: &(), cx: &mut Cx<()>| label(cx, "Hello"))
+    ///     .logical_size(Size::new(800.0, 600.0))
+    ///     .remember_window("main");
+    /// ```
+    pub fn remember_window(mut self, key: impl Into<String>) -> Self {
+        self.primary().attrs.remember = Some(key.into());
         self
     }
 
@@ -2602,6 +2629,9 @@ impl<S: 'static> Pane<S> {
     /// size limits (and its natural size, when the window opens at it), and
     /// bring the size it opens at within them.
     fn fit_to_content(&mut self, state: &S, theme: &Theme, font: Option<&Font>) {
+        // Where the user left it last time, if it's remembered: the content's
+        // limits below still apply.
+        self.placement.restore(&mut self.attrs);
         if !app_limits::RESIZABLE_WINDOWS || !(self.attrs.layout_limits || self.attrs.natural_size)
         {
             return;
@@ -4614,6 +4644,7 @@ impl<S: 'static> App<S> {
                 // The keyboard moving changes where the view is laid out.
                 let keyboard_moved = info.keyboard_inset != pane.info.keyboard_inset;
                 pane.info = info;
+                pane.placement.note(&info);
                 self.handle.set_window_info(id, Some(info));
                 let mut redraw = pane.info_read
                     || keyboard_moved

@@ -122,6 +122,9 @@ pub(crate) mod network;
 /// Runtime permissions: the camera, the microphone, notifications, photos,
 /// the location.
 pub mod permission;
+/// Orientations: which way the screen is turned, and which ways it may turn.
+/// A window's placement, kept across runs (`App::remember_window`).
+pub(crate) mod placement;
 mod pointer;
 /// seccomp-BPF syscall sandbox for the content process (the hardening layer of
 /// the Stipple-as-compositor content path).
@@ -137,7 +140,6 @@ mod saved_state;
 #[cfg(target_os = "linux")]
 #[doc(hidden)]
 pub mod scm;
-/// Orientations: which way the screen is turned, and which ways it may turn.
 mod screen;
 /// Secure keyboard entry (macOS) while a password field has focus.
 mod secure;
@@ -199,6 +201,7 @@ pub(crate) use menu::{DOCK_ID_BASE, NativeMenu, NativeMenuBar, NativeTray, TRAY_
 pub(crate) use menu::{MenuPopup, Shortcut};
 pub use menu::{mnemonic, mnemonic_at, mnemonic_range};
 pub use network::{NetworkStatus, Transport, network};
+pub use placement::WindowPlacement;
 pub use pointer::{
     DoubleClick, double_click, pointer_modifiers, set_double_click, set_pointer_modifiers,
 };

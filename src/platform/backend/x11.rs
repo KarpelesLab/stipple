@@ -934,6 +934,9 @@ struct Conn {
     /// The launcher's startup id (`DESKTOP_STARTUP_ID`), until the first
     /// window takes it.
     startup_id: Option<String>,
+    /// Where each monitor is (`[x, y, width, height]`, physical pixels),
+    /// from RandR when connecting; empty when unknown.
+    monitors: Vec<[i32; 4]>,
 }
 
 impl Conn {
@@ -1011,6 +1014,7 @@ impl Conn {
             blank_cursor: 0,
             backdrop: backdrop::Backdrop::default(),
             startup_id: None,
+            monitors: Vec::new(),
         })
     }
 
@@ -1625,7 +1629,43 @@ fn create_window(
     reg: Registry,
     use_shm: bool,
 ) -> Result<X11Window, PlatformError> {
-    let size = ScaleFactor::new(conn.scale).to_physical(attrs.logical_size);
+    let scale = ScaleFactor::new(conn.scale);
+    let mut size = scale.to_physical(attrs.logical_size);
+    // An asked-for position, in physical pixels.
+    let mut at = attrs.position.map(|(x, y)| {
+        (
+            (x as f64 * scale.get()).round() as i32,
+            (y as f64 * scale.get()).round() as i32,
+        )
+    });
+    // A remembered placement stays on a monitor that is still there.
+    if attrs.remember.is_some()
+        && let Some((x, y)) = at
+    {
+        let areas: Vec<crate::geometry::Rect> = conn
+            .monitors
+            .iter()
+            .map(|&[x, y, w, h]| {
+                crate::geometry::Rect::from_xywh(x as f64, y as f64, w as f64, h as f64)
+            })
+            .collect();
+        let min = attrs.min_size.map(|m| {
+            let m = scale.to_physical(m);
+            Size::new(m.width as f64, m.height as f64)
+        });
+        let window = crate::geometry::Rect::from_xywh(
+            x as f64,
+            y as f64,
+            size.width as f64,
+            size.height as f64,
+        );
+        let kept = crate::platform::placement::keep_on_screen(window, min, &areas);
+        at = Some((kept.min_x().round() as i32, kept.min_y().round() as i32));
+        size = PhysicalSize::new(kept.width().round() as u32, kept.height().round() as u32);
+        dbg(format_args!(
+            "remembered {window:?} kept as {kept:?} on {areas:?}"
+        ));
+    }
     let (w, h) = (size.width.max(1) as u16, size.height.max(1) as u16);
     let window = conn.new_id();
     let gc = conn.new_id();
@@ -1644,7 +1684,7 @@ fn create_window(
     };
 
     // CreateWindow.
-    let (x, y) = attrs.position.unwrap_or((0, 0));
+    let (x, y) = at.unwrap_or((0, 0));
     let mut req = vec![OP_CREATE_WINDOW, depth, 0, 0];
     req.extend_from_slice(&window.to_le_bytes());
     req.extend_from_slice(&setup.root.to_le_bytes());
@@ -1712,11 +1752,10 @@ fn create_window(
     } else {
         (Some(attrs.logical_size), Some(attrs.logical_size))
     };
-    if limits != (None, None) || attrs.resize_increments.is_some() || attrs.position.is_some() {
-        let scale = ScaleFactor::new(conn.scale);
+    if limits != (None, None) || attrs.resize_increments.is_some() || at.is_some() {
         let mut hints = size_hints(scale, limits.0, limits.1, attrs.resize_increments);
         // An asked-for position: the window manager places the window there.
-        if attrs.position.is_some() {
+        if at.is_some() {
             hints[0] |= geometry::US_POSITION;
             (hints[1], hints[2]) = (x as u32, y as u32);
         }
@@ -1869,10 +1908,13 @@ where
     conn.backdrop = backdrop::Backdrop::probe(&mut conn, argb_visual).map_err(os)?;
     let _ = pointer::read_double_click(&mut conn);
     // Animation frames come from a timer at the monitor's refresh rate.
-    if let Some(interval) = refresh::interval(&mut conn) {
+    let (interval, monitors) = refresh::interval(&mut conn);
+    if let Some(interval) = interval {
         dbg(format_args!("refresh interval {interval:?}"));
         crate::platform::frame::report_refresh("RandR", interval);
     }
+    dbg(format_args!("monitors {monitors:?}"));
+    conn.monitors = monitors;
     let wm_delete = conn.atom_wm_delete;
     // The input method server, if there is one (before any window exists, as
     // finding it reads replies directly).

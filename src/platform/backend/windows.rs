@@ -394,6 +394,12 @@ unsafe extern "system" {
     fn GetWindowPlacement(hwnd: Hwnd, placement: *mut WindowPlacement) -> i32;
     fn MonitorFromWindow(hwnd: Hwnd, flags: u32) -> Handle;
     fn GetMonitorInfoW(monitor: Handle, info: *mut MonitorInfo) -> i32;
+    fn EnumDisplayMonitors(
+        hdc: Handle,
+        clip: *const Rect,
+        callback: unsafe extern "system" fn(Handle, Handle, *mut Rect, Lparam) -> i32,
+        data: Lparam,
+    ) -> i32;
     fn AdjustWindowRectExForDpi(
         rect: *mut Rect,
         style: u32,
@@ -616,6 +622,64 @@ fn work_area(hwnd: Hwnd) -> Option<Rect> {
     };
     let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
     (unsafe { GetMonitorInfoW(monitor, &mut info) } != 0).then_some(info.rc_work)
+}
+
+/// The work area of every monitor, in physical desktop pixels.
+fn work_areas() -> Vec<Rect> {
+    unsafe extern "system" fn each(monitor: Handle, _: Handle, _: *mut Rect, data: Lparam) -> i32 {
+        let mut info = MonitorInfo {
+            cb_size: core::mem::size_of::<MonitorInfo>() as u32,
+            rc_monitor: zero_rect(),
+            rc_work: zero_rect(),
+            flags: 0,
+        };
+        if unsafe { GetMonitorInfoW(monitor, &mut info) } != 0 {
+            let areas = unsafe { &mut *(data as *mut Vec<Rect>) };
+            areas.push(info.rc_work);
+        }
+        1
+    }
+    let mut areas: Vec<Rect> = Vec::new();
+    unsafe {
+        EnumDisplayMonitors(
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            each,
+            &mut areas as *mut Vec<Rect> as Lparam,
+        )
+    };
+    areas
+}
+
+/// `attrs` with a remembered placement ([`WindowAttributes::remember`])
+/// kept on a monitor that is still there (see
+/// [`keep_on_screen`](crate::platform::placement::keep_on_screen)); as
+/// they are otherwise.
+fn kept_on_screen(mut attrs: WindowAttributes) -> WindowAttributes {
+    let Some((x, y)) = attrs.position.filter(|_| attrs.remember.is_some()) else {
+        return attrs;
+    };
+    let scale = unsafe { GetDpiForSystem() } as f64 / 96.0;
+    let areas: Vec<crate::geometry::Rect> = work_areas()
+        .iter()
+        .map(|r| {
+            crate::geometry::Rect::from_xywh(
+                r.left as f64 / scale,
+                r.top as f64 / scale,
+                (r.right - r.left) as f64 / scale,
+                (r.bottom - r.top) as f64 / scale,
+            )
+        })
+        .collect();
+    let size = attrs.logical_size;
+    let window = crate::geometry::Rect::from_xywh(x as f64, y as f64, size.width, size.height);
+    let kept = crate::platform::placement::keep_on_screen(window, attrs.min_size, &areas);
+    debug_window(format_args!(
+        "remembered {window:?} kept as {kept:?} on {areas:?}"
+    ));
+    attrs.position = Some((kept.min_x().round() as i32, kept.min_y().round() as i32));
+    attrs.logical_size = Size::new(kept.width(), kept.height());
+    attrs
 }
 
 /// Where `hwnd` is and its state, read from the system. While minimized, the
@@ -1699,6 +1763,7 @@ impl Window for WinWindow {
         ));
     }
     fn open_window(&self, attrs: WindowAttributes) -> Option<WindowId> {
+        let attrs = kept_on_screen(attrs);
         let hwnd = create_window(&attrs).ok()?;
         if attrs.blocks_parent()
             && let Some(owner) = owned::owner_of(&attrs)
@@ -2264,6 +2329,7 @@ where
     register_class()?;
     // Before any window shows, so its TaskbarButtonCreated is heard.
     taskbar::install();
+    let attrs = kept_on_screen(attrs);
     let hwnd = create_window(&attrs)?;
     tray::install(hwnd);
     let mut windows = vec![WinWindow { hwnd }];
