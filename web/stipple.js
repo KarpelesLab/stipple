@@ -514,6 +514,7 @@ export async function start(canvas, wasmUrl, options = {}) {
   // whose aria-controls names one, from the latest tree.
   const relIds = new Map();
   const relControls = [];
+  const relLabels = [];
   const attr = (el, name, value) => {
     if (value === null || value === undefined) {
       if (el.hasAttribute(name)) el.removeAttribute(name);
@@ -540,14 +541,29 @@ export async function start(canvas, wasmUrl, options = {}) {
     attr(el, "aria-checked", node.c === undefined ? null : node.c ? "true" : "false");
     attr(el, "aria-placeholder", node.p ?? null);
     attr(el, "aria-level", node.lv ?? null);
+    // A slider's, a progress bar's or a spin button's value (a scroll
+    // bar's is below).
+    attr(el, "aria-valuetext", node.rt ?? null);
+    // A table's size (all its rows, those not built too), a row's or a
+    // cell's place (ARIA counts from 1).
+    attr(el, "aria-rowcount", node.tb ? node.tb[0] : null);
+    attr(el, "aria-colcount", node.tb ? node.tb[1] : null);
+    attr(el, "aria-rowindex", node.ce ? node.ce[0] + 1 : null);
+    attr(el, "aria-colindex", node.ce && node.r !== "row" ? node.ce[1] + 1 : null);
+    // The caption it names (aria-labelledby, resolved by id with
+    // aria-controls once the tree is in).
+    if (node.lb !== undefined) relLabels.push([el, node.lb]);
+    else attr(el, "aria-labelledby", null);
     el._sc = node.sc ?? null;
     // A scroll bar: its orientation and value (its container's offset, in
-    // CSS pixels), and the container it scrolls (its parent).
+    // CSS pixels), and the container it scrolls (its parent). Else a range's
+    // value, minimum and maximum.
     const sb = node.sb;
+    const rv = sb ? [sb[0], 0, sb[1]] : node.rv;
     attr(el, "aria-orientation", sb ? (sb[2] ? "horizontal" : "vertical") : null);
-    attr(el, "aria-valuemin", sb ? 0 : null);
-    attr(el, "aria-valuemax", sb ? sb[1] : null);
-    attr(el, "aria-valuenow", sb ? sb[0] : null);
+    attr(el, "aria-valuemin", rv ? rv[1] : null);
+    attr(el, "aria-valuemax", rv ? rv[2] : null);
+    attr(el, "aria-valuenow", rv ? rv[0] : null);
     attr(el, "aria-controls", sb && el.parentElement ? idOf(el.parentElement) : null);
     // aria-controls names its target's element, found once the tree is in.
     if (node.i !== undefined) relIds.set(node.i, el);
@@ -588,10 +604,15 @@ export async function start(canvas, wasmUrl, options = {}) {
     const tree = JSON.parse(json);
     relIds.clear();
     relControls.length = 0;
+    relLabels.length = 0;
     const focused = sync(root, tree, 0, 0);
     for (const [el, id] of relControls) {
       const target = relIds.get(id);
       attr(el, "aria-controls", target ? idOf(target) : null);
+    }
+    for (const [el, id] of relLabels) {
+      const caption = relIds.get(id);
+      attr(el, "aria-labelledby", caption ? idOf(caption) : null);
     }
     // Keyboard focus follows the app's: a text field's is the textarea
     // (named by the field), anything else's is its own element.

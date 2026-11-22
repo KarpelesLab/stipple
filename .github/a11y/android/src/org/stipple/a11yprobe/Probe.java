@@ -6,7 +6,9 @@
 // framework, as TalkBack does. Once connected it reads the active window's
 // node tree, moves accessibility focus through the nodes TalkBack would stop
 // on, in its reading order (a swipe right at a time), then clicks a button
-// (TalkBack's double tap), sets the text field's text, and scrolls the list.
+// (TalkBack's double tap), sets the text field's text, scrolls the list, and
+// reads and sets the "Volume" slider's range (RangeInfo, ACTION_SET_PROGRESS,
+// a scroll forward as TalkBack's volume keys step a SeekBar).
 // Everything it sees goes to logcat under the `a11yprobe` tag, for
 // .github/a11y/android/test-probe.sh to check.
 //
@@ -97,10 +99,17 @@ public class Probe extends AccessibilityService {
             }
             actions.append(a.getLabel() != null ? a.getLabel().toString() : actionName(a.getId()));
         }
+        AccessibilityNodeInfo.RangeInfo range = n.getRangeInfo();
+        AccessibilityNodeInfo.CollectionInfo coll = n.getCollectionInfo();
+        AccessibilityNodeInfo.CollectionItemInfo item = n.getCollectionItemInfo();
         return "class=" + n.getClassName() + " text=\"" + label(n) + "\" bounds=" + r.toShortString()
                 + " visible=" + n.isVisibleToUser() + " clickable=" + n.isClickable()
                 + " focusable=" + n.isFocusable() + " editable=" + n.isEditable()
-                + " actions=[" + actions + "]";
+                + " actions=[" + actions + "]"
+                + (range == null ? "" : " range=" + range.getMin() + ".." + range.getMax()
+                        + "@" + range.getCurrent())
+                + (coll == null ? "" : " collection=" + coll.getRowCount() + "x" + coll.getColumnCount())
+                + (item == null ? "" : " item=" + item.getRowIndex() + "," + item.getColumnIndex());
     }
 
     static String actionName(int id) {
@@ -115,6 +124,7 @@ public class Probe extends AccessibilityService {
             case AccessibilityNodeInfo.ACTION_SCROLL_FORWARD: return "scroll_forward";
             case AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD: return "scroll_backward";
             case AccessibilityNodeInfo.ACTION_SET_TEXT: return "set_text";
+            case 0x0102003d: return "set_progress";
             default: return "0x" + Integer.toHexString(id);
         }
     }
@@ -188,6 +198,20 @@ public class Probe extends AccessibilityService {
                 collectScrollable(c, out);
             }
         }
+    }
+
+    AccessibilityNodeInfo findClass(AccessibilityNodeInfo n, String cls) {
+        if (n.getClassName() != null && cls.contentEquals(n.getClassName())) {
+            return n;
+        }
+        for (int i = 0; i < n.getChildCount(); i++) {
+            AccessibilityNodeInfo c = n.getChild(i);
+            AccessibilityNodeInfo found = c == null ? null : findClass(c, cls);
+            if (found != null) {
+                return found;
+            }
+        }
+        return null;
     }
 
     AccessibilityNodeInfo targetRoot() {
@@ -298,12 +322,33 @@ public class Probe extends AccessibilityService {
                     + list.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD));
         }
 
+        // 6. A range: the slider's RangeInfo, set to a quarter
+        // (ACTION_SET_PROGRESS, API 24), then a step on (a scroll forward).
+        AccessibilityNodeInfo seek = findClass(root, "android.widget.SeekBar");
+        if (seek == null) {
+            log("range: no SeekBar node");
+        } else {
+            log("range " + describe(seek));
+            Bundle p = new Bundle();
+            p.putFloat(AccessibilityNodeInfo.ACTION_ARGUMENT_PROGRESS_VALUE, 0.25f);
+            log("set progress -> " + seek.performAction(0x0102003d, p));
+        }
+
         later(1500, new Runnable() {
             public void run() {
                 AccessibilityNodeInfo again = targetRoot();
                 AccessibilityNodeInfo f = again == null ? null : find(again, "", true);
                 log("field now \"" + (f == null ? "?" : label(f)) + "\"");
-                log("done");
+                AccessibilityNodeInfo s = again == null ? null : findClass(again, "android.widget.SeekBar");
+                if (s != null) {
+                    log("range now " + describe(s));
+                    log("range step -> " + s.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD));
+                }
+                later(1000, new Runnable() {
+                    public void run() {
+                        log("done");
+                    }
+                });
             }
         });
     }

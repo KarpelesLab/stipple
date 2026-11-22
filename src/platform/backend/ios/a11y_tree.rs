@@ -15,6 +15,9 @@ pub(crate) const SELECTED: u8 = 8;
 /// the one a `UITextField` reports (the text-entry trait VoiceOver reads as
 /// "text field", and XCUITest as `.textField`).
 pub(crate) const TEXT_ENTRY: u8 = 16;
+/// `UIAccessibilityTraitAdjustable`: a slider, which VoiceOver's swipe up
+/// and down step (`accessibilityIncrement` / `…Decrement`).
+pub(crate) const ADJUSTABLE: u8 = 32;
 
 /// One node, as its accessibility element shows it.
 #[derive(Clone, Debug, PartialEq)]
@@ -34,6 +37,9 @@ pub(crate) struct Item {
     /// The live OS control that stands for the node, by id: the container
     /// vends that `UIControl` (which speaks for itself) in its place.
     pub(crate) native: Option<u64>,
+    /// For an adjustable item (a slider), its node without its children:
+    /// what an increment or decrement steps (see `platform::access`).
+    pub(crate) adjust: Option<A11yNode>,
 }
 
 /// The roles whose children VoiceOver reads instead of them (as
@@ -69,6 +75,8 @@ fn item(node: &A11yNode) -> Item {
         use crate::locale::{Builtin, builtin};
         let pick = |yes: bool, a: Builtin, b: Builtin| builtin(if yes { a } else { b }).to_string();
         let value = match (role, node.checked, node.expanded) {
+            // A slider's or a progress bar's value, as words ("50%").
+            _ if node.range.is_some() => node.range.map(|r| r.text()).unwrap_or_default(),
             (Switch, Some(on), _) => pick(on, Builtin::On, Builtin::Off),
             (_, Some(checked), _) => pick(checked, Builtin::Checked, Builtin::Unchecked),
             (_, None, Some(open)) => pick(open, Builtin::Expanded, Builtin::Collapsed),
@@ -83,6 +91,13 @@ fn item(node: &A11yNode) -> Item {
         TextField | SpinButton | PasswordField => TEXT_ENTRY,
         _ => 0,
     };
+    let adjust = (node.range_settable() && role == Slider).then(|| A11yNode {
+        children: Vec::new(),
+        ..node.clone()
+    });
+    if adjust.is_some() {
+        traits |= ADJUSTABLE;
+    }
     if node.selected && matches!(role, ListItem | Row | Cell | TreeItem | Tab) {
         traits |= SELECTED;
     }
@@ -107,6 +122,7 @@ fn item(node: &A11yNode) -> Item {
         traits,
         frame: node.bounds,
         native: node.native_view,
+        adjust,
     }
 }
 
@@ -320,6 +336,41 @@ mod tests {
         assert_eq!(items[0].frame, (1.0, 2.0, 30.0, 10.0));
         assert!(items.iter().all(|i| i.hint.is_empty()));
         assert!(items.iter().all(|i| i.native.is_none()));
+    }
+
+    #[test]
+    fn a_slider_is_adjustable_and_reads_its_value() {
+        use crate::platform::access::A11yRange;
+        let range = |value| {
+            Some(A11yRange {
+                value,
+                min: 0.0,
+                max: 1.0,
+                step: 0.05,
+                rtl: false,
+            })
+        };
+        let tree = window(vec![
+            A11yNode {
+                range: range(0.5),
+                ..node(A11yRole::Slider, "Volume")
+            },
+            A11yNode {
+                range: range(0.25),
+                ..node(A11yRole::ProgressBar, "Loading")
+            },
+        ]);
+        let items = flatten(&tree);
+        assert_eq!(
+            (items[0].label.as_str(), items[0].value.as_str()),
+            ("Volume", "50%")
+        );
+        assert_eq!(items[0].traits & ADJUSTABLE, ADJUSTABLE);
+        let up = items[0].adjust.as_ref().unwrap().step_range_events(true);
+        assert_eq!(up.map(|e| e.len()), Some(4), "a press at 55%");
+        assert_eq!(items[1].value, "25%");
+        assert!(items[1].adjust.is_none(), "a progress bar is read-only");
+        assert_eq!(items[1].traits & ADJUSTABLE, 0);
     }
 
     #[test]

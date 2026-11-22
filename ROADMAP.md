@@ -962,9 +962,10 @@ abstraction is frozen at the end of Phase 2.
   CI runs it on X11, Windows and macOS, with AT-SPI, UI Automation and AX
   walks, all non-blocking and not yet seen passing there. Toolkit additions
   it needed: `Voice::position`/`seek`/`is_paused`, `TableSpec::on_key`, and a
-  focusable `slider` with `Role::Slider`. The window's position comes back
-  too (`App::remember_window`). Not done: slider values as platform range
-  values, packaged installers for the three desktops._
+  focusable `slider` with `Role::Slider` (its value now a platform range
+  value: see the range values item under Phase 7). The window's position
+  comes back too (`App::remember_window`). Not done: packaged installers
+  for the three desktops._
 
 ### Phase 4 — Mobile (Android, iOS)
 *Goal: the same toolkit on touch.*
@@ -2847,8 +2848,9 @@ Most input only works on X11 today.
   passing locally under Xvfb), `axprobe --depth` (macOS); `uia-patterns.ps1`
   and `uiademo --patterns` (Windows) now pass and are required; NVDA and Orca report whether they
   speak the toast. The Windows, macOS and iOS code is build- and
-  clippy-checked only. Left: UIA text attributes, text-selection and
-  text-changed events, RangeValue, Grid / Table and `LabeledBy`; the sway
+  clippy-checked only. Left (UIA text attributes, text events, RangeValue,
+  Grid / Table and `LabeledBy` are done: see the range values item below):
+  the sway
   walk doesn't run the depth checks. (macOS title elements, static text
   values and activations out of view: see the next item.)
 - ✅ Relations, the accessibility bus from the X root window, and acting on
@@ -2887,8 +2889,7 @@ Most input only works on X11 today.
   `axprobe --links` (non-blocking) hasn't run: the macOS code is build- and
   clippy-checked only. Left: iOS's
   `accessibilityActivate` taps the element's frame without scrolling;
-  `AXScrollToVisible` still can't be added (see above); UIA's `LabeledBy`
-  (another item).
+  `AXScrollToVisible` still can't be added (see above).
 - ✅ Keyboard focus for buttons and the other controls a tap activates
   (`core::tab_focus`): an `on_tap` element whose role is a button, checkbox,
   switch, tab, select, list or tree item, row, cell or column header (not a
@@ -2904,6 +2905,39 @@ Most input only works on X11 today.
   Return, Shift+Tab into `touchdemo`; the AT-SPI walk's button focus events),
   passing locally under Xvfb; the NVDA, VoiceOver and Orca scripts tab to
   "Row 0" and press it with Space and Enter (not yet run in CI).
+- ✅ Range values, tables, captions and text attributes for screen readers:
+  `AccessNode::range` (an `AccessRange`: value, min, max, step; declared by
+  `slider`, `progress_bar`, now `Role::ProgressBar`, and `number_input`,
+  or `Element::a11y_range`), `AccessNode::table` and `AccessNode::cell` (a
+  table's size with all its rows, and each row's and cell's place; a
+  virtualized `widgets::table` declares them with `Element::a11y_table` and
+  `a11y_row`), `AccessNode::font` (family, size, weight, italic), and a
+  caption on a widget's wrapper handed to the control inside. Every bridge
+  sets a slider by pressing it at the value's place and a spin button by
+  typing the number (`platform::access`). **Linux:** AT-SPI `Value` on
+  sliders, progress bars and spin buttons (settable, with value-change
+  events), `Table` and `TableCell`. **Windows:** RangeValue, Grid,
+  GridItem, Table and TableItem patterns (`platform/uia/grid.rs`),
+  `LabeledBy`, text attributes (font name, size, weight, italic, read-only;
+  `FindAttribute`), `TextChanged` and `TextSelectionChanged` events.
+  **macOS:** `AXValue` / `AXMinValue` / `AXMaxValue` /
+  `AXValueDescription`, a slider's `AXIncrement` / `AXDecrement` and
+  settable value, `AXRowCount`, `AXColumnCount`, `AXRows`,
+  `AXColumnHeaderUIElements`, a row's `AXIndex`, a cell's index ranges.
+  **iOS:** a slider is adjustable, values as words. **Android:**
+  `RangeInfo`, `ACTION_SET_PROGRESS` and scroll forward / backward on a
+  slider, `TYPE_VIEW_SELECTED`, `CollectionInfo` / `CollectionItemInfo`,
+  `setLabeledBy`. **Web:** `aria-value*`, `aria-rowcount` / `rowindex` /
+  `colindex`, `aria-labelledby`. App tests (`src/a11y_range_tests.rs`), unit
+  tests for each bridge's logic, `uiademo --patterns` (required step).
+  CI, non-blocking: the AT-SPI walk with `ATSPI_WALK_RANGES=1` and
+  `uia-ranges.ps1` (both passing on the runners), `axprobe --ranges`
+  (macOS, not yet run; macOS and iOS build-checked), the Android (passing)
+  probe's slider checks, on `touchdemo` with `TOUCHDEMO_RANGES` and
+  `androiddemo`'s new slider. Left: tables on iOS
+  (`UIAccessibilityContainerDataTable`), tree items' levels and list
+  positions, text attributes past the font and runs inside a node's text,
+  setting a value from the web's ARIA overlay.
 - ⬜ Try the real screen readers: VoiceOver (macOS and iOS), TalkBack,
   Narrator / NVDA, Orca, by a person, on each platform.
 - ✅ Images on the GPU path, so OS-drawn controls render under `App::render_with`;

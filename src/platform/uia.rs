@@ -46,11 +46,12 @@
 
 #![allow(unsafe_code, non_snake_case, non_upper_case_globals)]
 
-use crate::platform::access::{A11yNode, A11yRole};
+use crate::platform::access::{A11yCell, A11yNode, A11yRole, A11yTable};
 use crate::platform::uia_logic::{self as logic, Patterns};
 use core::ffi::c_void;
 
 mod events;
+mod grid;
 mod patterns;
 mod relations;
 mod scroll_bar;
@@ -118,6 +119,7 @@ const UIA_CheckBoxControlTypeId: i32 = 50002;
 const UIA_ComboBoxControlTypeId: i32 = 50003;
 const UIA_SpinnerControlTypeId: i32 = 50016;
 const UIA_SliderControlTypeId: i32 = 50015;
+const UIA_ProgressBarControlTypeId: i32 = 50012;
 const UIA_ToolBarControlTypeId: i32 = 50021;
 const UIA_PaneControlTypeId: i32 = 50033;
 const UIA_SeparatorControlTypeId: i32 = 50038;
@@ -369,6 +371,11 @@ struct Provider {
     scroll_item_vtable: *const patterns::ScrollItemVtbl,
     range_vtable: *const scroll_bar::RangeVtbl,
     text_vtable: *const text::TextVtbl,
+    range_value_vtable: *const grid::RangeValueVtbl,
+    grid_vtable: *const grid::GridVtbl,
+    grid_item_vtable: *const grid::GridItemVtbl,
+    table_vtable: *const grid::TableVtbl,
+    table_item_vtable: *const grid::TableItemVtbl,
     refcount: u32,
     /// UTF-16 (NUL-terminated) accessible name, for `SysAllocString`.
     name: Vec<u16>,
@@ -435,6 +442,7 @@ fn control_type(role: A11yRole) -> i32 {
         A11yRole::RadioButton => UIA_RadioButtonControlTypeId,
         A11yRole::SpinButton => UIA_SpinnerControlTypeId,
         A11yRole::Slider => UIA_SliderControlTypeId,
+        A11yRole::ProgressBar => UIA_ProgressBarControlTypeId,
         A11yRole::Toolbar => UIA_ToolBarControlTypeId,
         A11yRole::Separator => UIA_SeparatorControlTypeId,
         A11yRole::Splitter | A11yRole::Alert => UIA_GroupControlTypeId,
@@ -711,6 +719,17 @@ unsafe extern "system" fn get_pattern_provider(
             {
                 &raw mut (*p).range_vtable as *mut c_void
             }
+            grid::UIA_RangeValuePatternId if has.range_value => {
+                &raw mut (*p).range_value_vtable as *mut c_void
+            }
+            grid::UIA_GridPatternId if has.grid => &raw mut (*p).grid_vtable as *mut c_void,
+            grid::UIA_TablePatternId if has.grid => &raw mut (*p).table_vtable as *mut c_void,
+            grid::UIA_GridItemPatternId if has.grid_item => {
+                &raw mut (*p).grid_item_vtable as *mut c_void
+            }
+            grid::UIA_TableItemPatternId if has.grid_item => {
+                &raw mut (*p).table_item_vtable as *mut c_void
+            }
             _ => core::ptr::null_mut(),
         };
         if !iface.is_null() {
@@ -881,6 +900,7 @@ unsafe extern "system" fn get_property_value(
             id if relations::property(p, id, &mut v) => {}
             id if patterns::property(p, id, &mut v) => {}
             id if scroll_bar::property(p, id, &mut v) => {}
+            id if grid::property(p, id, &mut v) => {}
             UIA_IsInvokePatternAvailablePropertyId => {
                 v.vt = VT_BOOL;
                 v.val = if (*p).invokable && !(*p).hwnd.is_null() {
@@ -1268,6 +1288,11 @@ impl UiaTree {
                     scroll_item_vtable: &patterns::SCROLL_ITEM_VTBL,
                     range_vtable: &scroll_bar::RANGE_VTBL,
                     text_vtable: &text::TEXT_VTBL,
+                    range_value_vtable: &grid::RANGE_VALUE_VTBL,
+                    grid_vtable: &grid::GRID_VTBL,
+                    grid_item_vtable: &grid::GRID_ITEM_VTBL,
+                    table_vtable: &grid::TABLE_VTBL,
+                    table_item_vtable: &grid::TABLE_ITEM_VTBL,
                     refcount: 1,
                     name,
                     help_text,

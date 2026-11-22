@@ -990,3 +990,197 @@ fn relations_name_controls_groups_and_tree_parents() {
     let text = String::from_utf8_lossy(&attrs);
     assert!(text.contains("level") && text.contains('2'), "{text:?}");
 }
+
+/// Window > [Slider "Volume" (0.5 of 0..1), ProgressBar "Loading",
+/// Table (11 rows, 2 columns) > [header Row > [Name, Value], Group > [row 5
+/// > [a5, b5]]]].
+fn range_tree() -> A11yNode {
+    use crate::platform::access::{A11yCell, A11yRange, A11yTable};
+    let range = |value| A11yRange {
+        value,
+        min: 0.0,
+        max: 1.0,
+        step: 0.05,
+        rtl: false,
+    };
+    let at = |row, column| Some(A11yCell { row, column });
+    let cell = |role, name: &str, row, column| A11yNode {
+        cell: at(row, column),
+        ..leaf(role, name, (0.0, 0.0, 50.0, 20.0))
+    };
+    A11yNode {
+        children: vec![
+            A11yNode {
+                range: Some(range(0.5)),
+                ..leaf(A11yRole::Slider, "Volume", (0.0, 0.0, 200.0, 20.0))
+            },
+            A11yNode {
+                range: Some(range(0.3)),
+                ..leaf(A11yRole::ProgressBar, "Loading", (0.0, 30.0, 200.0, 8.0))
+            },
+            A11yNode {
+                table: Some(A11yTable {
+                    rows: 11,
+                    columns: 2,
+                }),
+                selected: false,
+                children: vec![
+                    A11yNode {
+                        cell: at(0, 0),
+                        children: vec![
+                            cell(A11yRole::ColumnHeader, "Name", 0, 0),
+                            cell(A11yRole::ColumnHeader, "Value", 0, 1),
+                        ],
+                        ..leaf(A11yRole::Row, "", (0.0, 40.0, 100.0, 20.0))
+                    },
+                    A11yNode {
+                        children: vec![A11yNode {
+                            cell: at(5, 0),
+                            selected: true,
+                            children: vec![
+                                cell(A11yRole::Cell, "a5", 5, 0),
+                                cell(A11yRole::Cell, "b5", 5, 1),
+                            ],
+                            ..leaf(A11yRole::Row, "", (0.0, 60.0, 100.0, 20.0))
+                        }],
+                        ..leaf(A11yRole::Group, "", (0.0, 60.0, 100.0, 40.0))
+                    },
+                ],
+                ..leaf(A11yRole::Table, "Data", (0.0, 40.0, 100.0, 60.0))
+            },
+        ],
+        ..leaf(A11yRole::Window, "Ranges", (0.0, 0.0, 300.0, 200.0))
+    }
+}
+
+fn ranges() -> Bridge {
+    let mut b = Bridge::new();
+    b.bus = ":1.7".into();
+    b.win_mut(4).root = Some(Arc::new(range_tree()));
+    b
+}
+
+fn i32_prop(b: &mut Bridge, path: &str, iface: &str, name: &str) -> i32 {
+    let v = prop(b, path, iface, name);
+    // An "i" variant: its signature (length, "i", NUL), then the number.
+    i32::from_le_bytes(v[4..8].try_into().unwrap())
+}
+
+#[test]
+fn a_slider_is_a_settable_value_and_a_progress_bar_a_read_one() {
+    let mut b = ranges();
+    let (slider, bar) = (node_path(4, &[0]), node_path(4, &[1]));
+    let value = "org.a11y.atspi.Value";
+    assert_eq!(f64_prop(&mut b, &slider, value, "CurrentValue"), 0.5);
+    assert_eq!(f64_prop(&mut b, &slider, value, "MaximumValue"), 1.0);
+    assert_eq!(f64_prop(&mut b, &slider, value, "MinimumIncrement"), 0.05);
+    let text = prop(&mut b, &slider, value, "Text");
+    assert!(text.windows(3).any(|w| w == b"50%"));
+    let role = ok(
+        call(
+            &mut b,
+            &bar,
+            "org.a11y.atspi.Accessible",
+            "GetRole",
+            Body::new(),
+        ),
+        "u",
+    );
+    assert_eq!(read_u32(&role, &mut 0).unwrap(), 42, "PROGRESS_BAR");
+    assert_eq!(f64_prop(&mut b, &bar, value, "CurrentValue"), 0.3);
+    // Setting the slider's value presses it there.
+    let set = |b: &mut Bridge, path: &str, v: f64| {
+        let mut body = Body::new();
+        body.str(value).str("CurrentValue").variant(&Value::F64(v));
+        call(b, path, "org.freedesktop.DBus.Properties", "Set", body)
+    };
+    ok(set(&mut b, &slider, 0.25), "");
+    let (_, events) = b.actions.pop().expect("events for the window");
+    assert_eq!(events.len(), 4);
+    assert!(matches!(
+        events[3],
+        Event::PointerButton { position, state: ButtonState::Released, .. }
+            if position == Point::new(50.0, 10.0)
+    ));
+    // The progress bar's can't be set.
+    assert!(matches!(set(&mut b, &bar, 0.5), Reply::Error(_)));
+    assert!(b.actions.is_empty());
+
+    let before = range_tree();
+    let mut after = range_tree();
+    after.children[0].range.as_mut().unwrap().value = 0.25;
+    let got = events::diff(4, &before, &after);
+    assert_eq!(got.len(), 1);
+    assert_eq!(got[0].kind, "accessible-value");
+    assert_eq!(got[0].any, Value::F64(0.25));
+}
+
+#[test]
+fn a_table_gives_its_cells_by_row_and_column() {
+    let mut b = ranges();
+    let table = node_path(4, &[2]);
+    let t = "org.a11y.atspi.Table";
+    let ifaces = ok(
+        call(
+            &mut b,
+            &table,
+            "org.a11y.atspi.Accessible",
+            "GetInterfaces",
+            Body::new(),
+        ),
+        "as",
+    );
+    assert!(ifaces.windows(t.len()).any(|w| w == t.as_bytes()));
+    assert_eq!(i32_prop(&mut b, &table, t, "NRows"), 11);
+    assert_eq!(i32_prop(&mut b, &table, t, "NColumns"), 2);
+    let at = |b: &mut Bridge, row: i32, column: i32| {
+        let mut body = Body::new();
+        body.i32(row).i32(column);
+        let r = ok(call(b, &table, t, "GetAccessibleAt", body), "(so)");
+        let mut off = 0;
+        let _bus = read_string(&r, &mut off).unwrap();
+        read_string(&r, &mut off).unwrap()
+    };
+    assert_eq!(at(&mut b, 5, 1), node_path(4, &[2, 1, 0, 1]));
+    assert_eq!(at(&mut b, 0, 0), node_path(4, &[2, 0, 0]), "a header");
+    assert_eq!(at(&mut b, 3, 0), NULL_PATH, "a row not built");
+    let mut body = Body::new();
+    body.i32(1);
+    let header = ok(call(&mut b, &table, t, "GetColumnHeader", body), "(so)");
+    let mut off = 0;
+    let _ = read_string(&header, &mut off);
+    assert_eq!(
+        read_string(&header, &mut off).unwrap(),
+        node_path(4, &[2, 0, 1])
+    );
+    let mut body = Body::new();
+    body.i32(11);
+    let index = ok(call(&mut b, &table, t, "GetRowAtIndex", body), "i");
+    assert_eq!(read_u32(&index, &mut 0).unwrap(), 5);
+    let rows = ok(
+        call(&mut b, &table, t, "GetSelectedRows", Body::new()),
+        "ai",
+    );
+    assert_eq!(read_u32(&rows, &mut 0).unwrap(), 4, "one row");
+    assert_eq!(read_u32(&rows, &mut 4).unwrap(), 5, "row 5");
+
+    // A cell: its position, its table, its column's header.
+    let cell = node_path(4, &[2, 1, 0, 1]);
+    let tc = "org.a11y.atspi.TableCell";
+    let pos = prop(&mut b, &cell, tc, "Position");
+    // "(ii)" variant: signature (length, "(ii)", NUL) padded to 8, then two.
+    assert_eq!(read_u32(&pos, &mut 8).unwrap(), 5);
+    assert_eq!(read_u32(&pos, &mut 12).unwrap(), 1);
+    let parent = prop(&mut b, &cell, tc, "Table");
+    assert!(parent.windows(table.len()).any(|w| w == table.as_bytes()));
+    let span = ok(
+        call(&mut b, &cell, tc, "GetRowColumnSpan", Body::new()),
+        "iiii",
+    );
+    assert_eq!(read_u32(&span, &mut 0).unwrap(), 5);
+    let heads = ok(
+        call(&mut b, &cell, tc, "GetColumnHeaderCells", Body::new()),
+        "a(so)",
+    );
+    assert_eq!(paths(&heads), [node_path(4, &[2, 0, 1])]);
+}

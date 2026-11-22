@@ -2,7 +2,8 @@
 //! changes (a label's Name, a field's Value, a checkbox's ToggleState, an
 //! item's expanded and selected state, a container's scroll percent),
 //! `ChildrenInvalidated` structure changes where children came or went,
-//! `SelectionItem_ElementSelected`, and a notification for each alert (a
+//! `SelectionItem_ElementSelected`, a text pattern's text-changed and
+//! text-selection-changed events, and a notification for each alert (a
 //! toast) that appeared, which Narrator and NVDA read out. What changed comes
 //! from `uia_logic::events`; this raises it on the new tree's providers.
 
@@ -80,7 +81,8 @@ pub(crate) fn plan_events(tree: &UiaTree, old: Option<&A11yNode>, new: &A11yNode
                 UiaEvent::Property { path, .. }
                 | UiaEvent::ChildrenInvalidated { path }
                 | UiaEvent::ElementSelected { path }
-                | UiaEvent::Notification { path, .. } => path,
+                | UiaEvent::Notification { path, .. }
+                | UiaEvent::Automation { path, .. } => path,
             };
             let p = tree.provider_at(path) as *mut Provider;
             (!p.is_null()).then_some((p, e))
@@ -90,7 +92,7 @@ pub(crate) fn plan_events(tree: &UiaTree, old: Option<&A11yNode>, new: &A11yNode
 }
 
 /// A VARIANT holding `v` (a BSTR the caller frees with [`free`]).
-fn variant(v: &Val) -> Variant {
+pub(super) fn variant(v: &Val) -> Variant {
     let mut out = Variant::empty();
     match v {
         Val::Bool(b) => {
@@ -113,7 +115,7 @@ fn variant(v: &Val) -> Variant {
     out
 }
 
-fn free(v: &Variant) {
+pub(super) fn free(v: &Variant) {
     if v.vt == VT_BSTR {
         unsafe { SysFreeString(v.val as *mut u16) };
     }
@@ -149,6 +151,9 @@ pub(crate) unsafe fn raise_planned(planned: PlannedEvents) {
                 }
                 UiaEvent::ElementSelected { .. } => {
                     UiaRaiseAutomationEvent(simple, UIA_SelectionItem_ElementSelectedEventId);
+                }
+                UiaEvent::Automation { id, .. } => {
+                    UiaRaiseAutomationEvent(simple, id);
                 }
                 UiaEvent::Notification { text, .. } => {
                     if let Some(raise) = raise_notification_fn() {

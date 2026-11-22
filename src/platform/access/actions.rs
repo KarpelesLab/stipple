@@ -12,7 +12,7 @@
 // Not every bridge (nor every target) uses every helper; the tests do.
 #![allow(dead_code)]
 
-use super::{A11yNode, A11yRole, A11yScroll};
+use super::{A11yNode, A11yRange, A11yRole, A11yScroll};
 use crate::geometry::Point;
 use crate::platform::event::{ButtonState, Event, Ime, PointerButton, ScrollDelta};
 
@@ -77,7 +77,114 @@ impl A11yScroll {
     }
 }
 
+impl A11yRange {
+    /// The value as a fraction of the range, `0..=1` (0 for an empty one).
+    pub(crate) fn fraction(&self) -> f64 {
+        let span = self.max - self.min;
+        if span > 0.0 && span.is_finite() {
+            ((self.value - self.min) / span).clamp(0.0, 1.0)
+        } else {
+            0.0
+        }
+    }
+
+    /// One increment: its step, else a twentieth of a bounded range, else 1.
+    pub(crate) fn increment(&self) -> f64 {
+        let span = self.max - self.min;
+        if self.step > 0.0 {
+            self.step
+        } else if span > 0.0 && span < 1e15 {
+            span / 20.0
+        } else {
+            1.0
+        }
+    }
+
+    /// The value as words, as a screen reader reads it: a percentage for a
+    /// range of 0 to 1 (a slider, a progress bar), else the number.
+    pub(crate) fn text(&self) -> String {
+        if self.min == 0.0 && self.max == 1.0 {
+            format!("{:.0}%", self.value * 100.0)
+        } else {
+            number_text(self.value)
+        }
+    }
+}
+
+/// `v` as a spin button's text takes it: no decimals for a whole number.
+pub(crate) fn number_text(v: f64) -> String {
+    if v.fract() == 0.0 && v.abs() < 1e15 {
+        format!("{}", v as i64)
+    } else {
+        format!("{v}")
+    }
+}
+
 impl A11yNode {
+    /// Whether an assistive technology may set the node's range value: a
+    /// slider's or a spin button's (a progress bar's is read-only).
+    pub(crate) fn range_settable(&self) -> bool {
+        self.range.is_some() && matches!(self.role, A11yRole::Slider | A11yRole::SpinButton)
+    }
+
+    /// Set the node's range value to `value` (clamped to the range): a
+    /// slider is pressed at the value's place along its width (a press just
+    /// inside, then the pointer moved to the exact place, where a drag's
+    /// fraction reads it, and released), mirrored on a right-to-left
+    /// track; a spin button gets the number typed and Enter. `None` when
+    /// it can't be set.
+    pub(crate) fn set_range_events(&self, value: f64) -> Option<Vec<Event>> {
+        let r = self.range.filter(|_| self.range_settable())?;
+        if !value.is_finite() {
+            return None;
+        }
+        let v = value.clamp(r.min, r.max);
+        if self.role == A11yRole::SpinButton {
+            let mut out = self.set_text_events(&number_text(v));
+            for state in [ButtonState::Pressed, ButtonState::Released] {
+                out.push(Event::Key {
+                    code: crate::platform::event::KeyCode::Enter,
+                    state,
+                    modifiers: Default::default(),
+                });
+            }
+            return Some(out);
+        }
+        let f = A11yRange { value: v, ..r }.fraction();
+        let (x, y, w, h) = self.bounds;
+        let at = if r.rtl { x + w - f * w } else { x + f * w };
+        let exact = Point::new(at, y + h / 2.0);
+        // Inside the box (its right edge isn't), for the press to land.
+        let inside = Point::new(at.clamp(x, (x + w - 0.01).max(x)), exact.y);
+        Some(vec![
+            Event::PointerMoved { position: inside },
+            Event::PointerButton {
+                button: PointerButton::Left,
+                state: ButtonState::Pressed,
+                position: inside,
+            },
+            Event::PointerMoved { position: exact },
+            Event::PointerButton {
+                button: PointerButton::Left,
+                state: ButtonState::Released,
+                position: exact,
+            },
+        ])
+    }
+
+    /// Step the node's range value one increment up or down (see
+    /// [`set_range_events`](Self::set_range_events)); `None` at that end,
+    /// or when it can't be set.
+    pub(crate) fn step_range_events(&self, up: bool) -> Option<Vec<Event>> {
+        let r = self.range?;
+        let by = r.increment();
+        let to = (r.value + if up { by } else { -by }).clamp(r.min, r.max);
+        if (to - r.value).abs() < 1e-12 {
+            return None;
+        }
+        self.set_range_events(to)
+    }
+
     /// The middle of the node, in the window's logical pixels.
     pub(crate) fn center(&self) -> Point {
         let (x, y, w, h) = self.bounds;

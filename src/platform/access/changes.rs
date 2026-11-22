@@ -26,6 +26,8 @@ pub(crate) enum A11yChange {
     TextSelection(Vec<usize>),
     /// It scrolled, or its content's length changed.
     Scrolled(Vec<usize>),
+    /// Its range value moved (a slider, a progress bar, a spin button).
+    Range(Vec<usize>),
     /// Its children changed: some added or removed, or of other roles.
     Children(Vec<usize>),
 }
@@ -74,6 +76,9 @@ fn walk(old: &A11yNode, new: &A11yNode, path: &mut Vec<usize>, out: &mut Vec<A11
     };
     if moved {
         out.push(A11yChange::Scrolled(here()));
+    }
+    if new.range.is_some() && old.range.map(|r| r.value) != new.range.map(|r| r.value) {
+        out.push(A11yChange::Range(here()));
     }
     let reshaped = old.children.len() != new.children.len()
         || old

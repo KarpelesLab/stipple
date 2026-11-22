@@ -19,6 +19,13 @@ value and Component.ScrollTo scroll it (the app logs its offset), the
 sideways strip of chips scrolls too, the "Remember" check box is checked by
 its action (state and event), and a tap on "Row 2" raises a toast, which
 arrives as an object:announcement and a notification in the tree.
+
+With ATSPI_WALK_RANGES=1 (touchdemo with TOUCHDEMO_RANGES) it checks range
+values and a table instead: the "Volume" slider's Value (its range and step;
+setting it moves the app's slider, with an accessible-value event), the
+progress bar's, the "Level" spin button's (set to 7; its labelled-by caption
+"Level"), and the "Items" table's Table and TableCell interfaces (its size,
+a cell by row and column, a column's header, a cell's position).
 """
 import os
 import signal
@@ -133,6 +140,7 @@ pyatspi.Registry.registerEventListener(
     "object:text-changed", "object:text-caret-moved", "object:text-selection-changed")
 
 depth = os.environ.get("ATSPI_WALK_DEPTH") == "1"
+ranges = os.environ.get("ATSPI_WALK_RANGES") == "1"
 announcements = []
 
 
@@ -145,7 +153,7 @@ def on_announcement(event):
     print("atspi event: {} {} {!r}".format(event.type, event.detail1, text), flush=True)
 
 
-if depth:
+if depth or ranges:
     pyatspi.Registry.registerEventListener(
         on_event, "object:property-change:accessible-value", "object:state-changed:checked")
     pyatspi.Registry.registerEventListener(on_announcement, "object:announcement")
@@ -206,6 +214,73 @@ def scroll_pane_of(acc):
         acc = acc.parent
     return acc
 
+
+if ranges:
+    said = "touchdemo: volume "
+    slider = named(elements, pyatspi.ROLE_SLIDER, "Volume")
+    check(slider is not None, "a slider 'Volume'")
+    if slider is not None:
+        v = slider.queryValue()
+        check((v.currentValue, v.minimumValue, v.maximumValue) == (0.5, 0.0, 1.0),
+              "its value is 0.5 of 0..1 (got {} of {}..{})".format(
+                  v.currentValue, v.minimumValue, v.maximumValue))
+        check(abs(v.minimumIncrement - 0.05) < 1e-9,
+              "its step is 0.05 (got {})".format(v.minimumIncrement))
+        del events[:]
+        n = len(log_lines(said))
+        v.currentValue = 0.25
+        got = offsets(await_log(said, n), said)
+        check(bool(got) and got[-1] == 0.25, "setting it to 0.25 moved the app's slider ({})".format(got))
+        check(wait_for(lambda: v.currentValue == 0.25), "its value followed ({})".format(v.currentValue))
+        check(any(t.startswith("object:property-change:accessible-value") for t, *_ in events),
+              "an accessible-value change event said so")
+    bar = named(walk(frame, 0, []), pyatspi.ROLE_PROGRESS_BAR, "Progress")
+    check(bar is not None, "a progress bar 'Progress'")
+    if bar is not None:
+        check(wait_for(lambda: bar.queryValue().currentValue == 0.25),
+              "it follows the volume ({})".format(bar.queryValue().currentValue))
+    spin = named(walk(frame, 0, []), pyatspi.ROLE_SPIN_BUTTON, "")
+    check(spin is not None, "a spin button (the 'Level' input)")
+    if spin is not None:
+        v = spin.queryValue()
+        check((v.currentValue, v.minimumValue, v.maximumValue) == (3.0, 0.0, 10.0),
+              "its value is 3 of 0..10 (got {} of {}..{})".format(
+                  v.currentValue, v.minimumValue, v.maximumValue))
+        labels = [t.name for r in spin.getRelationSet()
+                  if r.getRelationType() == pyatspi.RELATION_LABELLED_BY
+                  for t in (r.getTarget(i) for i in range(r.getNTargets()))]
+        check(labels == ["Level"], "it is labelled by 'Level' (got {})".format(labels))
+        n = len(log_lines("touchdemo: level "))
+        v.currentValue = 7.0
+        got = await_log("touchdemo: level ", n)
+        check(bool(got) and got[-1] == "touchdemo: level 7", "setting it to 7 set the app's ({})".format(got))
+    table = named(walk(frame, 0, []), pyatspi.ROLE_TABLE, "Items")
+    check(table is not None, "a table 'Items'")
+    if table is not None:
+        print("atspi: table interfaces {}".format(pyatspi.listInterfaces(table)), flush=True)
+        t = table.queryTable()
+        check((t.nRows, t.nColumns) == (21, 2),
+              "it has 21 rows (its header too) and 2 columns (got {}x{})".format(t.nRows, t.nColumns))
+        first = t.getAccessibleAt(1, 0)
+        check(first is not None and first.name == "Item 0",
+              "the cell at row 1, column 0 is 'Item 0' (got {})".format(first and first.name))
+        header = t.getColumnHeader(1)
+        check(header is not None and header.name.startswith("Count"),
+              "column 1's header is 'Count' (got {})".format(header and header.name))
+        check(t.getAccessibleAt(15, 0) is None, "a row not built has no cell")
+        cell = named(walk(table, 0, []), pyatspi.ROLE_TABLE_CELL, "Item 1")
+        check(cell is not None, "a table cell 'Item 1'")
+        if cell is not None:
+            tc = cell.queryTableCell()
+            # (pyatspi gives (ok, row, column).)
+            pos = tuple(tc.position)[-2:]
+            check(pos == (2, 0), "it is at row 2, column 0 (got {})".format(pos))
+            check(tc.table is not None and tc.table.name == "Items", "its table is 'Items'")
+    if failures:
+        print("AT-SPI range checks failed: " + "; ".join(failures), flush=True)
+        sys.exit(1)
+    print("atspi: all range checks passed", flush=True)
+    sys.exit(0)
 
 if depth:
     # The list of rows: a plain scroll container, a scroll pane.

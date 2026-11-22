@@ -135,6 +135,16 @@ fn walk(win: u64, old: &A11yNode, new: &A11yNode, chain: &mut Vec<usize>, out: &
                 .any(Value::F64(s.offset)),
         );
     }
+    // A slider's, progress bar's or spin button's value moved.
+    if let Some(r) = new.range
+        && old.range.is_none_or(|o| o.value != r.value)
+    {
+        out.push(
+            Signal::new(path(), OBJECT, "PropertyChange")
+                .kind("accessible-value")
+                .any(Value::F64(r.value)),
+        );
+    }
     if old.name != new.name {
         out.push(
             Signal::new(path(), OBJECT, "PropertyChange")

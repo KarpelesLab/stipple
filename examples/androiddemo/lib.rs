@@ -108,6 +108,9 @@ mod app {
         ticks: u32,
         name: TextInput,
         code: TextInput,
+        /// The "Volume" slider (accessibility checks: its RangeInfo and
+        /// ACTION_SET_PROGRESS).
+        volume: f64,
     }
 
     /// The field's text in the frame last built, to log its changes.
@@ -215,6 +218,14 @@ mod app {
             row(vec![field, code_field]).gap(theme.spacing.sm),
             row(vec![
                 spinner(cx),
+                // A slider a screen reader reads and sets as a SeekBar (before the
+                // counter, which grows, so it stays put).
+                slider(cx, state.volume, |s: &mut State, v| {
+                    s.volume = (v * 100.0).round() / 100.0;
+                    println!("androiddemo: volume {:.2}", s.volume);
+                })
+                .a11y_label("Volume")
+                .width(80.0),
                 // Pressing it and moving drags a file (a content: URI).
                 label(cx, format!("Running for {} s", state.ticks)).on_drag(
                     cx,
@@ -583,6 +594,7 @@ mod app {
             ticks: 0,
             name: TextInput::new(),
             code: TextInput::new(),
+            volume: 0.5,
         };
         let app = App::new(state, view)
             .theme(theme)

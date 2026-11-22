@@ -201,6 +201,7 @@ pub(super) fn role(role: A11yRole) -> u32 {
         Switch => 62,        // TOGGLE_BUTTON
         Splitter => 53,      // SPLIT_PANE
         Slider => 51,        // SLIDER
+        ProgressBar => 42,   // PROGRESS_BAR
         Toolbar => 63,       // TOOL_BAR
         Separator => 50,     // SEPARATOR
         Alert => 101,        // NOTIFICATION

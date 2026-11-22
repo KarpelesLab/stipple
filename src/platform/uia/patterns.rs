@@ -867,6 +867,12 @@ pub fn selftest_patterns() -> Result<(), String> {
                 caret: Some(3),
                 text_selection: None,
                 labelled_by: Some("cap".into()),
+                font: Some(crate::platform::access::A11yFont {
+                    family: Some("Segoe UI".into()),
+                    size: 16.0,
+                    weight: 400,
+                    italic: false,
+                }),
                 ..node(A11yRole::TextField, "hello world", (60.0, 0.0, 110.0, 20.0))
             },
             A11yNode {
@@ -891,7 +897,10 @@ pub fn selftest_patterns() -> Result<(), String> {
                 }],
                 ..node(A11yRole::Tree, "", (0.0, 220.0, 200.0, 40.0))
             },
-        ],
+        ]
+        .into_iter()
+        .chain(super::grid::selftest_nodes())
+        .collect(),
         ..node(A11yRole::Window, "Patterns", (0.0, 0.0, 400.0, 300.0))
     };
     let tree = UiaTree::build(&root);
@@ -937,6 +946,23 @@ pub fn selftest_patterns() -> Result<(), String> {
         )?;
         release_through(value);
         text::selftest_text(field)?;
+        // LabeledBy: the caption's element.
+        let simple = query_through(field, &IID_IRawElementProviderSimple);
+        let mut lv = Variant::empty();
+        (vt::<ProviderVtbl>(simple).get_property_value)(simple, 30018, &mut lv);
+        release_through(simple);
+        let label = if lv.vt == VT_UNKNOWN && lv.val != 0 {
+            let l = lv.val as *mut c_void;
+            let name = name_through(l, UIA_NamePropertyId);
+            release_through(l);
+            Some(name)
+        } else {
+            None
+        };
+        check(
+            label.as_deref() == Some("Caption"),
+            &format!("LabeledBy is the caption: {label:?}"),
+        )?;
         release_through(field);
 
         // A checkbox toggles with a click.
@@ -1074,6 +1100,7 @@ pub fn selftest_patterns() -> Result<(), String> {
         )?;
         release_through(ex);
         release_through(ti);
+        super::grid::selftest_grid(frag)?;
         release_through(frag);
     }
     // What a swap would raise: the checkbox checked, the list scrolled.
@@ -1096,7 +1123,7 @@ pub fn selftest_patterns() -> Result<(), String> {
 
 /// The names of the providers in a `SAFEARRAY` of `IRawElementProviderSimple*`,
 /// destroying the array.
-unsafe fn provider_names(sa: *mut c_void) -> Vec<String> {
+pub(super) unsafe fn provider_names(sa: *mut c_void) -> Vec<String> {
     unsafe {
         let mut out = Vec::new();
         if sa.is_null() {

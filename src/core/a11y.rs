@@ -53,6 +53,108 @@ pub struct AccessScroll {
     pub rtl: bool,
 }
 
+/// A value along a range, as assistive technologies read and set it (UIA's
+/// RangeValue pattern, AT-SPI's `Value`, `AXValue` with its bounds, iOS's
+/// adjustable trait, Android's `RangeInfo`, `aria-valuenow`): a
+/// [`slider`](crate::widgets::slider)'s position, a
+/// [`progress_bar`](crate::widgets::progress_bar)'s fraction, a
+/// [`number_input`](crate::widgets::number_input)'s number. Set with
+/// [`Element::a11y_range`](crate::core::Element::a11y_range).
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct AccessRange {
+    /// The current value, `min..=max`.
+    pub value: f64,
+    /// The smallest value.
+    pub min: f64,
+    /// The largest value.
+    pub max: f64,
+    /// What one increment adds (an arrow key's step); 0 when it has none.
+    pub step: f64,
+    /// A slider's track runs right to left (its minimum is on the right):
+    /// where a value set from a screen reader lands on it.
+    pub rtl: bool,
+}
+
+// The values are finite (see `AccessRange::new`), so equality is total.
+impl Eq for AccessRange {}
+
+impl AccessRange {
+    /// `value` between `min` and `max` (swapped if reversed; `value`
+    /// clamped to them), with no step. Values that aren't finite read as 0.
+    pub fn new(value: f64, min: f64, max: f64) -> Self {
+        let f = |v: f64| if v.is_finite() { v } else { 0.0 };
+        let (min, max) = (f(min).min(f(max)), f(min).max(f(max)));
+        AccessRange {
+            value: f(value).clamp(min, max),
+            min,
+            max,
+            step: 0.0,
+            rtl: false,
+        }
+    }
+
+    /// With `step` as one increment (its absolute value; not finite is 0).
+    pub fn step(mut self, step: f64) -> Self {
+        self.step = if step.is_finite() { step.abs() } else { 0.0 };
+        self
+    }
+
+    /// The value as a fraction of the range, `0..=1` (0 for an empty range).
+    pub fn fraction(&self) -> f64 {
+        let span = self.max - self.min;
+        if span > 0.0 {
+            ((self.value - self.min) / span).clamp(0.0, 1.0)
+        } else {
+            0.0
+        }
+    }
+}
+
+/// A table's size, as assistive technologies read it (UIA's Grid and Table
+/// patterns, AT-SPI's `Table`, `AXRowCount`, Android's `CollectionInfo`,
+/// `aria-rowcount`): all of its rows, the header row and the rows a
+/// virtualized table hasn't built included, and its columns.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct AccessTable {
+    pub rows: usize,
+    pub columns: usize,
+}
+
+impl AccessTable {
+    /// A table of `rows` rows (its header row included) and `columns`
+    /// columns.
+    pub fn new(rows: usize, columns: usize) -> Self {
+        AccessTable { rows, columns }
+    }
+}
+
+/// Where a table's row or cell is: its row among all the table's rows (the
+/// header row counts: a [`table`](crate::widgets::table)'s is row 0) and its
+/// column (0 for a row).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct AccessCell {
+    pub row: usize,
+    pub column: usize,
+}
+
+/// How a node's text is drawn, for the text attributes a screen reader
+/// reports (UIA's `FontName`, `FontSize`, `FontWeight`, `IsItalic`).
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct AccessFont {
+    /// The family, when the text names one (else the app's font's, which
+    /// the window's tree fills in where it knows it).
+    pub family: Option<String>,
+    /// The size, in logical pixels.
+    pub size: f64,
+    /// The weight (400 regular, 700 bold).
+    pub weight: u16,
+    pub italic: bool,
+}
+
 /// The semantic kind of an [`AccessNode`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -104,6 +206,10 @@ pub enum Role {
     /// [`slider`](crate::widgets::slider)): a volume, a playback position.
     /// Named by its [`a11y_label`](crate::core::Element::a11y_label).
     Slider,
+    /// How far a task has got (a
+    /// [`progress_bar`](crate::widgets::progress_bar)): a read-only
+    /// [`range`](AccessNode::range).
+    ProgressBar,
     /// A row of command buttons.
     Toolbar,
     /// A visual divider between groups (in a toolbar or menu).
@@ -210,6 +316,15 @@ pub(crate) struct Semantics {
     /// A text field's state, for a live OS text control to edit (under
     /// the native theme; see `core::native_host`).
     pub native_text: Option<Box<crate::platform::native::NativeText>>,
+    /// The value along a range it shows (see
+    /// [`Element::a11y_range`](crate::core::Element::a11y_range)).
+    pub range: Option<AccessRange>,
+    /// A table's size, for the rows a virtualized table hasn't built (see
+    /// [`Element::a11y_table`](crate::core::Element::a11y_table)).
+    pub table: Option<AccessTable>,
+    /// A table row's index among all its table's rows (see
+    /// [`Element::a11y_row`](crate::core::Element::a11y_row)).
+    pub row: Option<usize>,
 }
 
 /// A select's options as its live OS control shows them: their labels, the
@@ -275,6 +390,16 @@ pub struct AccessNode {
     /// [`offset`](AccessScroll::offset), from 0 to
     /// [`max`](AccessScroll::max)). Setting it scrolls its container.
     pub scroll_bar: Option<AccessScroll>,
+    /// For a slider, a progress bar or a number input, its value along its
+    /// range.
+    pub range: Option<AccessRange>,
+    /// For a [`Role::Table`], how many rows and columns it has.
+    pub table: Option<AccessTable>,
+    /// For a [`Role::Row`], [`Role::Cell`] or [`Role::ColumnHeader`] in a
+    /// table, where it is.
+    pub cell: Option<AccessCell>,
+    /// For text, a text field or a number input, how its text is drawn.
+    pub font: Option<AccessFont>,
     /// When a live OS control stands for this node (under
     /// [`Theme::native`](crate::style::Theme::native), in a window that
     /// hosts them), its id: the platform exposes that control here.
@@ -427,6 +552,20 @@ fn build(node: &LayoutNode, cx: &Ctx<'_>, is_root: bool) -> AccessNode {
         placeholder: sem.and_then(|s| s.placeholder.clone()),
         scroll: scroll_of(node, cx.offsets),
         scroll_bar: None,
+        range: sem
+            .and_then(|s| s.range)
+            .map(|r| AccessRange { rtl: node.rtl, ..r }),
+        // What the table and its rows declare; `number_tables` completes it.
+        table: sem.and_then(|s| s.table).filter(|_| role == Role::Table),
+        cell: sem
+            .and_then(|s| s.row)
+            .filter(|_| role == Role::Row)
+            .map(|row| AccessCell { row, column: 0 }),
+        font: if role.is_container() {
+            None
+        } else {
+            font_of(node, role)
+        },
         native_view: node.native_a11y.or(node.native_live),
         children,
     };
@@ -439,6 +578,7 @@ fn build(node: &LayoutNode, cx: &Ctx<'_>, is_root: bool) -> AccessNode {
         out.children.extend(scroll_bars_of(node, cx.offsets));
     }
     hoist_scroll(&mut out);
+    hand_down_label(&mut out);
     out
 }
 
@@ -474,6 +614,10 @@ fn scroll_bars_of(node: &LayoutNode, offsets: &HashMap<ScrollId, f64>) -> Vec<Ac
                 level: None,
                 placeholder: None,
                 scroll: None,
+                range: None,
+                table: None,
+                cell: None,
+                font: None,
                 scroll_bar: Some(AccessScroll {
                     offset: g.offset,
                     max: g.max,
@@ -486,6 +630,116 @@ fn scroll_bars_of(node: &LayoutNode, offsets: &HashMap<ScrollId, f64>) -> Vec<Ac
             })
         })
         .collect()
+}
+
+/// A plain unnamed group (a widget's wrapper: a number input's field and
+/// steppers) labelled by a caption gives the label to the first control
+/// inside it without one, which is what the caption names.
+fn hand_down_label(node: &mut AccessNode) {
+    fn first_control(n: &mut AccessNode) -> Option<&mut AccessNode> {
+        n.children.iter_mut().find_map(|c| {
+            if c.role.is_container() {
+                first_control(c)
+            } else if c.role != Role::Text && c.labelled_by.is_none() {
+                Some(c)
+            } else {
+                None
+            }
+        })
+    }
+    if node.role != Role::Group || !node.name.is_empty() || node.labelled_by.is_none() {
+        return;
+    }
+    let id = node.labelled_by.take();
+    match first_control(node) {
+        Some(c) => c.labelled_by = id,
+        None => node.labelled_by = id,
+    }
+}
+
+/// How the text of `node` (a text, field or number input node) is drawn.
+fn font_of(node: &LayoutNode, role: Role) -> Option<AccessFont> {
+    if !matches!(
+        role,
+        Role::Text | Role::TextField | Role::SpinButton | Role::PasswordField
+    ) {
+        return None;
+    }
+    let leaf = own_text(node).or_else(|| first_text(node))?;
+    let NodeContent::Text { size, style, .. } = &leaf.content else {
+        return None;
+    };
+    let face = style.font.as_ref();
+    Some(AccessFont {
+        family: face.and_then(|f| f.family_name()).map(str::to_string),
+        size: *size,
+        weight: style
+            .weight
+            .or_else(|| face.map(|f| f.style().weight))
+            .map_or(400, |w| w.0),
+        italic: style
+            .italic
+            .or_else(|| face.map(|f| f.style().italic))
+            .unwrap_or(false),
+    })
+}
+
+/// Number the rows and cells of every table under `node`: a row's index is
+/// the one it declares ([`Element::a11y_row`](crate::core::Element::a11y_row)),
+/// else the one after the row before it's (the first is 0); a cell's column
+/// is its place among its row's cells and headers. A table's size is the
+/// one it declares ([`Element::a11y_table`](crate::core::Element::a11y_table)),
+/// else as far as its rows and cells reach.
+fn number_tables(node: &mut AccessNode) {
+    fn rows_of<'a>(n: &'a mut AccessNode, out: &mut Vec<&'a mut AccessNode>) {
+        for c in &mut n.children {
+            match c.role {
+                Role::Row => out.push(c),
+                // A table inside one numbers its own.
+                Role::Table => {}
+                _ => rows_of(c, out),
+            }
+        }
+    }
+    // A row's cells, through the groups that wrap them (a header and its
+    // resize handle), in order.
+    fn cells_of<'a>(n: &'a mut AccessNode, out: &mut Vec<&'a mut AccessNode>) {
+        for c in &mut n.children {
+            match c.role {
+                Role::Cell | Role::ColumnHeader => out.push(c),
+                Role::Group => cells_of(c, out),
+                _ => {}
+            }
+        }
+    }
+    if node.role == Role::Table {
+        let (mut next, mut rows, mut columns) = (0, 0, 0);
+        let mut found = Vec::new();
+        rows_of(node, &mut found);
+        for row in found {
+            let index = row.cell.map_or(next, |c| c.row);
+            next = index + 1;
+            row.cell = Some(AccessCell {
+                row: index,
+                column: 0,
+            });
+            let mut cells = Vec::new();
+            cells_of(row, &mut cells);
+            let column = cells.len();
+            for (i, c) in cells.into_iter().enumerate() {
+                c.cell = Some(AccessCell {
+                    row: index,
+                    column: i,
+                });
+            }
+            rows = rows.max(next);
+            columns = columns.max(column);
+        }
+        node.table.get_or_insert(AccessTable { rows, columns });
+    }
+    for c in &mut node.children {
+        number_tables(c);
+    }
 }
 
 /// Whether the field `node` shows its placeholder in place of a value.
@@ -584,7 +838,9 @@ pub(crate) fn accessibility_tree_at(
     focused: Option<FocusId>,
     offsets: &HashMap<ScrollId, f64>,
 ) -> AccessNode {
-    build(root, &Ctx { focused, offsets }, true)
+    let mut tree = build(root, &Ctx { focused, offsets }, true);
+    number_tables(&mut tree);
+    tree
 }
 
 #[cfg(test)]

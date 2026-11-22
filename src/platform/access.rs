@@ -64,6 +64,8 @@ pub enum A11yRole {
     Splitter,
     /// A control that sets a value along a track.
     Slider,
+    /// How far a task has got (a read-only [`A11yNode::range`]).
+    ProgressBar,
     /// A row of command buttons.
     Toolbar,
     /// A visual divider.
@@ -97,6 +99,46 @@ pub struct A11yScroll {
     pub horizontal: bool,
     /// A sideways strip laid out right to left (its start is on the right).
     pub rtl: bool,
+}
+
+/// A value along a range — mirrors `stipple::core::AccessRange`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct A11yRange {
+    /// The current value, `min..=max`.
+    pub value: f64,
+    pub min: f64,
+    pub max: f64,
+    /// One increment (0: none given).
+    pub step: f64,
+    /// A slider's track runs right to left.
+    pub rtl: bool,
+}
+
+/// A table's size — mirrors `stipple::core::AccessTable`: all its rows
+/// (the header row and rows not built included) and columns.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct A11yTable {
+    pub rows: usize,
+    pub columns: usize,
+}
+
+/// Where a table's row or cell is — mirrors `stipple::core::AccessCell`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct A11yCell {
+    pub row: usize,
+    /// 0 for a row.
+    pub column: usize,
+}
+
+/// How a node's text is drawn — mirrors `stipple::core::AccessFont`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct A11yFont {
+    /// The family, when known.
+    pub family: Option<String>,
+    /// Logical pixels.
+    pub size: f64,
+    pub weight: u16,
+    pub italic: bool,
 }
 
 /// A node in the platform-neutral accessibility tree.
@@ -138,6 +180,15 @@ pub struct A11yNode {
     /// For a [`A11yRole::ScrollBar`], the scrolling it shows: its
     /// orientation, and its value (the offset, from 0 to the largest).
     pub scroll_bar: Option<A11yScroll>,
+    /// For a slider, a progress bar or a spin button, its value along its
+    /// range.
+    pub range: Option<A11yRange>,
+    /// For a table, its size.
+    pub table: Option<A11yTable>,
+    /// For a table's row, cell or column header, where it is.
+    pub cell: Option<A11yCell>,
+    /// For a node with text, how it's drawn.
+    pub font: Option<A11yFont>,
     /// The live OS control that stands for this node (see
     /// [`NativeView`](crate::platform::native::NativeView)), by id: the
     /// bridge exposes that control here, as the OS's own accessibility
@@ -168,6 +219,10 @@ impl A11yNode {
             placeholder: None,
             scroll: None,
             scroll_bar: None,
+            range: None,
+            table: None,
+            cell: None,
+            font: None,
             native_view: None,
             children: Vec::new(),
         }
@@ -176,6 +231,105 @@ impl A11yNode {
     /// Total node count (including this one), for tests/inspection.
     pub fn count(&self) -> usize {
         1 + self.children.iter().map(A11yNode::count).sum::<usize>()
+    }
+
+    /// Give the text that names no font of its own `family` (the app's).
+    pub fn fill_font_family(&mut self, family: &str) {
+        if let Some(f) = &mut self.font
+            && f.family.is_none()
+        {
+            f.family = Some(family.to_string());
+        }
+        for c in &mut self.children {
+            c.fill_font_family(family);
+        }
+    }
+
+    /// The table cell (or row, for `column` `None`) at `row` and
+    /// `column` under this table node, with its path from it: the rows
+    /// are found through any groups between (not inside a nested table).
+    pub fn table_item(&self, row: usize, column: Option<usize>) -> Option<(Vec<usize>, &A11yNode)> {
+        // The cell of `column` in the row `n` (at `path`), through the
+        // groups that wrap its cells.
+        fn cell_in<'a>(
+            n: &'a A11yNode,
+            column: usize,
+            path: &[usize],
+        ) -> Option<(Vec<usize>, &'a A11yNode)> {
+            n.children.iter().enumerate().find_map(|(j, c)| {
+                let mut p = path.to_vec();
+                p.push(j);
+                match c.role {
+                    A11yRole::Cell | A11yRole::ColumnHeader => c
+                        .cell
+                        .is_some_and(|at| at.column == column)
+                        .then_some((p, c)),
+                    A11yRole::Group => cell_in(c, column, &p),
+                    _ => None,
+                }
+            })
+        }
+        fn go<'a>(
+            n: &'a A11yNode,
+            row: usize,
+            column: Option<usize>,
+            path: &mut Vec<usize>,
+        ) -> Option<(Vec<usize>, &'a A11yNode)> {
+            for (i, c) in n.children.iter().enumerate() {
+                path.push(i);
+                let found = match c.role {
+                    A11yRole::Row if c.cell.map(|p| p.row) == Some(row) => match column {
+                        None => Some((path.clone(), c)),
+                        Some(col) => cell_in(c, col, path),
+                    },
+                    A11yRole::Row | A11yRole::Table => None,
+                    _ => go(c, row, column, path),
+                };
+                path.pop();
+                if found.is_some() {
+                    return found;
+                }
+            }
+            None
+        }
+        go(self, row, column, &mut Vec::new())
+    }
+
+    /// The column headers under this table node (its header row's cells),
+    /// by column, with their paths from it.
+    pub fn column_headers(&self) -> Vec<(usize, Vec<usize>)> {
+        fn go(n: &A11yNode, path: &mut Vec<usize>, out: &mut Vec<(usize, Vec<usize>)>) {
+            for (i, c) in n.children.iter().enumerate() {
+                path.push(i);
+                match c.role {
+                    A11yRole::ColumnHeader => {
+                        if let Some(p) = c.cell {
+                            out.push((p.column, path.clone()));
+                        }
+                    }
+                    A11yRole::Table => {}
+                    _ => go(c, path, out),
+                }
+                path.pop();
+            }
+        }
+        let mut out = Vec::new();
+        go(self, &mut Vec::new(), &mut out);
+        out
+    }
+
+    /// The path to the nearest table above the node at `path` under this
+    /// one (a prefix of `path`).
+    pub fn table_above(&self, path: &[usize]) -> Option<Vec<usize>> {
+        let mut at = self;
+        let mut found = None;
+        for (depth, &i) in path.iter().enumerate() {
+            if at.role == A11yRole::Table {
+                found = Some(path[..depth].to_vec());
+            }
+            at = at.children.get(i)?;
+        }
+        found
     }
 
     /// The hint a screen reader reads with this node, when it has one: a
@@ -282,6 +436,8 @@ mod changes;
 mod relations;
 mod reveal;
 #[allow(unused_imports)]
+pub(crate) use actions::{editable, number_text};
+#[allow(unused_imports)]
 pub(crate) use changes::{A11yChange, changes};
 #[allow(unused_imports)]
 pub(crate) use relations::Relations;
@@ -311,6 +467,7 @@ pub(crate) fn aria_role(role: A11yRole) -> &'static str {
         A11yRole::RadioButton => "radio",
         A11yRole::Switch => "switch",
         A11yRole::Slider => "slider",
+        A11yRole::ProgressBar => "progressbar",
         A11yRole::Splitter | A11yRole::Separator => "separator",
         A11yRole::Toolbar => "toolbar",
         A11yRole::Alert => "alert",
@@ -326,11 +483,14 @@ pub(crate) fn aria_role(role: A11yRole) -> &'static str {
 /// The tree as the JSON `web/stipple.js` turns into its ARIA overlay: per
 /// node `{"r": role, "n": name, "b": [x, y, w, h], "f": focused, "s":
 /// selected, "e": expanded, "c": checked, "sc": [offset, max, sideways,
-/// right to left], "sb": [value, max, sideways], "k": [children]}`, with
-/// `r` an ARIA role (see [`aria_role`]; an unnamed group gets none), the
-/// booleans as 0/1, and `s`, `e`, `c`, `sc` (a scroll container's, in whole
-/// CSS pixels), `sb` (a scroll bar's) and `k` left out where they don't
-/// apply. Bounds are in whole CSS pixels.
+/// right to left], "sb": [value, max, sideways], "rv": [value, min, max],
+/// "rt": value text, "tb": [rows, columns], "ce": [row, column], "lb":
+/// labelled-by id (resolved by the caption's "i"), "k": [children]}`, with `r` an ARIA role (see
+/// [`aria_role`]; an unnamed group gets none), the booleans as 0/1, and `s`,
+/// `e`, `c`, `sc` (a scroll container's, in whole CSS pixels), `sb` (a
+/// scroll bar's), `rv` and `rt` (a range's), `tb` (a table's), `ce` (a row's
+/// or cell's, from 0), `id` (only on a node another labels itself by), `lb`
+/// and `k` left out where they don't apply. Bounds are in whole CSS pixels.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 pub(crate) fn aria_json(node: &A11yNode) -> String {
     use std::fmt::Write;
@@ -414,6 +574,20 @@ pub(crate) fn aria_json(node: &A11yNode) -> String {
                 s.max.round(),
                 u8::from(s.horizontal)
             );
+        }
+        if let Some(r) = n.range {
+            let _ = write!(out, ",\"rv\":[{},{},{}],\"rt\":", r.value, r.min, r.max);
+            string(out, &r.text());
+        }
+        if let Some(t) = n.table {
+            let _ = write!(out, ",\"tb\":[{},{}]", t.rows, t.columns);
+        }
+        if let Some(c) = n.cell {
+            let _ = write!(out, ",\"ce\":[{},{}]", c.row, c.column);
+        }
+        if let Some(lb) = &n.labelled_by {
+            out.push_str(",\"lb\":");
+            string(out, lb);
         }
         if !n.children.is_empty() {
             out.push_str(",\"k\":[");
@@ -536,6 +710,52 @@ mod tests {
         assert_eq!(field(Some("Your name")).hint(), Some("Your name"));
         assert_eq!(field(Some("")).hint(), None);
         assert_eq!(field(None).hint(), None);
+    }
+
+    #[test]
+    fn aria_json_carries_ranges_tables_and_labels() {
+        let root = A11yNode {
+            children: vec![
+                A11yNode {
+                    id: Some("vol".into()),
+                    ..leaf(A11yRole::Text, "Volume")
+                },
+                A11yNode {
+                    id: Some("unused".into()),
+                    labelled_by: Some("vol".into()),
+                    range: Some(A11yRange {
+                        value: 0.5,
+                        min: 0.0,
+                        max: 1.0,
+                        step: 0.05,
+                        rtl: false,
+                    }),
+                    ..leaf(A11yRole::Slider, "")
+                },
+                A11yNode {
+                    table: Some(A11yTable {
+                        rows: 9,
+                        columns: 2,
+                    }),
+                    children: vec![A11yNode {
+                        cell: Some(A11yCell { row: 3, column: 1 }),
+                        ..leaf(A11yRole::Cell, "x")
+                    }],
+                    ..leaf(A11yRole::Table, "")
+                },
+            ],
+            ..A11yNode::new(A11yRole::Window, "", (0.0, 0.0, 0.0, 0.0))
+        };
+        assert_eq!(
+            aria_json(&root),
+            concat!(
+                r#"{"r":"","n":"","b":[0,0,0,0],"f":0,"k":["#,
+                r#"{"r":"","n":"Volume","b":[0,0,0,0],"f":0,"i":"vol"},"#,
+                r#"{"r":"slider","n":"","b":[0,0,0,0],"f":0,"i":"unused","rv":[0.5,0,1],"rt":"50%","lb":"vol"},"#,
+                r#"{"r":"grid","n":"","b":[0,0,0,0],"f":0,"tb":[9,2],"k":["#,
+                r#"{"r":"gridcell","n":"x","b":[0,0,0,0],"f":0,"s":0,"ce":[3,1]}]}]}"#,
+            )
+        );
     }
 
     #[test]

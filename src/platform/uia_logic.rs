@@ -14,6 +14,18 @@ pub(crate) const SCROLL_VERTICAL_PERCENT: i32 = 30055;
 pub(crate) const EXPAND_COLLAPSE_STATE: i32 = 30070;
 pub(crate) const SELECTION_ITEM_IS_SELECTED: i32 = 30079;
 pub(crate) const TOGGLE_STATE: i32 = 30086;
+pub(crate) const RANGE_VALUE_VALUE: i32 = 30047;
+
+// Events (UIAutomationClient.h).
+pub(crate) const TEXT_SELECTION_CHANGED: i32 = 20014;
+pub(crate) const TEXT_CHANGED: i32 = 20015;
+
+// Text attributes.
+pub(crate) const FONT_NAME: i32 = 40005;
+pub(crate) const FONT_SIZE: i32 = 40006;
+pub(crate) const FONT_WEIGHT: i32 = 40007;
+pub(crate) const IS_ITALIC: i32 = 40014;
+pub(crate) const IS_READ_ONLY: i32 = 40015;
 
 /// `UIA_ScrollPatternNoScroll`: the percent of an axis that doesn't scroll.
 pub(crate) const NO_SCROLL: f64 = -1.0;
@@ -29,6 +41,11 @@ pub(crate) struct Patterns {
     pub(crate) expand_collapse: bool,
     pub(crate) scroll: bool,
     pub(crate) text: bool,
+    pub(crate) range_value: bool,
+    /// Grid and Table, on a table.
+    pub(crate) grid: bool,
+    /// GridItem and TableItem, on a table's cell or column header.
+    pub(crate) grid_item: bool,
 }
 
 /// The patterns of `n` (in a window: the actions all need one to land in).
@@ -52,7 +69,40 @@ pub(crate) fn patterns(n: &A11yNode) -> Patterns {
         expand_collapse,
         scroll: n.scroll.is_some(),
         text: matches!(n.role, TextField | PasswordField | SpinButton | Text),
+        range_value: n.range.is_some(),
+        grid: n.role == Table && n.table.is_some(),
+        grid_item: matches!(n.role, Cell | ColumnHeader) && n.cell.is_some(),
     }
+}
+
+/// The RangeValue pattern's numbers: `(value, minimum, maximum, small
+/// change, large change)`, a large change being a tenth of the range (or
+/// the small one, when larger).
+pub(crate) fn range_numbers(n: &A11yNode) -> Option<(f64, f64, f64, f64, f64)> {
+    let r = n.range?;
+    let small = r.increment();
+    let span = r.max - r.min;
+    let large = if span > 0.0 && span < 1e15 {
+        (span / 10.0).max(small)
+    } else {
+        small * 10.0
+    };
+    Some((r.value, r.min, r.max, small, large))
+}
+
+/// The value of text attribute `attr` over `n`'s text (one run: every
+/// character is drawn the same), `None` when it isn't one the tree knows.
+pub(crate) fn text_attribute(n: &A11yNode, attr: i32) -> Option<Val> {
+    let f = n.font.as_ref();
+    Some(match attr {
+        FONT_NAME => Val::Str(f?.family.clone()?),
+        // Points: a logical pixel is a 96th of an inch.
+        FONT_SIZE => Val::R8((f?.size * 0.75 * 2.0).round() / 2.0),
+        FONT_WEIGHT => Val::I4(i32::from(f?.weight)),
+        IS_ITALIC => Val::Bool(f?.italic),
+        IS_READ_ONLY => Val::Bool(!crate::platform::access::editable(n.role)),
+        _ => return None,
+    })
 }
 
 /// Whether `n`'s name is its text (an editable field whose caret the tree
@@ -451,6 +501,9 @@ pub(crate) enum UiaEvent {
     ElementSelected { path: Vec<usize> },
     /// `UiaRaiseNotificationEvent`: an alert (a toast) to read out.
     Notification { path: Vec<usize>, text: String },
+    /// `UiaRaiseAutomationEvent(id)`: a text pattern's selection or text
+    /// changed.
+    Automation { path: Vec<usize>, id: i32 },
 }
 
 /// The events going from `old` to `new` (the node pairs `changes` matches by
@@ -473,6 +526,13 @@ pub(crate) fn events(old: &A11yNode, new: &A11yNode) -> Vec<UiaEvent> {
                 // A field whose name is its text: its Value changed, below.
                 if new.at_path(p).is_some_and(|n| !name_is_text(n)) {
                     out.extend(prop(p, NAME, &|t, n| Val::Str(uia_name(t, n))));
+                }
+                // The text a Text pattern serves changed.
+                if new.at_path(p).is_some_and(|n| patterns(n).text) {
+                    out.push(UiaEvent::Automation {
+                        path: p.clone(),
+                        id: TEXT_CHANGED,
+                    });
                 }
             }
             A11yChange::Value(p) => {
@@ -516,9 +576,19 @@ pub(crate) fn events(old: &A11yNode, new: &A11yNode) -> Vec<UiaEvent> {
             A11yChange::Children(p) => {
                 out.push(UiaEvent::ChildrenInvalidated { path: p.clone() });
             }
-            // Text pattern clients ask for the selection again on focus and
-            // on the caret's own events; none raised yet.
-            A11yChange::TextSelection(_) => {}
+            A11yChange::TextSelection(p) => {
+                if new.at_path(p).is_some_and(|n| patterns(n).text) {
+                    out.push(UiaEvent::Automation {
+                        path: p.clone(),
+                        id: TEXT_SELECTION_CHANGED,
+                    });
+                }
+            }
+            A11yChange::Range(p) => {
+                out.extend(prop(p, RANGE_VALUE_VALUE, &|_, n| {
+                    Val::R8(n.range.map_or(0.0, |r| r.value))
+                }));
+            }
         }
     }
     for (path, text) in new_alerts(old, new) {
@@ -776,11 +846,19 @@ mod tests {
             events(&old, &new),
             vec![
                 UiaEvent::ChildrenInvalidated { path: vec![] },
+                UiaEvent::Automation {
+                    path: vec![0],
+                    id: TEXT_CHANGED
+                },
                 UiaEvent::Property {
                     path: vec![0],
                     property: VALUE_VALUE,
                     old: Val::Str("a".into()),
                     new: Val::Str("ab".into())
+                },
+                UiaEvent::Automation {
+                    path: vec![0],
+                    id: TEXT_SELECTION_CHANGED
                 },
                 UiaEvent::Property {
                     path: vec![1],
@@ -818,12 +896,88 @@ mod tests {
         };
         assert_eq!(
             events(&a, &b),
+            vec![
+                UiaEvent::Property {
+                    path: vec![0],
+                    property: NAME,
+                    old: Val::Str("Rows tapped: 0".into()),
+                    new: Val::Str("Rows tapped: 1".into())
+                },
+                UiaEvent::Automation {
+                    path: vec![0],
+                    id: TEXT_CHANGED
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn ranges_tables_and_text_attributes() {
+        use crate::platform::access::{A11yCell, A11yFont, A11yRange, A11yTable};
+        let slider = |value| A11yNode {
+            range: Some(A11yRange {
+                value,
+                min: 0.0,
+                max: 1.0,
+                step: 0.05,
+                rtl: false,
+            }),
+            ..leaf(A11yRole::Slider, "Volume")
+        };
+        let p = patterns(&slider(0.5));
+        assert!(p.range_value && !p.value && !p.grid);
+        assert_eq!(
+            range_numbers(&slider(0.5)),
+            Some((0.5, 0.0, 1.0, 0.05, 0.1))
+        );
+        let table = A11yNode {
+            table: Some(A11yTable {
+                rows: 3,
+                columns: 2,
+            }),
+            ..leaf(A11yRole::Table, "")
+        };
+        assert!(patterns(&table).grid);
+        let cell = A11yNode {
+            cell: Some(A11yCell { row: 1, column: 0 }),
+            ..leaf(A11yRole::Cell, "x")
+        };
+        assert!(patterns(&cell).grid_item);
+        assert!(!patterns(&leaf(A11yRole::Cell, "x")).grid_item);
+
+        // A slider moved: its RangeValue.Value changed.
+        let window = |n| A11yNode {
+            children: vec![n],
+            ..leaf(A11yRole::Window, "")
+        };
+        assert_eq!(
+            events(&window(slider(0.5)), &window(slider(0.75))),
             vec![UiaEvent::Property {
                 path: vec![0],
-                property: NAME,
-                old: Val::Str("Rows tapped: 0".into()),
-                new: Val::Str("Rows tapped: 1".into())
+                property: RANGE_VALUE_VALUE,
+                old: Val::R8(0.5),
+                new: Val::R8(0.75)
             }]
         );
+
+        let text = A11yNode {
+            font: Some(A11yFont {
+                family: Some("Segoe UI".into()),
+                size: 14.0,
+                weight: 700,
+                italic: true,
+            }),
+            ..leaf(A11yRole::Text, "Bold")
+        };
+        assert_eq!(
+            text_attribute(&text, FONT_NAME),
+            Some(Val::Str("Segoe UI".into()))
+        );
+        assert_eq!(text_attribute(&text, FONT_SIZE), Some(Val::R8(10.5)));
+        assert_eq!(text_attribute(&text, FONT_WEIGHT), Some(Val::I4(700)));
+        assert_eq!(text_attribute(&text, IS_ITALIC), Some(Val::Bool(true)));
+        assert_eq!(text_attribute(&text, IS_READ_ONLY), Some(Val::Bool(true)));
+        assert_eq!(text_attribute(&text, 40008), None, "not one it knows");
+        assert_eq!(text_attribute(&leaf(A11yRole::Text, "x"), FONT_NAME), None);
     }
 }

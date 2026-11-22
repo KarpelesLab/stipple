@@ -1521,6 +1521,38 @@ impl Element {
         self
     }
 
+    /// Say this element shows a value along a range (a slider's position, a
+    /// progress bar's fraction, a number input's number), which screen
+    /// readers read and, for a slider or a spin button, set: UIA's
+    /// RangeValue, AT-SPI's `Value`, `AXValue` with its bounds, iOS's
+    /// adjustable trait, Android's `RangeInfo`, `aria-valuenow`. A slider is
+    /// set from them as a press at the value's place along its width (what
+    /// [`on_drag`](Element::on_drag) reads), a spin button by typing the
+    /// number and Enter. [`slider`](crate::widgets::slider),
+    /// [`progress_bar`](crate::widgets::progress_bar) and
+    /// [`number_input`](crate::widgets::number_input) declare theirs.
+    pub fn a11y_range(mut self, range: crate::core::AccessRange) -> Self {
+        self.semantics.get_or_insert_with(Semantics::default).range = Some(range);
+        self
+    }
+
+    /// Say this [`Role::Table`] has `table.rows` rows (its header row
+    /// included) and `table.columns` columns, though only some of them are
+    /// built (a virtualized table). Without it, a table counts the rows and
+    /// cells it has.
+    pub fn a11y_table(mut self, table: crate::core::AccessTable) -> Self {
+        self.semantics.get_or_insert_with(Semantics::default).table = Some(table);
+        self
+    }
+
+    /// Say this [`Role::Row`] is row `index` of its table, counting every
+    /// row from 0 (the header row too), for a virtualized table whose first
+    /// built row isn't its first. The rows after it without one follow on.
+    pub fn a11y_row(mut self, index: usize) -> Self {
+        self.semantics.get_or_insert_with(Semantics::default).row = Some(index);
+        self
+    }
+
     /// Enable wrapping. On a text element the text word-wraps to the element's
     /// content width across as many lines as needed. On a stack (row or
     /// column), children that don't fit the main axis flow onto new lines, with

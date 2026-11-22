@@ -46,6 +46,13 @@
 //! background`), for the state saved in the background and restored after a
 //! system kill.
 //!
+//! **Ranges and a table.** Launched with `TOUCHDEMO_RANGES` set (CI's
+//! accessibility depth checks), it shows a "Volume" slider, a "Level"
+//! number input captioned by a label, a progress bar following the volume
+//! and a small table above the list, for the screen readers' range values,
+//! tables and labelled-by relations: it logs `touchdemo: volume V` and
+//! `touchdemo: level N` as they change.
+//!
 //! **Services (real touches).** Launched with `TOUCHDEMO_SERVICES` set (CI's
 //! XCUITest sets it in the launch environment), it shows a few more
 //! controls above the list, for a test that drives the app from outside with
@@ -117,6 +124,7 @@ use stipple::core::{PinchEvent, PinchPhase};
 use stipple::platform::Lifecycle;
 use stipple::prelude::*;
 use stipple::widgets::TextInput;
+use stipple::widgets::{Column, NumberInput, SelectionMode, TableSpec, TableState};
 
 const ROWS: usize = 30;
 const PAD: f64 = 16.0;
@@ -176,6 +184,60 @@ struct State {
     dropped: Vec<stipple::platform::DropData>,
     /// The services' controls and what they did (`TOUCHDEMO_SERVICES`).
     services: Option<Services>,
+    /// The slider, number input and table (`TOUCHDEMO_RANGES`).
+    ranges: Option<Ranges>,
+}
+
+/// What `TOUCHDEMO_RANGES` shows.
+struct Ranges {
+    volume: f64,
+    level: NumberInput,
+    table: TableState,
+}
+
+/// The rows of the ranges' table.
+const TABLE_ROWS: usize = 20;
+
+/// A "Volume" slider, a "Level" number input with its caption, a progress
+/// bar at the volume, and a table of 20 rows (a few built at a time).
+fn ranges_view(r: &Ranges, cx: &mut Cx<State>) -> Element {
+    let volume = slider(cx, r.volume, |s: &mut State, v| {
+        if let Some(r) = s.ranges.as_mut() {
+            r.volume = (v * 100.0).round() / 100.0;
+            log(&format!("touchdemo: volume {:.2}", r.volume));
+        }
+    })
+    .a11y_label("Volume");
+    let level = number_input(cx, &r.level, |s| {
+        &mut s.ranges.as_mut().expect("ranges shown").level
+    });
+    if LEVEL.swap(r.level.value().to_bits(), Ordering::Relaxed) != r.level.value().to_bits() {
+        log(&format!("touchdemo: level {}", r.level.value()));
+    }
+    let level = row(vec![
+        label(cx, "Level").a11y_id("level-label"),
+        level.labelled_by("level-label"),
+    ])
+    .gap(8.0);
+    let bar = progress_bar(cx, r.volume).a11y_label("Progress");
+    let cols = [Column::new("Item", 120.0), Column::new("Count", 80.0)];
+    let grid = stipple::widgets::table(
+        cx,
+        &r.table,
+        |s| &mut s.ranges.as_mut().expect("ranges shown").table,
+        TableSpec::new(&cols, TABLE_ROWS)
+            .row_height(24.0)
+            .height(96.0),
+        |cx, row, column| {
+            let text = match column {
+                0 => format!("Item {row}"),
+                _ => format!("{}", row * 10),
+            };
+            label(cx, text)
+        },
+    )
+    .a11y_label("Items");
+    column(vec![row(vec![volume, level]).gap(12.0), bar, grid]).gap(8.0)
 }
 
 /// What the services' controls show.
@@ -265,6 +327,8 @@ static OFFSET: AtomicU64 = AtomicU64::new(0);
 static STRIP_OFFSET: AtomicU64 = AtomicU64::new(0);
 /// The keyboard inset in the frame last built (`f64` bits).
 static KEYBOARD: AtomicU64 = AtomicU64::new(0);
+/// The "Level" input's value last logged.
+static LEVEL: AtomicU64 = AtomicU64::new(0);
 /// Views built so far.
 static BUILDS: AtomicUsize = AtomicUsize::new(0);
 /// Whether the theme's look changed while the app ran.
@@ -391,7 +455,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
     if OFFSET.swap(offset.to_bits(), Ordering::Relaxed) != offset.to_bits() {
         log(&format!("touchdemo: scrolled to {offset:.0}"));
     }
-    let list_h = if state.services.is_some() {
+    let list_h = if state.services.is_some() || state.ranges.is_some() {
         LIST_H_SERVICES
     } else {
         LIST_H
@@ -460,6 +524,9 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
     let inset = |e: Element| column(vec![e]).padding(Insets::symmetric(PAD, 0.0));
     let mut parts = vec![inset(field)];
     parts.extend(services.map(inset));
+    if let Some(r) = &state.ranges {
+        parts.push(inset(ranges_view(r, cx)));
+    }
     // Long-pressed, these lift a text and a file out of the app (iOS's
     // UIDragInteraction, Android's system drag), into another app or onto
     // the pinch box.
@@ -484,6 +551,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
 
 fn main() {
     let services = std::env::var_os("TOUCHDEMO_SERVICES").is_some();
+    let ranges = std::env::var_os("TOUCHDEMO_RANGES").is_some();
     let state = State {
         zoom: 1.0,
         services: services.then(|| Services {
@@ -493,6 +561,11 @@ fn main() {
             opened: "Open: not yet".into(),
             ..Services::default()
         }),
+        ranges: ranges.then(|| Ranges {
+            volume: 0.5,
+            level: NumberInput::new(3.0).range(0.0, 10.0),
+            table: TableState::new(SelectionMode::Single),
+        }),
         ..State::default()
     };
     let app = App::new(state, view)
@@ -501,8 +574,15 @@ fn main() {
         // Follows the system's light and dark mode. Its field stays
         // Stipple's own (the OS draws only its frame): the self-tests drive
         // Stipple's text input, its input methods and edit menu, through the
-        // view (nativegallery's drives a real OS field).
-        .theme(Theme::native().native_text_editing(false))
+        // view (nativegallery's drives a real OS field). With the ranges
+        // shown, the light theme: its slider and table are Stipple's own
+        // (under the native theme a live OS slider would speak for itself),
+        // whose accessibility the checks read.
+        .theme(if ranges {
+            Theme::light()
+        } else {
+            Theme::native().native_text_editing(false)
+        })
         // URLs of the stipple-demo scheme that open the app (CI's iOS job
         // adds it to the bundle's CFBundleURLTypes and opens two).
         .on_open_url(|_, url| log(&format!("touchdemo: opened url {url:?}")))

@@ -9,6 +9,12 @@
 //! - A field's text range attributes count UTF-16 units, as `NSString` does.
 //! - A checkbox, switch or radio button's `AXValue` is 1 when checked, else 0
 //!   (a tab's: 1 when it's the selected one).
+//! - A slider's or a progress bar's `AXValue` is its number, with its
+//!   `AXMinValue`, `AXMaxValue` and `AXValueDescription` ("50%"); a
+//!   slider's can be set, and stepped with `AXIncrement` / `AXDecrement`.
+//! - A table has its `AXRowCount` and `AXColumnCount` (all its rows), a
+//!   row its `AXIndex`, a cell its `AXRowIndexRange` and
+//!   `AXColumnIndexRange`.
 //! - A plain group that scrolls is an `AXScrollArea`; it (and a list, tree
 //!   or table that scrolls) has a scroll bar along its trailing edge, whose
 //!   `AXValue` is how far it is scrolled, `0..=1`.
@@ -96,6 +102,62 @@ pub(crate) fn number_value(node: &A11yNode) -> Option<i64> {
     }
 }
 
+/// A slider's or a progress bar's `(value, min, max)` (a number input's
+/// value is its text, above).
+pub(crate) fn range_value(node: &A11yNode) -> Option<(f64, f64, f64)> {
+    let r = node
+        .range
+        .filter(|_| text_value(node).is_none() && !settable_text(node))?;
+    Some((r.value, r.min, r.max))
+}
+
+/// What VoiceOver reads for a range value (`AXValueDescription`).
+pub(crate) fn value_description(node: &A11yNode) -> Option<String> {
+    range_value(node)?;
+    node.range.map(|r| r.text())
+}
+
+/// Whether a client may set (and step) the node's range value: a slider's.
+pub(crate) fn range_settable(node: &A11yNode) -> bool {
+    range_value(node).is_some() && node.range_settable()
+}
+
+/// A table's `(rows, columns)`.
+pub(crate) fn table_size(node: &A11yNode) -> Option<(usize, usize)> {
+    node.table
+        .filter(|_| node.role == A11yRole::Table)
+        .map(|t| (t.rows, t.columns))
+}
+
+/// A row's `AXIndex`.
+pub(crate) fn row_index(node: &A11yNode) -> Option<usize> {
+    (node.role == A11yRole::Row).then_some(node.cell?.row)
+}
+
+/// A cell's (or column header's) `(row, column)`, each a range of one.
+pub(crate) fn cell_index(node: &A11yNode) -> Option<(usize, usize)> {
+    matches!(node.role, A11yRole::Cell | A11yRole::ColumnHeader)
+        .then_some(node.cell.map(|c| (c.row, c.column))?)
+}
+
+/// The paths (from a table) of its rows, in order.
+pub(crate) fn table_rows(table: &A11yNode) -> Vec<Vec<usize>> {
+    fn go(n: &A11yNode, path: &mut Vec<usize>, out: &mut Vec<Vec<usize>>) {
+        for (i, c) in n.children.iter().enumerate() {
+            path.push(i);
+            match c.role {
+                A11yRole::Row => out.push(path.clone()),
+                A11yRole::Table => {}
+                _ => go(c, path, out),
+            }
+            path.pop();
+        }
+    }
+    let mut out = Vec::new();
+    go(table, &mut Vec::new(), &mut out);
+    out
+}
+
 /// The node's subrole, where AppKit's own control would have one.
 pub(crate) fn subrole(node: &A11yNode) -> Option<&'static str> {
     match node.role {
@@ -178,6 +240,12 @@ pub(crate) fn plan(new: &A11yNode, changes: &[A11yChange]) -> Vec<Post> {
             A11yChange::Name(p) => out.push(post(p, "AXTitleChanged", false)),
             A11yChange::Value(p) | A11yChange::Checked(p) => {
                 out.push(post(p, "AXValueChanged", false));
+            }
+            // (A number input's value is its text: its Value change posts.)
+            A11yChange::Range(p) => {
+                if new.at_path(p).is_some_and(|n| range_value(n).is_some()) {
+                    out.push(post(p, "AXValueChanged", false));
+                }
             }
             A11yChange::TextSelection(p) => out.push(post(p, "AXSelectedTextChanged", false)),
             A11yChange::Selected(p) => {
@@ -363,6 +431,80 @@ mod tests {
                 (vec![2], "AXSelectedRowsChanged", false),
                 (vec![], "AXLayoutChanged", false),
             ]
+        );
+    }
+
+    #[test]
+    fn sliders_progress_bars_and_tables() {
+        use crate::platform::access::{A11yCell, A11yRange, A11yTable};
+        let range = |value| {
+            Some(A11yRange {
+                value,
+                min: 0.0,
+                max: 1.0,
+                step: 0.05,
+                rtl: false,
+            })
+        };
+        let slider = A11yNode {
+            range: range(0.5),
+            ..node(A11yRole::Slider, "Volume")
+        };
+        assert_eq!(range_value(&slider), Some((0.5, 0.0, 1.0)));
+        assert_eq!(value_description(&slider).as_deref(), Some("50%"));
+        assert!(range_settable(&slider));
+        let bar = A11yNode {
+            range: range(0.3),
+            ..node(A11yRole::ProgressBar, "")
+        };
+        assert!(range_value(&bar).is_some() && !range_settable(&bar));
+        // A number input's value is its text.
+        let spin = A11yNode {
+            caret: Some(1),
+            range: range(1.0),
+            ..node(A11yRole::SpinButton, "1")
+        };
+        assert_eq!(range_value(&spin), None);
+        let table = A11yNode {
+            table: Some(A11yTable {
+                rows: 5,
+                columns: 2,
+            }),
+            children: vec![A11yNode {
+                children: vec![A11yNode {
+                    cell: Some(A11yCell { row: 3, column: 0 }),
+                    children: vec![A11yNode {
+                        cell: Some(A11yCell { row: 3, column: 1 }),
+                        ..node(A11yRole::Cell, "b")
+                    }],
+                    ..node(A11yRole::Row, "")
+                }],
+                ..node(A11yRole::Group, "")
+            }],
+            ..node(A11yRole::Table, "")
+        };
+        assert_eq!(table_size(&table), Some((5, 2)));
+        assert_eq!(table_rows(&table), [vec![0, 0]]);
+        let row = &table.children[0].children[0];
+        assert_eq!(row_index(row), Some(3));
+        assert_eq!(cell_index(&row.children[0]), Some((3, 1)));
+        // A slider moved posts a value change; a number input's text does.
+        let window = |n: A11yNode| A11yNode {
+            children: vec![n],
+            ..node(A11yRole::Window, "")
+        };
+        let moved = A11yNode {
+            range: range(0.75),
+            ..slider.clone()
+        };
+        let (old, new) = (window(slider), window(moved));
+        assert_eq!(
+            plan(&new, &changes(&old, &new)),
+            [Post {
+                path: vec![0],
+                name: "AXValueChanged",
+                bar: false
+            }]
         );
     }
 }

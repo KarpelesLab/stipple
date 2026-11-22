@@ -84,21 +84,21 @@ fn base(name: &str) -> *const c_void {
 
 /// Set a property through `NSAccessibilityElement`'s setter (not ours,
 /// which would forward it to the app).
-unsafe fn store_id(el: Id, setter: &str, value: Id) {
+pub(super) unsafe fn store_id(el: Id, setter: &str, value: Id) {
     unsafe {
         let f: unsafe extern "C" fn(Id, Sel, Id) = std::mem::transmute(base(setter));
         f(el, sel(setter), value);
     }
 }
 
-unsafe fn store_i64(el: Id, setter: &str, value: i64) {
+pub(super) unsafe fn store_i64(el: Id, setter: &str, value: i64) {
     unsafe {
         let f: unsafe extern "C" fn(Id, Sel, i64) = std::mem::transmute(base(setter));
         f(el, sel(setter), value);
     }
 }
 
-unsafe fn store_range(el: Id, setter: &str, (location, length): (usize, usize)) {
+pub(super) unsafe fn store_range(el: Id, setter: &str, (location, length): (usize, usize)) {
     unsafe {
         let f: unsafe extern "C" fn(Id, Sel, NsRange) = std::mem::transmute(base(setter));
         let r = NsRange {
@@ -154,7 +154,10 @@ pub(super) unsafe fn add_common(cls: Class) {
 
 /// A run-time subclass of `NSAccessibilityElement` named `name`, with the
 /// common methods and `extra`.
-fn subclass(name: &std::ffi::CStr, extra: &[(&str, *const c_void, &std::ffi::CStr)]) -> Class {
+pub(super) fn subclass(
+    name: &std::ffi::CStr,
+    extra: &[(&str, *const c_void, &std::ffi::CStr)],
+) -> Class {
     unsafe {
         let existing = objc_getClass(name.as_ptr());
         if !existing.is_null() {
@@ -347,6 +350,14 @@ extern "C" fn set_value(this: Id, cmd: Sel, value: Id) {
                 }
                 node.set_text_events(&text)
             }
+            // A slider: pressed where the value lies.
+            Kind::Node if ax_plan::range_settable(node) && !value.is_null() => {
+                let v = unsafe { msg_f64(value, sel("doubleValue")) };
+                if debug() {
+                    println!("Cocoa a11y: AXValue set to {v}");
+                }
+                node.set_range_events(v)?
+            }
             Kind::Bar if !value.is_null() => {
                 let fraction = unsafe { msg_f64(value, sel("doubleValue")) };
                 if debug() {
@@ -405,7 +416,9 @@ extern "C" fn selector_allowed(this: Id, cmd: Sel, selector: Sel) -> bool {
             };
             match kind {
                 Kind::Bar => value,
-                Kind::Node if value => ax_plan::settable_text(node),
+                Kind::Node if value => {
+                    ax_plan::settable_text(node) || ax_plan::range_settable(node)
+                }
                 Kind::Node => ax_plan::text_value(node).is_some(),
             }
         })

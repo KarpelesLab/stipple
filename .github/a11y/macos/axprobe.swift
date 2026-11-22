@@ -6,6 +6,7 @@
 //   axprobe <pid> [button label to press]
 //   axprobe <pid> --depth
 //   axprobe <pid> --links
+//   axprobe <pid> --ranges
 //
 // It prints "axprobe: trusted=<bool>" (AXIsProcessTrusted: whether TCC lets
 // this process use the AX API), then every element under the app's windows
@@ -19,7 +20,11 @@
 // actions instead (see runDepth at the end), printing "axprobe: depth ..."
 // lines for the CI step to check. With --links it checks what elements say
 // of each other and a press out of view (see runLinks at the end), printing
-// "axprobe: links ..." lines.
+// "axprobe: links ..." lines. With --ranges (touchdemo with
+// TOUCHDEMO_RANGES) it reads and drives the "Volume" slider (AXValue,
+// AXMinValue, AXMaxValue, AXIncrement, setting AXValue), the progress bar
+// and the "Items" table (AXRowCount, AXColumnCount, AXRows, a cell's
+// AXRowIndexRange), printing "axprobe: ranges ..." lines.
 import ApplicationServices
 import Foundation
 
@@ -31,7 +36,9 @@ guard CommandLine.arguments.count >= 2, let pid = pid_t(CommandLine.arguments[1]
 }
 let depthMode = CommandLine.arguments.count >= 3 && CommandLine.arguments[2] == "--depth"
 let linksMode = CommandLine.arguments.count >= 3 && CommandLine.arguments[2] == "--links"
-let press = CommandLine.arguments.count >= 3 && !depthMode && !linksMode ? CommandLine.arguments[2] : nil
+let rangesMode = CommandLine.arguments.count >= 3 && CommandLine.arguments[2] == "--ranges"
+let press = CommandLine.arguments.count >= 3 && !depthMode && !linksMode && !rangesMode
+    ? CommandLine.arguments[2] : nil
 
 print("axprobe: trusted=\(AXIsProcessTrusted())")
 
@@ -126,6 +133,11 @@ if depthMode {
 }
 if linksMode {
     runLinks()
+    print("axprobe: done")
+    exit(0)
+}
+if rangesMode {
+    runRanges()
     print("axprobe: done")
     exit(0)
 }
@@ -368,5 +380,54 @@ func runLinks() {
         }
     } else {
         print("axprobe: links no button 'Row 20'")
+    }
+}
+
+// ---- --ranges -------------------------------------------------------------
+
+func runRanges() {
+    func numbers(_ e: AXUIElement) -> String {
+        return "value=\(string(e, kAXValueAttribute) ?? "none") "
+            + "min=\(string(e, kAXMinValueAttribute) ?? "none") "
+            + "max=\(string(e, kAXMaxValueAttribute) ?? "none") "
+            + "description=\"\(string(e, kAXValueDescriptionAttribute) ?? "")\""
+    }
+    if let slider = find("AXSlider", "Volume") {
+        print("axprobe: ranges slider \(numbers(slider)) settable=\(settable(slider, kAXValueAttribute)) "
+              + "actions=\(actions(slider))")
+        let err = AXUIElementPerformAction(slider, kAXIncrementAction as CFString)
+        print("axprobe: ranges increment -> AXError \(err.rawValue)")
+        settle()
+        if let slider = find("AXSlider", "Volume") {
+            print("axprobe: ranges slider after increment \(numbers(slider))")
+            let err = AXUIElementSetAttributeValue(
+                slider, kAXValueAttribute as CFString, NSNumber(value: 0.25) as CFNumber)
+            print("axprobe: ranges set slider -> AXError \(err.rawValue)")
+            settle()
+        }
+        if let slider = find("AXSlider", "Volume") {
+            print("axprobe: ranges slider after set \(numbers(slider))")
+        }
+    } else {
+        print("axprobe: ranges no AXSlider \"Volume\"")
+    }
+    if let bar = find("AXProgressIndicator") {
+        print("axprobe: ranges progress \(numbers(bar))")
+    } else {
+        print("axprobe: ranges no AXProgressIndicator")
+    }
+    if let table = find("AXTable", "Items") {
+        let (_, rows) = copy(table, kAXRowsAttribute)
+        let n = (rows as? [AXUIElement])?.count ?? -1
+        print("axprobe: ranges table rows=\(string(table, "AXRowCount") ?? "none") "
+              + "columns=\(string(table, "AXColumnCount") ?? "none") AXRows=\(n)")
+        if let cell = allElements().first(where: { $0.0 == "AXCell" && $0.1 == "Item 1" })?.2 {
+            print("axprobe: ranges cell \"Item 1\" row=\(range(cell, "AXRowIndexRange")) "
+                  + "column=\(range(cell, "AXColumnIndexRange"))")
+        } else {
+            print("axprobe: ranges no AXCell \"Item 1\"")
+        }
+    } else {
+        print("axprobe: ranges no AXTable \"Items\"")
     }
 }

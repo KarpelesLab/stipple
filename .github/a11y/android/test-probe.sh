@@ -93,4 +93,25 @@ else
   grep -qE 'probe scroll forward .* -> true' "$log" || fail "ACTION_SCROLL_FORWARD failed"
   wait_for applog "androiddemo: scrolled to [1-9][0-9]*" 10 > /dev/null || fail "the list didn't scroll"
 fi
+# The slider's range (RangeInfo, ACTION_SET_PROGRESS, a step): added later,
+# reported without failing the check until it has passed on the emulator.
+range_note() { echo "a11y probe: note: $*"; }
+if grep -qE 'probe range class=android.widget.SeekBar .*range=0.0..1.0@0.5' "$log"; then
+  echo "a11y probe: the SeekBar reads 0.5 of 0..1"
+else
+  range_note "no SeekBar with a RangeInfo of 0..1 at 0.5"
+fi
+if grep -q 'probe set progress -> true' "$log" \
+  && wait_for applog "androiddemo: volume 0.25" 10 > /dev/null; then
+  echo "a11y probe: ACTION_SET_PROGRESS set the slider to 0.25"
+else
+  range_note "ACTION_SET_PROGRESS didn't set the slider"
+fi
+if grep -q 'probe range step -> true' "$log" \
+  && wait_for applog "androiddemo: volume 0.30" 10 > /dev/null; then
+  echo "a11y probe: a scroll forward stepped the slider to 0.30"
+else
+  range_note "a scroll forward didn't step the slider"
+fi
+grep -E "probe (range|set progress)" "$log" | sed 's/.*a11yprobe: //' || true
 echo "a11y probe: all checks passed"

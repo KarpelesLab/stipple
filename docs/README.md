@@ -50,6 +50,7 @@ How to build, package and run on each platform, and what works there today.
 | System clipboard | ✅ ⁸ | ✅ ⁴ | ✅ ⁴ | ✅ ⁸¹ | ✅ ⁸² | ✅ ¹³ |
 | File dialogs | ✅ | ✅ ⁵ | ✅ ⁵ | ✅ ⁶² | ✅ ⁶² | ✅ ¹⁴ |
 | Accessibility | AT-SPI ⁶⁶ | UI Automation ⁶⁷ | NSAccessibility ⁶⁸ | UIAccessibility ⁴⁹ | node provider ⁵⁶ | ARIA ²² |
+| Screen readers: range values, tables, captions, text attributes | ✅ ¹⁰¹ | ✅ ¹⁰¹ | ✅ ¹⁰¹ | range values ¹⁰¹ | ✅ ¹⁰¹ | ✅ ¹⁰¹ |
 | Window size limits, maximize, fullscreen | ✅ ⁹ | ✅ ¹⁰ | ✅ ¹⁰ | — | fullscreen ¹⁰ | ❌ |
 | Window size limits from the content's layout | ✅ ⁹⁸ | ✅ ⁹⁸ | ✅ ⁹⁸ | — | — | — |
 | Windows reopen where they were left (`App::remember_window`) | X11, Wayland: size and state ¹⁰⁰ | ✅ ¹⁰⁰ | ✅ ¹⁰⁰ | — | — | — |
@@ -912,6 +913,29 @@ size and maximized state only (the compositor places windows). App-tested;
 CI moves, resizes and reopens the lifecycle example on X11 and Windows (and
 maximizes it on Windows), non-blocking; macOS is build-checked. See
 [window-lifecycle.md](window-lifecycle.md#remembering-where-the-window-was).
+
+¹⁰¹ The accessibility tree carries a slider's, progress bar's and number
+input's value along its range (`AccessNode::range`, `Element::a11y_range`), a
+table's size with all its rows (`AccessNode::table`, `Element::a11y_table`, a
+virtualized table's rows numbered by `Element::a11y_row`) and each row's and
+cell's place in it (`AccessNode::cell`), and how text is drawn
+(`AccessNode::font`). Linux: AT-SPI `Value` (settable on a slider and a spin
+button), `Table` and `TableCell`, a value-change event. Windows: UIA's
+RangeValue, Grid, GridItem, Table and TableItem patterns, `LabeledBy`, text
+attributes (font name, size, weight, italic, read-only) with `FindAttribute`,
+and the text-changed and text-selection-changed events. macOS: `AXValue` with
+`AXMinValue` / `AXMaxValue`, a slider's `AXIncrement` / `AXDecrement` and
+settable value, `AXRowCount`, `AXColumnCount`, `AXRows`, a cell's index
+ranges. iOS: a slider is adjustable (VoiceOver's swipe up and down) with its
+value as words; no table or caption relation. Android: `RangeInfo`,
+`ACTION_SET_PROGRESS` and scroll forward / backward on a slider,
+`CollectionInfo` / `CollectionItemInfo`, `setLabeledBy`. Web: `aria-valuenow`
+/ `min` / `max` / `valuetext`, `aria-rowcount`, `aria-rowindex`,
+`aria-labelledby` (read-only). A screen reader sets a slider by pressing it at
+the value's place (`platform::access`), a spin button by typing the number.
+App tests set them through those events; from outside, the AT-SPI walk and
+the UIA checks and the Android probe pass in CI (non-blocking); the AX
+check hasn't run yet (macOS and iOS are build-checked). See [accessibility.md](accessibility.md#range-values-tables-and-captions).
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled;

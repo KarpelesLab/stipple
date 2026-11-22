@@ -105,6 +105,11 @@ impl Body {
             Value::U32(v) => self.sig("u").u32(*v),
             Value::F64(v) => self.sig("d").f64(*v),
             Value::Obj(bus, path) => self.sig("(so)").obj(bus, path),
+            Value::Pair(a, b) => {
+                self.sig("(ii)");
+                align(&mut self.0, 8);
+                self.i32(*a).i32(*b)
+            }
         }
     }
 }
@@ -118,6 +123,8 @@ pub(super) enum Value {
     F64(f64),
     /// An object reference: a bus name and a path.
     Obj(String, String),
+    /// Two numbers, `(ii)` (a table cell's row and column).
+    Pair(i32, i32),
 }
 
 /// Reads a method call's arguments in order.

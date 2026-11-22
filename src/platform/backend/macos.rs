@@ -44,6 +44,8 @@ mod ax_links;
 mod ax_plan;
 /// `AXPress` on the elements of the controls a click activates.
 mod ax_press;
+/// Range values (sliders, progress bars) and tables.
+mod ax_range;
 /// Values, text ranges, scroll areas and change notifications.
 mod ax_value;
 /// Pacing animation frames by the display (`CVDisplayLink`).
@@ -716,6 +718,7 @@ fn ax_role(role: crate::platform::access::A11yRole) -> &'static str {
         RadioButton => "AXRadioButton",
         SpinButton => "AXTextField",
         Slider => "AXSlider",
+        ProgressBar => "AXProgressIndicator",
         // Not named to NSAccessibility yet: the closest role above.
         Splitter | Toolbar | Separator | Alert => "AXGroup",
         TabList => "AXTabGroup",
@@ -780,12 +783,15 @@ unsafe fn build_ax_element(
     // A control a click activates answers `AXPress` (VoiceOver's VO-Space).
     let cls = if ax_press::pressable(node.role) {
         ax_press::press_class()
+    } else if ax_plan::range_settable(node) {
+        ax_range::range_class()
     } else {
         ax_value::element_class()
     };
     let el = unsafe { ax_value::new_element(cls, role, frame, label, parent) };
     unsafe { ax_focus::mark(el, node) };
     unsafe { ax_value::decorate(el, node, path, root) };
+    unsafe { ax_range::decorate(el, node) };
     // A field's placeholder is its `AXPlaceholderValue`, which VoiceOver
     // reads after an empty field's role, as it does an `NSTextField`'s.
     if let Some(hint) = node.hint()
@@ -832,6 +838,7 @@ unsafe fn build_ax_element(
             unsafe { msg_void_id(arr, sel("addObject:"), bar) };
         }
         unsafe { msg_void_id(el, sel("setAccessibilityChildren:"), arr) };
+        unsafe { ax_range::link_table(el, node) };
     }
     el
 }

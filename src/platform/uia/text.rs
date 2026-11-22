@@ -350,11 +350,29 @@ unsafe extern "system" fn expand_to_enclosing_unit(this: *mut c_void, unit: i32)
     S_OK
 }
 
-/// `FindAttribute`: the text has no attributes to find.
+/// The attribute `attr` over the range's text (one run: all of a node's
+/// text is drawn alike), when the tree knows it.
+unsafe fn attribute(r: &Range, attr: i32) -> Option<logic::Val> {
+    unsafe { node_of(r.provider).and_then(|n| logic::text_attribute(n, attr)) }
+}
+
+/// Whether the VARIANT `v` holds `want`.
+fn variant_is(v: &Variant, want: &logic::Val) -> bool {
+    use logic::Val;
+    match want {
+        Val::Bool(b) => v.vt == VT_BOOL && (v.val as u16 != 0) == *b,
+        Val::I4(n) => v.vt == VT_I4 && v.val as u32 as i32 == *n,
+        Val::R8(x) => v.vt == VT_R8 && f64::from_bits(v.val) == *x,
+        Val::Str(s) => v.vt == VT_BSTR && unsafe { bstr_to_string(v.val as *const u16) } == *s,
+    }
+}
+
+/// `FindAttribute`: the text is one run, so the range itself when its
+/// attribute is `value` (and it isn't empty), else nothing.
 unsafe extern "system" fn find_attribute(
-    _this: *mut c_void,
-    _attr: i32,
-    _value: Variant,
+    this: *mut c_void,
+    attr: i32,
+    value: Variant,
     _backward: i32,
     ret: *mut *mut c_void,
 ) -> Hresult {
@@ -363,6 +381,13 @@ unsafe extern "system" fn find_attribute(
             return E_POINTER;
         }
         *ret = core::ptr::null_mut();
+        let Some(r) = range(this) else {
+            return E_INVALIDARG;
+        };
+        let (_, (s, e)) = span(r);
+        if e > s && attribute(r, attr).is_some_and(|a| variant_is(&value, &a)) {
+            *ret = new_range(r.provider, s, e);
+        }
     }
     S_OK
 }
@@ -391,16 +416,21 @@ unsafe extern "system" fn find_text(
     S_OK
 }
 
-/// `GetAttributeValue`: no attribute is supported (UIA's reserved "not
-/// supported" value).
+/// `GetAttributeValue`: the node's font name, size (points), weight,
+/// italic and read-only state (see `uia_logic::text_attribute`); UIA's
+/// reserved "not supported" value for the others.
 unsafe extern "system" fn get_attribute_value(
-    _this: *mut c_void,
-    _attr: i32,
+    this: *mut c_void,
+    attr: i32,
     ret: *mut Variant,
 ) -> Hresult {
     unsafe {
         if ret.is_null() {
             return E_POINTER;
+        }
+        if let Some(a) = range(this).and_then(|r| attribute(r, attr)) {
+            *ret = super::events::variant(&a);
+            return S_OK;
         }
         let mut v = Variant::empty();
         let mut unk: *mut c_void = core::ptr::null_mut();
@@ -714,6 +744,49 @@ pub(super) unsafe fn selftest_text(field: *mut c_void) -> Result<(), String> {
         check(
             r == Some((3, 3)),
             &format!("GetSelection is the caret: {r:?}"),
+        )?;
+        // Its text attributes: the field's font (Segoe UI, 16 px: 12 pt).
+        let mut v = Variant::empty();
+        (rvt.get_attribute_value)(doc, logic::FONT_NAME, &mut v);
+        let name = (v.vt == VT_BSTR).then(|| bstr_to_string(v.val as *const u16));
+        super::events::free(&v);
+        let mut size = Variant::empty();
+        (rvt.get_attribute_value)(doc, logic::FONT_SIZE, &mut size);
+        let mut weight = Variant::empty();
+        (rvt.get_attribute_value)(doc, logic::FONT_WEIGHT, &mut weight);
+        check(
+            name.as_deref() == Some("Segoe UI")
+                && size.vt == VT_R8
+                && f64::from_bits(size.val) == 12.0
+                && weight.vt == VT_I4
+                && weight.val as u32 == 400,
+            &format!(
+                "text attributes: FontName {name:?}, FontSize {}, FontWeight {}",
+                f64::from_bits(size.val),
+                weight.val as u32
+            ),
+        )?;
+        let mut other = Variant::empty();
+        (rvt.get_attribute_value)(doc, 40008, &mut other);
+        check(
+            other.vt == VT_UNKNOWN,
+            "an attribute the tree doesn't know is not supported",
+        )?;
+        let mut found: *mut c_void = core::ptr::null_mut();
+        (rvt.find_attribute)(doc, logic::FONT_WEIGHT, weight, 0, &mut found);
+        check(
+            !found.is_null() && text_through(found) == "hello world",
+            "FindAttribute(FontWeight 400) finds the text",
+        )?;
+        range_release(found);
+        let mut bold = Variant::empty();
+        bold.vt = VT_I4;
+        bold.val = 700;
+        let mut none: *mut c_void = core::ptr::null_mut();
+        (rvt.find_attribute)(doc, logic::FONT_WEIGHT, bold, 0, &mut none);
+        check(
+            none.is_null(),
+            "FindAttribute(FontWeight 700) finds nothing",
         )?;
         range_release(word);
         range_release(doc);

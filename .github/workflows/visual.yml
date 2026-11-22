@@ -3368,6 +3368,20 @@ jobs:
           .\target\release\examples\uiademo.exe --relations
           if ($LASTEXITCODE -ne 0) { throw "uiademo --relations failed" }
 
+      # Range values, a table, a caption and text attributes from outside the
+      # app (.github/scripts/uia-ranges.ps1, touchdemo with TOUCHDEMO_RANGES):
+      # the slider's RangeValue (set, with its property-changed event), the
+      # progress bar's (read-only), the spin button's and its LabeledBy, the
+      # table's Grid and Table patterns and a cell's GridItem and TableItem,
+      # a label's FontName / FontSize / FontWeight, and the field's
+      # TextChanged and TextSelectionChanged events. New, so it doesn't fail
+      # the job yet.
+      - name: UI Automation range values, tables and text attributes (non-blocking)
+        continue-on-error: true
+        shell: powershell
+        run: |
+          .github\scripts\uia-ranges.ps1 .\target\release\examples\touchdemo.exe visual_output
+
       - name: Timers and background work wake the event loop
         shell: bash
         run: |
@@ -4863,6 +4877,43 @@ jobs:
           grep -q 'axprobe: links AXPress "Row 20" -> AXError 0$' $L
           grep -q '^touchdemo: row 20 tapped' $A
 
+      # Range values and a table from outside the app (axprobe --ranges, on
+      # touchdemo with TOUCHDEMO_RANGES): the "Volume" slider's AXValue,
+      # AXMinValue and AXMaxValue, AXIncrement and setting its AXValue (the
+      # app logs the new volume), the progress bar's value, and the "Items"
+      # table's AXRowCount, AXColumnCount and AXRows and a cell's
+      # AXRowIndexRange. New and not yet seen on a runner: it doesn't fail
+      # the job.
+      - name: Range values and a table from outside the app (AX API, non-blocking)
+        continue-on-error: true
+        run: |
+          TOUCHDEMO_RANGES=1 ./target/release/examples/touchdemo > visual_output/touchdemo-ranges.log 2>&1 &
+          PID=$!
+          sleep 5
+          status=0
+          perl -e 'alarm 90; exec @ARGV' ./axprobe "$PID" --ranges > visual_output/axprobe-ranges.log 2>&1 || status=$?
+          kill "$PID" 2>/dev/null || true
+          L=visual_output/axprobe-ranges.log
+          A=visual_output/touchdemo-ranges.log
+          cat $L
+          echo "=== touchdemo log ==="; cat $A
+          if [ "$status" = 3 ]; then
+            echo "::warning::macOS AX API refused to this process; the range checks didn't run"
+            exit 0
+          fi
+          [ "$status" = 0 ]
+          fail=0
+          check() { grep -qE "$1" "$2" || { echo "::warning::missing: $1"; fail=1; }; }
+          check 'axprobe: ranges slider value=0.5 min=0 max=1 .*settable=true .*AXIncrement' $L
+          check 'axprobe: ranges increment -> AXError 0$' $L
+          check '^touchdemo: volume 0.55' $A
+          check 'axprobe: ranges set slider -> AXError 0$' $L
+          check '^touchdemo: volume 0.25' $A
+          check 'axprobe: ranges progress value=0.' $L
+          check 'axprobe: ranges table rows=21 columns=2 AXRows=[1-9]' $L
+          check 'axprobe: ranges cell "Item 1" row=2,1 column=0,1' $L
+          exit $fail
+
       # The reference app's tree as VoiceOver reads it (axprobe, built and
       # trusted by the steps above): the folder outline, the table, the
       # player's Play button (pressed through AXPress) and its slider.
@@ -5069,6 +5120,20 @@ jobs:
           mkdir -p visual_output/depth
           DISPLAY=:99 ATSPI_WALK_DEPTH=1 dbus-run-session -- \
             bash .github/scripts/atspi-linux.sh target/release/examples/touchdemo visual_output/depth xdotool key Tab
+
+      # Range values, a table and a caption through AT-SPI (the walk with
+      # ATSPI_WALK_RANGES=1, on touchdemo with TOUCHDEMO_RANGES): the
+      # "Volume" slider's Value (range, step; set to 0.25, the app's slider
+      # moves, with an accessible-value event), the progress bar's, the
+      # "Level" spin button's (set to 7) and its labelled-by caption, and the
+      # "Items" table's Table and TableCell interfaces. Passes locally
+      # (at-spi2-core 2.58); not yet seen on the runner, so it doesn't fail
+      # the job.
+      - name: Range values and a table through AT-SPI (X11, non-blocking)
+        continue-on-error: true
+        run: |
+          mkdir -p visual_output/ranges
+          DISPLAY=:99 TOUCHDEMO_RANGES=1 ATSPI_WALK_RANGES=1 dbus-run-session --             bash .github/scripts/atspi-linux.sh target/release/examples/touchdemo visual_output/ranges xdotool key Tab
 
       # The reference app (examples/mediabrowser) through AT-SPI: its folder
       # tree, file table (headers, rows, cells), the player's Play button and

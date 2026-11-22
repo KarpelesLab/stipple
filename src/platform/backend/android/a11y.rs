@@ -6,6 +6,13 @@
 //! forward and backward scroll it (any scroll container, plain or a list,
 //! a page at a time, offered only where it can go), and set text replaces a
 //! field's text. A scroll container that scrolled sends `TYPE_VIEW_SCROLLED`.
+//! A slider, progress bar or number input has its `RangeInfo` (a slider's
+//! and a number input's set with `ACTION_SET_PROGRESS`, or stepped with
+//! scroll forward and backward, as a `SeekBar` is), and a moved one sends
+//! `TYPE_VIEW_SELECTED`, as a `SeekBar` does; a table has its
+//! `CollectionInfo` (all its rows and columns) and its cells and column
+//! headers their `CollectionItemInfo`; a control a caption labels names it
+//! with `setLabeledBy`.
 //! Hover events from touch exploration (TalkBack's explore by touch) reach
 //! the host view, which says which node is under the finger.
 //!
@@ -22,7 +29,7 @@ use super::classes;
 use super::jni::{self, Env, JObject, JValue, Jni};
 use super::{ARect, Command, post_command};
 use crate::geometry::Point;
-use crate::platform::access::{A11yNode, A11yRole, A11yScroll};
+use crate::platform::access::{A11yCell, A11yNode, A11yRange, A11yRole, A11yScroll, A11yTable};
 use crate::platform::event::{ButtonState, Event, KeyCode, Modifiers, PointerButton, ScrollDelta};
 
 /// `AccessibilityNodeProvider.HOST_VIEW_ID`.
@@ -38,9 +45,13 @@ const ACTION_CLEAR_ACCESSIBILITY_FOCUS: i32 = 0x80;
 const ACTION_SCROLL_FORWARD: i32 = 0x1000;
 const ACTION_SCROLL_BACKWARD: i32 = 0x2000;
 const ACTION_SET_TEXT: i32 = 0x20_0000;
+/// `android.R.id.accessibilityActionSetProgress` (API 24).
+const ACTION_SET_PROGRESS: i32 = 0x0102_003d;
+const SET_PROGRESS_SDK: i32 = 24;
 
 // AccessibilityEvent types.
 const TYPE_VIEW_CLICKED: i32 = 0x1;
+const TYPE_VIEW_SELECTED: i32 = 0x4;
 const TYPE_VIEW_FOCUSED: i32 = 0x8;
 const TYPE_VIEW_HOVER_ENTER: i32 = 0x80;
 const TYPE_VIEW_HOVER_EXIT: i32 = 0x100;
@@ -87,6 +98,32 @@ struct Node {
     /// Whether a scroll container that scrolls holds it (it can be scrolled
     /// on screen: `ACTION_SHOW_ON_SCREEN`).
     in_scroller: bool,
+    /// Logical bounds, where a slider is pressed to set it.
+    logical: (f64, f64, f64, f64),
+    /// For a slider, a progress bar or a number input, its value.
+    range: Option<A11yRange>,
+    /// For a table, its size; for its cells, where they are.
+    table: Option<A11yTable>,
+    cell: Option<A11yCell>,
+    /// The node that labels this one (its caption), or `HOST_VIEW_ID`.
+    label: i32,
+}
+
+impl Node {
+    /// The node as the shared actions take it (see `platform::access`).
+    fn a11y(&self) -> A11yNode {
+        A11yNode {
+            focused: self.focused,
+            range: self.range,
+            ..A11yNode::new(self.role, self.name.clone(), self.logical)
+        }
+    }
+
+    /// Whether a screen reader may set its range value: a slider's or a
+    /// number input's.
+    fn adjustable(&self) -> bool {
+        self.a11y().range_settable()
+    }
 }
 
 /// The tree the provider serves. `nodes[0]` is the root (the host view).
@@ -123,6 +160,8 @@ pub(super) struct Changes {
     pub(super) alert: Option<i32>,
     /// This scroll container scrolled (the first one, if several did).
     pub(super) scrolled: Option<i32>,
+    /// This slider's (progress bar's, number input's) value moved.
+    pub(super) moved: Option<i32>,
 }
 
 impl Changes {
@@ -131,6 +170,7 @@ impl Changes {
         self.focused = other.focused.or(self.focused);
         self.alert = other.alert.or(self.alert);
         self.scrolled = other.scrolled.or(self.scrolled);
+        self.moved = other.moved.or(self.moved);
     }
 }
 
@@ -202,6 +242,11 @@ pub(super) fn update(root: &A11yNode, content: ARect, scale: f64) -> Changes {
             bar: n.scroll_bar,
             path: at.path.clone(),
             in_scroller: at.in_scroller,
+            logical: n.bounds,
+            range: n.range,
+            table: n.table,
+            cell: n.cell,
+            label: HOST_VIEW_ID,
         });
         let was = at.in_scroller;
         at.in_scroller |= n.scroll.is_some_and(|s| s.scrolls());
@@ -223,6 +268,23 @@ pub(super) fn update(root: &A11yNode, content: ARect, scale: f64) -> Changes {
         in_scroller: false,
     };
     walk(root, 0, &mut at, &mut nodes);
+    // Each control's caption (labelled-by, from the shared relations), by
+    // its virtual view id.
+    for i in 1..nodes.len() {
+        if root
+            .at_path(&nodes[i].path)
+            .is_none_or(|n| n.labelled_by.is_none())
+        {
+            continue;
+        }
+        let rel = root.relations(&nodes[i].path);
+        if let Some(caption) = rel.labelled_by.first()
+            && let Some(j) = nodes.iter().position(|n| n.path == *caption)
+            && j > 0
+        {
+            nodes[i].label = j as i32;
+        }
+    }
     let mut t = tree();
     if t.nodes == nodes {
         return Changes::default();
@@ -239,6 +301,7 @@ pub(super) fn update(root: &A11yNode, content: ARect, scale: f64) -> Changes {
     let now = focus_of(&nodes);
     let alert = new_alert(&t.nodes, &nodes);
     let scrolled = scrolled(&t.nodes, &nodes);
+    let moved = moved(&t.nodes, &nodes);
     t.nodes = nodes;
     if t.a11y_focus as usize >= t.nodes.len() {
         t.a11y_focus = HOST_VIEW_ID;
@@ -248,7 +311,20 @@ pub(super) fn update(root: &A11yNode, content: ARect, scale: f64) -> Changes {
         focused: now.filter(|_| now != was),
         alert,
         scrolled,
+        moved,
     }
+}
+
+/// The first node in `new` whose range value moved since `old` (the same
+/// node: the same place in tree order and role).
+fn moved(old: &[Node], new: &[Node]) -> Option<i32> {
+    new.iter()
+        .zip(old)
+        .position(|(n, o)| match (n.range, o.range) {
+            (Some(a), Some(b)) => n.role == o.role && a.value != b.value,
+            _ => false,
+        })
+        .map(|i| i as i32)
 }
 
 /// The first scroll container in `new` whose offset moved since `old` (the
@@ -285,6 +361,9 @@ pub(super) fn announce(jni: &Jni, changes: Changes) {
     if let Some(id) = changes.scrolled.filter(|&id| id > 0) {
         send_event(jni, id, TYPE_VIEW_SCROLLED);
     }
+    if let Some(id) = changes.moved.filter(|&id| id > 0) {
+        send_event(jni, id, TYPE_VIEW_SELECTED);
+    }
     // (Still an alert: the tree may have changed again since.)
     if let Some(id) = changes.alert.filter(|&id| {
         let t = tree();
@@ -312,6 +391,7 @@ fn class_name(role: A11yRole) -> &'static str {
         A11yRole::RadioButton => "android.widget.RadioButton",
         A11yRole::Switch => "android.widget.Switch",
         A11yRole::Slider => "android.widget.SeekBar",
+        A11yRole::ProgressBar => "android.widget.ProgressBar",
         A11yRole::List | A11yRole::Tree | A11yRole::Table => "android.widget.ListView",
         A11yRole::ComboBox => "android.widget.Spinner",
         A11yRole::TabList => "android.widget.TabWidget",
@@ -587,6 +667,17 @@ fn node_info(jni: &Jni, id: i32) -> Option<JObject> {
             &[JValue { l: range }],
         );
     }
+    // What it says of its range, table and caption leaves the rest of the
+    // node as it is when a call fails.
+    let _ = collection_info(jni, info, &node);
+    if node.label > 0 {
+        let _ = jni.call_void(
+            info,
+            c"setLabeledBy",
+            c"(Landroid/view/View;I)V",
+            &[JValue { l: view }, JValue { i: node.label }],
+        );
+    }
     let mut actions = vec![if a11y_focused {
         ACTION_CLEAR_ACCESSIBILITY_FOCUS
     } else {
@@ -613,6 +704,16 @@ fn node_info(jni: &Jni, id: i32) -> Option<JObject> {
     if editable(role) {
         actions.push(ACTION_SET_TEXT);
     }
+    // A slider steps with scroll forward and backward, as a `SeekBar`.
+    if node.adjustable() && !scrollable(&node) {
+        let a = node.a11y();
+        if a.step_range_events(true).is_some() {
+            actions.push(ACTION_SCROLL_FORWARD);
+        }
+        if a.step_range_events(false).is_some() {
+            actions.push(ACTION_SCROLL_BACKWARD);
+        }
+    }
     for a in actions {
         jni.call_void(info, c"addAction", c"(I)V", &[JValue { i: a }])?;
     }
@@ -637,7 +738,122 @@ fn node_info(jni: &Jni, id: i32) -> Option<JObject> {
             &[JValue { l: action }],
         );
     }
+    if node.adjustable() && sdk_int(jni) >= SET_PROGRESS_SDK {
+        let _ = add_standard_action(jni, info, ACTION_SET_PROGRESS);
+    }
     Some(info)
+}
+
+/// Add the standard action `id` (one of `android.R.id.accessibilityAction…`)
+/// as an `AccessibilityAction` object, the only way to add one past the
+/// old bit mask.
+fn add_standard_action(jni: &Jni, info: JObject, id: i32) -> Option<()> {
+    let action = jni.new_named(
+        c"android/view/accessibility/AccessibilityNodeInfo$AccessibilityAction",
+        c"(ILjava/lang/CharSequence;)V",
+        &[
+            JValue { i: id },
+            JValue {
+                l: std::ptr::null_mut(),
+            },
+        ],
+    )?;
+    jni.call_void(
+        info,
+        c"addAction",
+        c"(Landroid/view/accessibility/AccessibilityNodeInfo$AccessibilityAction;)V",
+        &[JValue { l: action }],
+    )
+}
+
+/// The node's `RangeInfo`, `CollectionInfo` or `CollectionItemInfo`, where
+/// it has one.
+fn collection_info(jni: &Jni, info: JObject, node: &Node) -> Option<()> {
+    if let Some(r) = node.range {
+        // As floats (an unbounded number input's ends clamped to them).
+        let f = |v: f64| JValue {
+            f: v.clamp(f32::MIN as f64, f32::MAX as f64) as f32,
+        };
+        let range = jni.call_static_object(
+            c"android/view/accessibility/AccessibilityNodeInfo$RangeInfo",
+            c"obtain",
+            c"(IFFF)Landroid/view/accessibility/AccessibilityNodeInfo$RangeInfo;",
+            &[
+                JValue {
+                    i: RANGE_TYPE_FLOAT,
+                },
+                f(r.min),
+                f(r.max),
+                f(r.value),
+            ],
+        )?;
+        jni.call_void(
+            info,
+            c"setRangeInfo",
+            c"(Landroid/view/accessibility/AccessibilityNodeInfo$RangeInfo;)V",
+            &[JValue { l: range }],
+        )?;
+    }
+    if let Some(t) = node.table {
+        let collection = jni.call_static_object(
+            c"android/view/accessibility/AccessibilityNodeInfo$CollectionInfo",
+            c"obtain",
+            c"(IIZ)Landroid/view/accessibility/AccessibilityNodeInfo$CollectionInfo;",
+            &[
+                JValue { i: t.rows as i32 },
+                JValue {
+                    i: t.columns as i32,
+                },
+                JValue { z: 0 },
+            ],
+        )?;
+        jni.call_void(
+            info,
+            c"setCollectionInfo",
+            c"(Landroid/view/accessibility/AccessibilityNodeInfo$CollectionInfo;)V",
+            &[JValue { l: collection }],
+        )?;
+    }
+    if let Some(c) = node.cell
+        && matches!(node.role, A11yRole::Cell | A11yRole::ColumnHeader)
+    {
+        let item = jni.call_static_object(
+            c"android/view/accessibility/AccessibilityNodeInfo$CollectionItemInfo",
+            c"obtain",
+            c"(IIIIZ)Landroid/view/accessibility/AccessibilityNodeInfo$CollectionItemInfo;",
+            &[
+                JValue { i: c.row as i32 },
+                JValue { i: 1 },
+                JValue { i: c.column as i32 },
+                JValue { i: 1 },
+                JValue {
+                    z: u8::from(node.role == A11yRole::ColumnHeader),
+                },
+            ],
+        )?;
+        jni.call_void(
+            info,
+            c"setCollectionItemInfo",
+            c"(Landroid/view/accessibility/AccessibilityNodeInfo$CollectionItemInfo;)V",
+            &[JValue { l: item }],
+        )?;
+    }
+    Some(())
+}
+
+/// The value `ACTION_SET_PROGRESS`'s arguments ask for.
+fn progress_value(jni: &Jni, args: JObject) -> Option<f64> {
+    if args.is_null() {
+        return None;
+    }
+    let key = jni.string("android.view.accessibility.action.ARGUMENT_PROGRESS_VALUE")?;
+    jni.call_float(
+        args,
+        c"getFloat",
+        c"(Ljava/lang/String;)F",
+        &[JValue { l: key }],
+    )
+    .map(f64::from)
 }
 
 /// Send accessibility event `kind` for virtual view `id`, through the host
@@ -780,6 +996,34 @@ fn act(jni: &Jni, id: i32, action: i32, args: JObject) -> bool {
             tap_node(&node);
             if action == ACTION_CLICK {
                 send_event(jni, id, TYPE_VIEW_CLICKED);
+            }
+            true
+        }
+        // A slider (a number input) steps.
+        ACTION_SCROLL_FORWARD | ACTION_SCROLL_BACKWARD
+            if node.adjustable() && !scrollable(&node) =>
+        {
+            match node
+                .a11y()
+                .step_range_events(action == ACTION_SCROLL_FORWARD)
+            {
+                Some(events) => {
+                    for e in events {
+                        post_command(Command::Deliver(e));
+                    }
+                    true
+                }
+                None => false,
+            }
+        }
+        ACTION_SET_PROGRESS if node.adjustable() => {
+            let Some(events) =
+                progress_value(jni, args).and_then(|v| node.a11y().set_range_events(v))
+            else {
+                return false;
+            };
+            for e in events {
+                post_command(Command::Deliver(e));
             }
             true
         }

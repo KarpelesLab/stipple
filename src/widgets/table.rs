@@ -405,7 +405,9 @@ pub fn table<S: 'static>(
             el = el.border(p.focus_ring, 1.0);
         }
         let w = window.clone();
-        built.push(el.role(Role::Row).selected(selected).on_tap(cx, move |s| {
+        // Row 0 is the header row.
+        let el = el.role(Role::Row).a11y_row(index + 1);
+        built.push(el.selected(selected).on_tap(cx, move |s| {
             field(s).rows.click(index, pointer().modifiers);
             w.reveal(index);
         }));
@@ -413,8 +415,10 @@ pub fn table<S: 'static>(
     let count = spec.rows;
     let body = window.assemble(built);
     let on_key = spec.on_key.clone();
+    let columns = spec.columns.len();
     frame(theme, vec![header, rule, body])
         .role(Role::Table)
+        .a11y_table(crate::core::AccessTable::new(count + 1, columns))
         .on_key(cx, move |s, key| {
             let before = field(s).rows.cursor();
             let used = field(s).rows.handle_key(key, count);

@@ -32,7 +32,9 @@
 use std::cell::RefCell;
 use std::ffi::c_void;
 
-use super::a11y_tree::{self, BUTTON, Change, HEADER, Item, SELECTED, STATIC_TEXT, TEXT_ENTRY};
+use super::a11y_tree::{
+    self, ADJUSTABLE, BUTTON, Change, HEADER, Item, SELECTED, STATIC_TEXT, TEXT_ENTRY,
+};
 use super::{
     CgPoint, CgRect, CgSize, Class, Id, ObjcSuper, Sel, class, class_addMethod, msg_id,
     msg_id_usize, msg_usize, msg_void, msg_void_bool, msg_void_id, nsstring,
@@ -49,6 +51,7 @@ unsafe extern "C" {
     static UIAccessibilityTraitStaticText: u64;
     static UIAccessibilityTraitHeader: u64;
     static UIAccessibilityTraitSelected: u64;
+    static UIAccessibilityTraitAdjustable: u64;
     static UIAccessibilityLayoutChangedNotification: u32;
     static UIAccessibilityScreenChangedNotification: u32;
     static UIAccessibilityAnnouncementNotification: u32;
@@ -90,6 +93,7 @@ fn uikit_traits(bits: u8) -> u64 {
             (STATIC_TEXT, UIAccessibilityTraitStaticText),
             (HEADER, UIAccessibilityTraitHeader),
             (SELECTED, UIAccessibilityTraitSelected),
+            (ADJUSTABLE, UIAccessibilityTraitAdjustable),
         ] {
             if bits & bit != 0 {
                 traits |= value;
@@ -129,6 +133,18 @@ fn element_class() -> Class {
             sel("accessibilityScroll:"),
             scroll as *const c_void,
             c"B@:q".as_ptr(),
+        );
+        class_addMethod(
+            cls,
+            sel("accessibilityIncrement"),
+            increment as *const c_void,
+            c"v@:".as_ptr(),
+        );
+        class_addMethod(
+            cls,
+            sel("accessibilityDecrement"),
+            decrement as *const c_void,
+            c"v@:".as_ptr(),
         );
         objc_registerClassPair(cls);
         cls
@@ -222,6 +238,32 @@ extern "C" fn scroll(this: Id, _cmd: Sel, direction: i64) -> bool {
         UIAccessibilityPostNotification(UIAccessibilityPageScrolledNotification, nsstring(&status));
     }
     true
+}
+
+/// `accessibilityIncrement` / `…Decrement` (VoiceOver's swipe up and down
+/// on a slider): step it, after this call returns.
+fn adjust(this: Id, up: bool) {
+    let events = STATE.with(|s| {
+        let s = s.try_borrow().ok()?;
+        let i = s.elements.iter().position(|(e, _)| *e == this)?;
+        s.items.get(i)?.adjust.as_ref()?.step_range_events(up)
+    });
+    let Some(events) = events else {
+        return;
+    };
+    super::later(move || {
+        for event in events {
+            super::call_handler(event, &super::current_window());
+        }
+    });
+}
+
+extern "C" fn increment(this: Id, _cmd: Sel) {
+    adjust(this, true);
+}
+
+extern "C" fn decrement(this: Id, _cmd: Sel) {
+    adjust(this, false);
 }
 
 /// Bring the elements up to date with the items: make the missing ones,

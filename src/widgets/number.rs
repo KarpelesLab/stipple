@@ -266,6 +266,9 @@ pub fn number_input<S>(
     let edit = edit.native_text_state(theme, &state.buffer, false, !state.is_valid(), false);
     let edit = edit
         .role(Role::SpinButton)
+        .a11y_range(
+            crate::core::AccessRange::new(state.value, state.min, state.max).step(state.step),
+        )
         .on_key(cx, move |s, k| {
             field(s).apply(k);
         })

@@ -21,6 +21,9 @@ const TEXT: &str = "org.a11y.atspi.Text";
 const EDITABLE_TEXT: &str = "org.a11y.atspi.EditableText";
 const VALUE: &str = "org.a11y.atspi.Value";
 const PROPERTIES: &str = "org.freedesktop.DBus.Properties";
+use table::{TABLE, TABLE_CELL};
+
+mod table;
 
 const UNKNOWN_METHOD: &str = "org.freedesktop.DBus.Error.UnknownMethod";
 const UNKNOWN_OBJECT: &str = "org.freedesktop.DBus.Error.UnknownObject";
@@ -139,6 +142,15 @@ impl Node<'_> {
     /// container is scrolled (logical pixels from its start), with its range
     /// and step.
     fn value_range(&self) -> Option<ValueRange> {
+        if let Some(r) = self.node.range {
+            return Some(ValueRange {
+                current: r.value,
+                min: r.min,
+                max: r.max,
+                step: r.step,
+                text: r.text(),
+            });
+        }
         if let Some(s) = self.node.scroll.or(self.node.scroll_bar) {
             return Some(ValueRange {
                 current: s.offset,
@@ -192,15 +204,14 @@ impl Node<'_> {
         if !v.is_finite() {
             return None;
         }
+        if self.node.range.is_some() {
+            return self.node.set_range_events(v);
+        }
         if let Some(s) = self.node.scroll.or(self.node.scroll_bar) {
             return Some(self.node.scroll_by_events(s.to(v)).unwrap_or_default());
         }
         self.value()?;
-        let text = if v.fract() == 0.0 && v.abs() < 1e15 {
-            format!("{}", v as i64)
-        } else {
-            format!("{v}")
-        };
+        let text = crate::platform::access::number_text(v);
         Some(self.node.set_text_events(&text))
     }
 
@@ -217,6 +228,12 @@ impl Node<'_> {
         }
         if self.value_range().is_some() {
             out.push(VALUE);
+        }
+        if table::is_table(self.node) {
+            out.push(TABLE);
+        }
+        if table::is_cell(self.node) {
+            out.push(TABLE_CELL);
         }
         out
     }
@@ -515,6 +532,16 @@ const PROPERTY_NAMES: &[&str] = &[
     "MinimumIncrement",
     "CurrentValue",
     "Text",
+    "NRows",
+    "NColumns",
+    "Caption",
+    "Summary",
+    "NSelectedRows",
+    "NSelectedColumns",
+    "ColumnSpan",
+    "RowSpan",
+    "Position",
+    "Table",
 ];
 
 fn app(b: &Bridge, m: &Message) -> Reply {
@@ -763,6 +790,8 @@ fn node(b: &Bridge, n: &Node, m: &Message) -> (Reply, Option<Vec<Event>>) {
         (EDITABLE_TEXT, member) if editable(n.role()) => {
             return editable_call(n, member, &mut args);
         }
+        (TABLE, member) if table::is_table(n.node) => table::table_call(bus, n, member, &mut args),
+        (TABLE_CELL, member) if table::is_cell(n.node) => table::cell_call(bus, n, member),
         _ => Reply::Error(UNKNOWN_METHOD),
     };
     (reply, None)
@@ -795,6 +824,10 @@ fn node_property(b: &Bridge, n: &Node, iface: &str, prop: &str) -> Option<Value>
         (VALUE, "MaximumValue") => Value::F64(n.value_range()?.max),
         (VALUE, "MinimumIncrement") => Value::F64(n.value_range()?.step),
         (VALUE, "Text") => Value::Str(n.value_range()?.text),
+        (TABLE, prop) if table::is_table(n.node) => return table::table_property(&b.bus, n, prop),
+        (TABLE_CELL, prop) if table::is_cell(n.node) => {
+            return table::cell_property(&b.bus, n, prop);
+        }
         _ => return None,
     })
 }
@@ -1182,6 +1215,7 @@ fn role_name(r: A11yRole) -> &'static str {
         Switch => "toggle button",
         Splitter => "split pane",
         Slider => "slider",
+        ProgressBar => "progress bar",
         Toolbar => "tool bar",
         Separator => "separator",
         Alert => "notification",

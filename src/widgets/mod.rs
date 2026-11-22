@@ -1414,6 +1414,7 @@ pub fn slider<S>(
         };
         (change.borrow_mut())(s, to.clamp(0.0, 1.0));
     };
+    let range = crate::core::AccessRange::new(v, 0.0, 1.0).step(0.05);
     let control = NativeControl::Slider {
         value: (v * 1000.0).round() as u16,
     };
@@ -1421,7 +1422,8 @@ pub fn slider<S>(
         return native_size(Element::boxed(BoxStyle::default()).native(deco), control)
             .on_drag(cx, on_drag)
             .on_key(cx, on_key)
-            .role(Role::Slider);
+            .role(Role::Slider)
+            .a11y_range(range);
     }
     let knob = Element::boxed(BoxStyle {
         fill: Some(theme.palette.primary),
@@ -1442,6 +1444,7 @@ pub fn slider<S>(
     .on_drag(cx, on_drag)
     .on_key(cx, on_key)
     .role(Role::Slider)
+    .a11y_range(range)
 }
 
 /// A 1px themed divider line spanning the cross axis.
@@ -1646,7 +1649,8 @@ fn tab_strip<S>(
 }
 
 /// A progress bar: a track with a primary-filled portion for `fraction` (0..=1).
-/// Default width 200 px; override with `.width(..)`.
+/// Default width 200 px; override with `.width(..)`. Assistive technologies
+/// see a [`Role::ProgressBar`] whose range value is `fraction`.
 ///
 /// Under a theme with a [`Skin::bar`](crate::style::Skin::bar), it is the
 /// skin's track and fill, 200 px wide (the fill is laid out for that width)
@@ -1657,22 +1661,27 @@ pub fn progress_bar<S>(cx: &Cx<S>, fraction: f64) -> Element {
     let control = NativeControl::Progress {
         value: (f * 1000.0).round() as u16,
     };
+    let range = crate::core::AccessRange::new(f, 0.0, 1.0);
+    let bar = |el: Element| el.role(Role::ProgressBar).a11y_range(range);
     if let Some(deco) = theme.native_deco(control) {
-        return native_size(Element::boxed(BoxStyle::default()).native(deco), control);
+        return bar(native_size(
+            Element::boxed(BoxStyle::default()).native(deco),
+            control,
+        ));
     }
     if let Some(skin) = theme.skin.and_then(|s| s.bar.as_ref()) {
         let pad = skin.track.content_padding();
         let (w, h) = (200.0, 8.0 + pad.vertical());
         let inner = ((w - pad.horizontal()).max(0.0), 8.0);
         let filled = (inner.0 * f).round();
-        return Element::stack(
+        return bar(Element::stack(
             Axis::Horizontal,
             vec![skin.fill_element(inner, filled, theme.palette.primary)],
         )
         .background_image(&skin.track)
         .width(w)
         .height(h)
-        .align(Align::Start, Align::Start);
+        .align(Align::Start, Align::Start));
     }
     let fill = Element::boxed(BoxStyle {
         fill: Some(theme.palette.primary),
@@ -1680,12 +1689,14 @@ pub fn progress_bar<S>(cx: &Cx<S>, fraction: f64) -> Element {
         border: None,
     })
     .grow(f);
-    Element::stack(Axis::Horizontal, vec![fill, spacer().grow(1.0 - f)])
-        .fill(theme.palette.border)
-        .radius(4.0)
-        .width(200.0)
-        .height(8.0)
-        .align(Align::Start, Align::Stretch)
+    bar(
+        Element::stack(Axis::Horizontal, vec![fill, spacer().grow(1.0 - f)])
+            .fill(theme.palette.border)
+            .radius(4.0)
+            .width(200.0)
+            .height(8.0)
+            .align(Align::Start, Align::Stretch),
+    )
 }
 
 mod spinner;

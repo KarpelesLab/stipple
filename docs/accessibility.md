@@ -4,7 +4,9 @@ Stipple draws every control itself, so the operating system can't see them on
 its own. Each frame, the `App` builds an accessibility tree from the layout
 (`stipple::core::AccessNode`: roles, names, bounds, focus, selected / checked /
 expanded state, a text field's caret and selection, which element labels
-a field, and where a scroll container is scrolled), maps it to the platform
+a field, where a scroll container is scrolled, a slider's or a progress
+bar's value along its range, a table's size and each cell's place in it,
+and how text is drawn), maps it to the platform
 layer's neutral (crate-internal) `A11yNode` tree, and gives it to the window,
 whose backend exposes it to the platform's accessibility API.
 `App::accessibility_tree()` returns the tree for tests.
@@ -140,6 +142,87 @@ notification node, which is also a polite live region (`live`,
 `touchdemo` on a desktop raises one, "Row 2 tapped", when "Row 2" is tapped,
 for the out-of-process checks below.
 
+## Range values, tables and captions
+
+**Range values.** A slider, a progress bar and a number input carry their
+value along a range (`AccessNode::range`, an `AccessRange`: value, minimum,
+maximum, step, and whether a slider's track runs right to left);
+`widgets::slider`, `progress_bar` (now `Role::ProgressBar`) and
+`number_input` declare theirs, and any element can with
+`Element::a11y_range`. A screen reader reads it, and sets a slider's or a
+number input's (a progress bar's is read-only). Setting goes through the
+same events on every platform (`platform::access`): a slider is pressed just
+inside its box at the value's place and the pointer moved to the exact
+place (what its drag handler reads; mirrored on a right-to-left track), a
+number input gets the number typed and Enter. An increment is a step (the
+range's step, else a twentieth of it).
+
+| Platform | What a range is | How a screen reader sets it |
+| --- | --- | --- |
+| Windows | the RangeValue pattern (Value, Minimum, Maximum, SmallChange, LargeChange, IsReadOnly) | `SetValue` |
+| macOS | `AXValue` (a number) with `AXMinValue`, `AXMaxValue`, `AXValueDescription` ("50%") | setting `AXValue`, `AXIncrement` / `AXDecrement` |
+| iOS | the element's value as words ("50%"); a slider is adjustable | `accessibilityIncrement` / `…Decrement` (swipe up and down) |
+| Android | `RangeInfo` (as floats) | `ACTION_SET_PROGRESS`, `ACTION_SCROLL_FORWARD` / `BACKWARD` (a step, as on a `SeekBar`) |
+| Linux | `Value` (current, minimum, maximum, increment, text) | setting `Value.CurrentValue` |
+| Web | `aria-valuenow`, `aria-valuemin`, `aria-valuemax`, `aria-valuetext` | not settable (read-only) |
+
+A moved value raises UIA's RangeValue.Value property change,
+`AXValueChanged`, `TYPE_VIEW_SELECTED` (as a `SeekBar` does) and
+`object:property-change:accessible-value`.
+
+**Tables.** A table's node says how many rows and columns it has
+(`AccessNode::table`), all of them: a virtualized `widgets::table` builds
+only the rows in view, so it declares its size (`Element::a11y_table`, its
+header row counted as row 0) and each built row its index
+(`Element::a11y_row`). Every row and cell (and column header) gets its place
+(`AccessNode::cell`): a row's index is the one it declares, else the one after
+the row before; a cell's column is its place among its row's cells, through
+the groups that wrap them. A table built by hand from `Role::Table`,
+`Role::Row` and `Role::Cell` is counted as it is.
+
+| Platform | The table | A cell |
+| --- | --- | --- |
+| Windows | Grid (`RowCount`, `ColumnCount`, `GetItem`) and Table (column headers, row major) | GridItem (row, column, spans of 1, its grid) and TableItem (its column's header) |
+| macOS | `AXRowCount`, `AXColumnCount`, `AXRows`, `AXColumnHeaderUIElements` | `AXRowIndexRange`, `AXColumnIndexRange`; a row's `AXIndex` |
+| Android | `CollectionInfo` | `CollectionItemInfo` (a header is a heading) |
+| Linux | `Table` (size, `GetAccessibleAt`, index math, column headers, selected rows) | `TableCell` (position, spans, its table, its column's header) |
+| Web | `aria-rowcount`, `aria-colcount` | `aria-rowindex`, `aria-colindex` |
+| iOS | not exposed | not exposed |
+
+A cell in a row the table hasn't built isn't there to give: UIA's `GetItem`
+fails, AT-SPI's `GetAccessibleAt` returns a null reference.
+
+**Captions.** A control names its caption with `Element::labelled_by(id)`
+and the caption `Element::a11y_id(id)`. A plain unnamed group labelled so
+(a widget's wrapper, as a number input's field and steppers) hands it to the
+first control inside it. Every bridge takes it from the one labelled-by
+relation `platform::access::relations` works out (see
+[Relations](#relations)): Linux: `labelled-by` / `label-for`; Windows: the
+`LabeledBy` property (and a field whose name is its text is named by its
+caption); Android: `setLabeledBy`; web: `aria-labelledby` (by the caption's
+id); macOS: `AXTitleUIElement`; iOS: none.
+
+**Text attributes.** A node with text says how it is drawn
+(`AccessNode::font`: family, size, weight, italic; the family is the app's
+font's when the text names none). Windows serves it as UIA text attributes
+(`FontName`, `FontSize` in points, `FontWeight`, `IsItalic`, and
+`IsReadOnly`), one run for the node's whole text, which `FindAttribute`
+finds; the others aren't exposed yet. A field's text changing and its caret
+or selection moving raise UIA's `TextChanged` and `TextSelectionChanged`
+events (AT-SPI had its text and caret events already).
+
+App tests (`src/a11y_range_tests.rs`) set a slider (both directions,
+exactly to its end, a step down) and a number input through those events,
+check a progress bar refuses, number a virtualized table's rows as it
+scrolls and a hand-built one's, and follow a caption. `touchdemo` with
+`TOUCHDEMO_RANGES` set shows a "Volume" slider, a captioned "Level" number
+input, a progress bar and a 20-row table (under the light theme, so they are
+Stipple's own and not live OS controls) for the out-of-process checks:
+`atspi-walk.py` with `ATSPI_WALK_RANGES=1` (passing locally under Xvfb),
+`uia-ranges.ps1` (Windows), `axprobe --ranges` (macOS); `androiddemo` has a
+"Volume" slider the Android probe reads and sets. Each is a non-blocking CI
+step for now.
+
 ## Keyboard focus
 
 Text fields, and other elements with a key handler, take keyboard focus.
@@ -231,6 +314,10 @@ each an interface with a vtable of its own (`platform/uia/patterns.rs`,
 the scroll math and the events a swap plans are worked out without COM in
 `platform::uia_logic`):
 
+- **RangeValue** on sliders, progress bars and spin buttons, **Grid** and
+  **Table** on tables, **GridItem** and **TableItem** on their cells and
+  column headers (`platform/uia/grid.rs`; see
+  [above](#range-values-tables-and-captions)), and the `LabeledBy` property.
 - **Value** on text fields and spin buttons. A field whose text the tree
   carries is named by the caption it is `labelled_by` (or nothing) and
   valued by its text, so a screen reader doesn't read it twice; `SetValue`
@@ -256,11 +343,15 @@ the scroll math and the events a swap plans are worked out without COM in
   lines and the whole text, compare their endpoints, find text and report
   their boxes (the node's box shared evenly between its characters). A
   range is a COM object of its own, freed on its last release, holding a
-  reference on its element.
+  reference on its element. Its text attributes are the node's font (one
+  run: `FontName`, `FontSize`, `FontWeight`, `IsItalic`, `IsReadOnly`),
+  which `FindAttribute` finds.
 
 A tree swap raises, besides the focus change, property-changed events
 (Name, Value, ToggleState, ExpandCollapseState, SelectionItemIsSelected,
-the scroll percentages), a `ChildrenInvalidated` structure change where
+the scroll percentages, RangeValue.Value), `TextChanged` and
+`TextSelectionChanged` on what has the Text pattern, a `ChildrenInvalidated`
+structure change where
 children came or went, `ElementSelected` for a newly selected item, and
 `UiaRaiseNotificationEvent` for each toast that appeared (looked up at run
 time: Windows 10 1709 and later), which Narrator and NVDA read out. Pattern
@@ -289,7 +380,9 @@ path Narrator, NVDA and JAWS use):
 
 `uiademo` still checks the providers through their vtables in-process, and
 with `--patterns` drives every pattern through the interface
-`GetPatternProvider` hands out.
+`GetPatternProvider` hands out (RangeValue on a slider and a progress bar,
+Grid, Table, GridItem and TableItem on a table, `LabeledBy`, and the text
+attributes too).
 
 A further step, *UI Automation patterns and events*,
 runs `uiademo --patterns`, then `.github/scripts/uia-patterns.ps1` against
@@ -341,11 +434,21 @@ it, so that is reported, not required); the job is required.
 The keyboard steps (Tab to the button, Space, Enter, Shift+Tab) were added
 after the rest passed and haven't been seen in CI yet.
 
-Not covered: text attributes (`FindAttribute` finds nothing,
-`GetAttributeValue` says not supported), glyph-accurate character boxes,
-`RangeFromChild`, text-selection-changed and text-changed events; no
-RangeValue, Grid / Table or Window patterns, and no `LabeledBy` property;
-`CanSelectMultiple` is always false; the root's `ChildrenInvalidated`
+A further step, *UI Automation range values, tables and text attributes*
+(`.github/scripts/uia-ranges.ps1`, on `touchdemo` with `TOUCHDEMO_RANGES`),
+reads and sets the slider's RangeValue (the app logs the new volume, a
+property-changed event comes), reads the progress bar's (read-only), sets
+the spin button's and follows its `LabeledBy` to "Level", reads the table's
+Grid and Table patterns and a cell's GridItem and TableItem, a label's
+`FontName`, `FontSize` and `FontWeight`, and waits for the field's
+`TextChanged` and `TextSelectionChanged` events. It passes on the runner
+(and `uiademo --patterns`, required, drives the new patterns in-process);
+it doesn't fail the job yet.
+
+Not covered: text attributes beyond the font (colors, alignment…) and
+runs within a node's text (rich text reads as one), glyph-accurate
+character boxes, `RangeFromChild`; no Window pattern; Grid and Table on
+tables only (not trees or lists); `CanSelectMultiple` is always false; the root's `ChildrenInvalidated`
 carries the tree's runtime id, not the window's. The patterns and events
 are build- and clippy-checked for Windows and their logic unit-tested on
 every host, but haven't run on Windows yet. Narrator and JAWS aren't tried.
@@ -379,6 +482,12 @@ by the AppKit-free `macos/ax_plan.rs`):
   text is replaced through the input-method path, after a click to focus it)
   and its `AXSelectedTextRange` (the field selects it); nothing else is
   settable (`isAccessibilitySelectorAllowed:`).
+- **Ranges and tables.** A slider or a progress bar has its number as its
+  `AXValue`, with `AXMinValue`, `AXMaxValue` and `AXValueDescription`; a
+  slider's element (`StippleAXRangeElement`, `macos/ax_range.rs`) takes a
+  new `AXValue` and `AXIncrement` / `AXDecrement`. A table has
+  `AXRowCount`, `AXColumnCount`, `AXRows` and `AXColumnHeaderUIElements`, a
+  row its `AXIndex`, a cell its `AXRowIndexRange` and `AXColumnIndexRange`.
 - **Scrolling.** A plain scroll container is an `AXScrollArea` (a list, tree
   or table keeps its role) with an `AXScrollBar` after its content, also
   its vertical or horizontal scroll bar: the bar's `AXValue` (0 to 1) is how
@@ -457,7 +566,11 @@ the job. Another, *Title elements, static text values and a press out of
 view*, runs `axprobe --links`: the field's `AXTitleUIElement` must be the
 static text "Note", "Rows tapped: N" must have its text as its `AXValue`,
 and `AXPress` on "Row 20", below the list, must reach the app; new, and
-doesn't fail the job.
+doesn't fail the job. Another, *Range values and a table from outside the app*, runs
+`axprobe --ranges` on `touchdemo` with `TOUCHDEMO_RANGES`: the slider's
+value and bounds, `AXIncrement` and setting its value (the app logs both),
+the progress bar's value, the table's row and column counts and `AXRows`,
+and a cell's index range; non-blocking too.
 
 Not covered: the elements are
 built again after each tree change (or when the window moves), so an
@@ -500,8 +613,13 @@ strip), and VoiceOver says where it is ("Page N of M",
 `UIAccessibilityPageScrolledNotification`); it answers NO when nothing can
 move, so UIKit tries further up. Unit-tested; XCUITest doesn't exercise it.
 
-Not covered: no adjustable (swipe up/down) actions; VoiceOver's own
-gestures and speech aren't exercised.
+A slider is adjustable (`UIAccessibilityTraitAdjustable`): VoiceOver's swipe
+up and down call `accessibilityIncrement` / `…Decrement`, which step it; a
+slider's and a progress bar's value reads as words ("50%"). Unit-tested;
+build-checked only.
+
+Not covered: tables (`UIAccessibilityContainerDataTable`) and captions;
+VoiceOver's own gestures and speech aren't exercised.
 
 ## Android
 
@@ -513,7 +631,11 @@ every scroll container whose content overflows: a page forward or back,
 each offered only while it can go that way, sideways for a horizontal
 strip; a container that scrolled sends `TYPE_VIEW_SCROLLED`; and, on API 23
 and later, `ACTION_SHOW_ON_SCREEN` on a node inside a container that
-scrolls, which scrolls it into view). A click, focus or select on a node
+scrolls, which scrolls it into view), a slider's, progress bar's or number
+input's `RangeInfo` (a slider set with `ACTION_SET_PROGRESS` or stepped by
+scroll forward and backward, and `TYPE_VIEW_SELECTED` when it moved), a
+table's `CollectionInfo` and its cells' `CollectionItemInfo`, and the caption
+a control is labelled by (`setLabeledBy`). A click, focus or select on a node
 scrolled out of view brings it into view first, then taps it there. See
 [the Android page](platforms/android.md#accessibility).
 
@@ -537,7 +659,11 @@ system's accessibility framework. It:
   the tap, and `TYPE_VIEW_CLICKED` comes;
 - sets the field's text with `ACTION_SET_TEXT`: the app logs it, and the
   field's node reads it back;
-- tries `ACTION_SCROLL_FORWARD` on a scrollable node, if there is one.
+- tries `ACTION_SCROLL_FORWARD` on a scrollable node, if there is one;
+- reads `androiddemo`'s "Volume" slider (a `SeekBar` with a `RangeInfo` of
+  0..1 at 0.5), sets it to a quarter with `ACTION_SET_PROGRESS` and steps it
+  with a scroll forward: the app logs each (passing on the API 34 emulator;
+  reported without failing the check for now).
 
 `test-on-device.sh` also reads the tree with `uiautomator dump` (another
 out-of-process client of the same framework) and taps nodes at their bounds.
@@ -581,7 +707,12 @@ app's container to show it (a wheel at the container's middle), and a click
 (a screen reader's activation) on one does so before clicking it where it
 then is. ARIA has no scroll role or action, so nothing else is exposed. A
 control that controls another has `aria-controls` naming its element, and a
-tree item its `aria-level`. Not yet tried with a screen reader. See [the web page](platforms/web.md#accessibility).
+tree item its `aria-level`. A range's element has `aria-valuenow`,
+`aria-valuemin`, `aria-valuemax` and `aria-valuetext` (not settable from a
+screen reader: ARIA has no way to), a table's `aria-rowcount` and
+`aria-colcount`, a row's and a cell's `aria-rowindex` and `aria-colindex`,
+and a captioned control's `aria-labelledby` (its caption's overlay element).
+Not yet tried with a screen reader. See [the web page](platforms/web.md#accessibility).
 
 ## Linux
 
@@ -630,8 +761,14 @@ or `zbus`).
   on Windows). Labels, fields, password fields and spin buttons have `Text`
   (the text by character, word, sentence and line); fields have
   `EditableText` (setting, inserting or deleting text replaces the field's
-  text through the input-method path, after a click to focus it); a spin
-  button with a number has `Value` (setting it types the number).
+  text through the input-method path, after a click to focus it); a slider,
+  a progress bar and a spin button have `Value` with their range (setting a
+  slider's presses it at the value's place, a spin button's types the
+  number; a progress bar's is refused), and a moved one raises
+  `object:property-change:accessible-value`. A table has `Table` (its size,
+  all its rows; the cell at a row and column; column headers; selected rows)
+  and its cells and column headers `TableCell` (position, spans of one, the
+  table, the column's header).
 - **Scrolling.** A plain scroll container is a scroll pane (`SCROLL_PANE`; a
   list, tree or table keeps its role) with `Action` ("scroll forward",
   "scroll backward": a page) and `Value` (`CurrentValue` its offset in
@@ -661,7 +798,9 @@ or `zbus`).
   `text_field(…).labelled_by("note")`. Ids are matched within the window's
   tree. Nothing is inferred: a label beside a field without them isn't
   related to it (Orca guesses one from the layout, as it does for any
-  toolkit). The other relations come from the tree too (see
+  toolkit). UIA's `LabeledBy`, Android's `setLabeledBy`, the web's
+  `aria-labelledby` and macOS's `AXTitleUIElement` follow the same relation.
+  The other relations come from the tree too (see
   [Relations](#relations)): `controller-for` / `controlled-by` (a select and
   its open list, a tab and its panel), `member-of` (a radio group, the
   whole group as GTK reports it) and `node-child-of` / `node-parent-of`
@@ -767,6 +906,16 @@ pyatspi client must find it registered, the bridge saying it took the
 address from the property. Both pass locally under Xvfb (at-spi2-core
 2.58) and don't fail the job yet.
 
+Another, *Range values and a table through AT-SPI (X11)*, runs the walk with
+`ATSPI_WALK_RANGES=1` on `touchdemo` with `TOUCHDEMO_RANGES`: the slider's
+`Value` (0.5 of 0..1, step 0.05) set to 0.25 moves the app's slider (with an
+`accessible-value` event) and the progress bar follows, the spin button's
+`Value` (3 of 0..10) set to 7 sets the app's number and its labelled-by
+caption is "Level", and the table's `Table` (21 rows, 2 columns; the cell at
+row 1, column 0; column 1's header; no cell in a row not built) and a cell's
+`TableCell` (its position, its table). It passes locally under Xvfb
+(at-spi2-core 2.58) and in CI, and doesn't fail the job yet.
+
 `a11ydemo serve` still serves a fixed tree over the session bus for the
 `dbus-send` checks.
 
@@ -774,4 +923,5 @@ Not covered: no text attributes, character extents are the node's box split
 evenly (not the glyphs'), a spin button's `Value` has no range, and a
 scroll pane's `Value` and its scroll bar children's say the same; nodes
 scrolled out of view still say `showing`. The `AT_SPI_BUS` property is read
-once at startup and when it changes, not looked up again on each reconnect.
+once at startup and when it changes, not looked up again on each reconnect. The table's selection isn't changed through `Table` (rows are
+selected by their own click action).

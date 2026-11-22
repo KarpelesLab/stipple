@@ -38,6 +38,8 @@
 mod getting_started {}
 
 #[cfg(test)]
+mod a11y_range_tests;
+#[cfg(test)]
 mod a11y_relations_tests;
 #[cfg(test)]
 mod a11y_scroll_tests;
@@ -3937,7 +3939,12 @@ impl<S: 'static> App<S> {
                     // so a screen reader sees the current element hierarchy and
                     // focus.
                     if let Some(tree) = pane.accessibility_tree() {
-                        window.set_accessibility_tree(&to_platform_a11y(&tree));
+                        let mut mirror = to_platform_a11y(&tree);
+                        // Text in the app's own font says which it is.
+                        if let Some(family) = font.get().and_then(Font::family_name) {
+                            mirror.fill_font_family(family);
+                        }
+                        window.set_accessibility_tree(&mirror);
                         // A focused text input asks for the on-screen keyboard.
                         fn typing(node: &crate::core::AccessNode) -> bool {
                             use crate::core::Role;
@@ -5363,6 +5370,7 @@ pub(crate) fn to_platform_a11y(node: &crate::core::AccessNode) -> crate::platfor
         Role::Switch => A11yRole::Switch,
         Role::Splitter => A11yRole::Splitter,
         Role::Slider => A11yRole::Slider,
+        Role::ProgressBar => A11yRole::ProgressBar,
         Role::Toolbar => A11yRole::Toolbar,
         Role::Separator => A11yRole::Separator,
         Role::Alert => A11yRole::Alert,
@@ -5401,6 +5409,30 @@ pub(crate) fn to_platform_a11y(node: &crate::core::AccessNode) -> crate::platfor
         placeholder: node.placeholder.clone(),
         scroll: node.scroll.map(scroll),
         scroll_bar: node.scroll_bar.map(scroll),
+        range: node.range.map(|r| crate::platform::access::A11yRange {
+            value: r.value,
+            min: r.min,
+            max: r.max,
+            step: r.step,
+            rtl: r.rtl,
+        }),
+        table: node.table.map(|t| crate::platform::access::A11yTable {
+            rows: t.rows,
+            columns: t.columns,
+        }),
+        cell: node.cell.map(|c| crate::platform::access::A11yCell {
+            row: c.row,
+            column: c.column,
+        }),
+        font: node
+            .font
+            .as_ref()
+            .map(|f| crate::platform::access::A11yFont {
+                family: f.family.clone(),
+                size: f.size,
+                weight: f.weight,
+                italic: f.italic,
+            }),
         native_view: node.native_view,
         children: node.children.iter().map(to_platform_a11y).collect(),
     }
