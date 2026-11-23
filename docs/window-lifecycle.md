@@ -198,7 +198,8 @@ App::new((), |_: &(), cx: &mut Cx<()>| label(cx, "Notes"))
 Phones and the web have no window to place: the call does nothing there. An
 app that keeps its own settings can use `WindowPlacement` directly:
 `WindowPlacement::of(&info)` in `on_window_change`, `to_text` /
-`from_text`, and `apply` to the next run's `WindowAttributes`.
+`from_text`, and `apply` to the next run's `WindowAttributes`; one made by
+hand is `WindowPlacement::new(size).position(p).maximized(true)`.
 
 ## Window decorations on Wayland
 

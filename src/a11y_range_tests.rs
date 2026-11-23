@@ -113,12 +113,15 @@ fn sliders_progress_bars_and_number_inputs_report_their_ranges() {
     assert_eq!(slider.name, "Volume");
     assert_eq!(
         slider.range,
-        Some(AccessRange::new(0.5, 0.0, 1.0).step(0.05))
+        Some(AccessRange::between(0.0, 1.0).value(0.5).step(0.05))
     );
     let bar = all.iter().find(|n| n.role == Role::ProgressBar).unwrap();
     assert_eq!(bar.range.map(|r| r.value), Some(0.5));
     let spin = all.iter().find(|n| n.role == Role::SpinButton).unwrap();
-    assert_eq!(spin.range, Some(AccessRange::new(3.0, 0.0, 10.0).step(1.0)));
+    assert_eq!(
+        spin.range,
+        Some(AccessRange::between(0.0, 10.0).value(3.0).step(1.0))
+    );
     assert_eq!(spin.labelled_by.as_deref(), Some("level"));
 }
 

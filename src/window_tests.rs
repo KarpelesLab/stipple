@@ -1164,11 +1164,11 @@ fn a_remembered_window_saves_its_placement_as_it_changes() {
     drop(run);
     assert_eq!(
         read_placement(&dir, "main"),
-        Some(crate::platform::WindowPlacement {
-            position: Some(Point::new(30.0, 40.0)),
-            size: Size::new(640.0, 480.0),
-            maximized: true,
-        })
+        Some(
+            crate::platform::WindowPlacement::new(Size::new(640.0, 480.0))
+                .position(Point::new(30.0, 40.0))
+                .maximized(true)
+        )
     );
     crate::app_placement::set_test_dir(None);
 }

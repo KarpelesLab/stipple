@@ -19,7 +19,18 @@ use crate::platform::{WindowAttributes, WindowInfo};
 /// A window's placement: the bounds it has when neither maximized nor
 /// fullscreen, and whether it is maximized. Fullscreen isn't kept: a window
 /// that was fullscreen comes back in its restored bounds.
+///
+/// ```
+/// use stipple::geometry::{Point, Size};
+/// use stipple::platform::WindowPlacement;
+///
+/// let p = WindowPlacement::new(Size::new(800.0, 600.0))
+///     .position(Point::new(40.0, 30.0))
+///     .maximized(true);
+/// assert_eq!(WindowPlacement::from_text(&p.to_text()), Some(p));
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct WindowPlacement {
     /// The outer top-left corner, in desktop logical pixels, or `None` where
     /// the system doesn't tell (Wayland): the window manager then places it.
@@ -36,6 +47,28 @@ pub struct WindowPlacement {
 const LARGEST: f64 = 100_000.0;
 
 impl WindowPlacement {
+    /// A window `size` big (its content area, logical pixels), placed by
+    /// the window manager and not maximized.
+    pub fn new(size: Size) -> Self {
+        Self {
+            position: None,
+            size,
+            maximized: false,
+        }
+    }
+
+    /// At outer top-left corner `position`, in desktop logical pixels.
+    pub fn position(mut self, position: Point) -> Self {
+        self.position = Some(position);
+        self
+    }
+
+    /// Maximized or not.
+    pub fn maximized(mut self, maximized: bool) -> Self {
+        self.maximized = maximized;
+        self
+    }
+
     /// The placement of a window as `info` says it is: its restored
     /// position and size (see [`WindowInfo::restored_position`]) and
     /// whether it is maximized.
@@ -181,11 +214,9 @@ mod tests {
 
     #[test]
     fn a_placement_round_trips_through_its_text() {
-        let p = WindowPlacement {
-            position: Some(Point::new(-12.0, 40.5)),
-            size: Size::new(800.0, 600.0),
-            maximized: true,
-        };
+        let p = WindowPlacement::new(Size::new(800.0, 600.0))
+            .position(Point::new(-12.0, 40.5))
+            .maximized(true);
         assert_eq!(WindowPlacement::from_text(&p.to_text()), Some(p));
         // Without a position (Wayland).
         let p = WindowPlacement {
@@ -210,11 +241,9 @@ mod tests {
 
     #[test]
     fn it_applies_to_the_attributes() {
-        let p = WindowPlacement {
-            position: Some(Point::new(10.4, 20.6)),
-            size: Size::new(640.0, 480.0),
-            maximized: true,
-        };
+        let p = WindowPlacement::new(Size::new(640.0, 480.0))
+            .position(Point::new(10.4, 20.6))
+            .maximized(true);
         let attrs = p.apply(WindowAttributes::new().natural_size(true));
         assert_eq!(attrs.position, Some((10, 21)));
         assert_eq!(attrs.logical_size, Size::new(640.0, 480.0));

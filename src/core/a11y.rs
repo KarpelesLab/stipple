@@ -76,17 +76,25 @@ pub struct AccessRange {
     pub rtl: bool,
 }
 
-// The values are finite (see `AccessRange::new`), so equality is total.
+// The values are finite (see `AccessRange::between`), so equality is total.
 impl Eq for AccessRange {}
 
 impl AccessRange {
-    /// `value` between `min` and `max` (swapped if reversed; `value`
-    /// clamped to them), with no step. Values that aren't finite read as 0.
-    pub fn new(value: f64, min: f64, max: f64) -> Self {
-        let f = |v: f64| if v.is_finite() { v } else { 0.0 };
-        let (min, max) = (f(min).min(f(max)), f(min).max(f(max)));
+    /// The range from `min` to `max` (swapped if reversed), its value at
+    /// `min` and no step: set them with [`value`](Self::value) and
+    /// [`step`](Self::step). Values that aren't finite read as 0.
+    ///
+    /// ```
+    /// use stipple::core::AccessRange;
+    ///
+    /// let volume = AccessRange::between(0.0, 100.0).value(35.0).step(5.0);
+    /// assert_eq!(volume.fraction(), 0.35);
+    /// ```
+    pub fn between(min: f64, max: f64) -> Self {
+        let (min, max) = (finite(min), finite(max));
+        let (min, max) = (min.min(max), min.max(max));
         AccessRange {
-            value: f(value).clamp(min, max),
+            value: min,
             min,
             max,
             step: 0.0,
@@ -94,9 +102,15 @@ impl AccessRange {
         }
     }
 
+    /// At `value`, clamped to the range (not finite is 0, then clamped).
+    pub fn value(mut self, value: f64) -> Self {
+        self.value = finite(value).clamp(self.min, self.max);
+        self
+    }
+
     /// With `step` as one increment (its absolute value; not finite is 0).
     pub fn step(mut self, step: f64) -> Self {
-        self.step = if step.is_finite() { step.abs() } else { 0.0 };
+        self.step = finite(step).abs();
         self
     }
 
@@ -109,6 +123,11 @@ impl AccessRange {
             0.0
         }
     }
+}
+
+/// `v`, or 0 when it isn't finite.
+fn finite(v: f64) -> f64 {
+    if v.is_finite() { v } else { 0.0 }
 }
 
 /// A table's size, as assistive technologies read it (UIA's Grid and Table

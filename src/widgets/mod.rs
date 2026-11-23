@@ -1414,7 +1414,9 @@ pub fn slider<S>(
         };
         (change.borrow_mut())(s, to.clamp(0.0, 1.0));
     };
-    let range = crate::core::AccessRange::new(v, 0.0, 1.0).step(0.05);
+    let range = crate::core::AccessRange::between(0.0, 1.0)
+        .value(v)
+        .step(0.05);
     let control = NativeControl::Slider {
         value: (v * 1000.0).round() as u16,
     };
@@ -1661,7 +1663,7 @@ pub fn progress_bar<S>(cx: &Cx<S>, fraction: f64) -> Element {
     let control = NativeControl::Progress {
         value: (f * 1000.0).round() as u16,
     };
-    let range = crate::core::AccessRange::new(f, 0.0, 1.0);
+    let range = crate::core::AccessRange::between(0.0, 1.0).value(f);
     let bar = |el: Element| el.role(Role::ProgressBar).a11y_range(range);
     if let Some(deco) = theme.native_deco(control) {
         return bar(native_size(

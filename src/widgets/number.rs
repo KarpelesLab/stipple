@@ -267,7 +267,9 @@ pub fn number_input<S>(
     let edit = edit
         .role(Role::SpinButton)
         .a11y_range(
-            crate::core::AccessRange::new(state.value, state.min, state.max).step(state.step),
+            crate::core::AccessRange::between(state.min, state.max)
+                .value(state.value)
+                .step(state.step),
         )
         .on_key(cx, move |s, k| {
             field(s).apply(k);

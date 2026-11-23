@@ -149,7 +149,7 @@ value along a range (`AccessNode::range`, an `AccessRange`: value, minimum,
 maximum, step, and whether a slider's track runs right to left);
 `widgets::slider`, `progress_bar` (now `Role::ProgressBar`) and
 `number_input` declare theirs, and any element can with
-`Element::a11y_range`. A screen reader reads it, and sets a slider's or a
+`Element::a11y_range(AccessRange::between(min, max).value(v).step(s))`. A screen reader reads it, and sets a slider's or a
 number input's (a progress bar's is read-only). Setting goes through the
 same events on every platform (`platform::access`): a slider is pressed just
 inside its box at the value's place and the pointer moved to the exact
