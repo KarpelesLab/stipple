@@ -412,10 +412,11 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
     if KEYBOARD.swap(keyboard.to_bits(), Ordering::Relaxed) != keyboard.to_bits() {
         log(&format!("touchdemo: keyboard inset {keyboard:.0}"));
     }
-    // On Linux the field has a caption, which a screen reader reads with it
-    // (AT-SPI's labelled-by relation, checked by the AT-SPI walk in CI). The
+    // On Linux and macOS the field has a caption, which a screen reader reads
+    // with it (AT-SPI's labelled-by relation, checked by the AT-SPI walk in
+    // CI; the field's AXTitleUIElement, checked by `axprobe --links`). The
     // mobile self-tests tap the field where it is without one.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     let field = row(vec![
         label(cx, "Note").a11y_id("note-label"),
         field.labelled_by("note-label").grow(1.0),
