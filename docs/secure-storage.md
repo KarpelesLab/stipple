@@ -99,10 +99,16 @@ reads.
 **macOS: two keychains.** A macOS app gets iOS's data protection keychain
 (`kSecUseDataProtectionKeychain`) when it is signed with an application
 identifier (a Developer ID or App Store app with a provisioning profile).
-A binary run with `cargo run`, unsigned or signed ad hoc, is refused it
-(`errSecMissingEntitlement`); Stipple then uses the user's login keychain
-for the rest of the run, without an accessibility class or access group,
-which that keychain doesn't have. So a development build works, but:
+A binary run with `cargo run`, unsigned or signed ad hoc, has no such
+entitlement in its signature (Stipple reads it with
+`SecTaskCopyValueForEntitlement`) and uses the user's login keychain from
+its first call, without an accessibility class or access group, which that
+keychain doesn't have. (Deciding up front matters: the data protection
+keychain refuses an unentitled write with `errSecMissingEntitlement`, but
+answers an unentitled read with "not found", so a process that only reads
+would otherwise miss what an earlier run stored.) A write refused with
+`errSecMissingEntitlement` also switches the process to the login keychain.
+So a development build works, but:
 
 - items stored by the development build aren't there for the signed app,
   and the other way round: they're in different keychains;

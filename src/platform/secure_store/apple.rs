@@ -11,10 +11,16 @@
 //! On macOS the items go to the data protection keychain
 //! (`kSecUseDataProtectionKeychain`, the iOS-style one), which takes an app
 //! signed with an application identifier. An unsigned or ad hoc signed
-//! binary (`cargo run`) is refused it (`errSecMissingEntitlement`); the
-//! store then uses the user's login keychain for the rest of the process,
-//! without an accessibility class (it has none) or access group. Items don't
-//! move between the two.
+//! binary (`cargo run`) has none (its code signature carries no
+//! `com.apple.application-identifier` or `keychain-access-groups`
+//! entitlement, read through `SecTaskCopyValueForEntitlement`), so the store
+//! uses the user's login keychain for it, without an accessibility class
+//! (it has none) or access group: from the first call, so that a process
+//! that only reads finds what another one stored (the data protection
+//! keychain refuses an unentitled write with `errSecMissingEntitlement`,
+//! but answers a read with `errSecItemNotFound`). A refused write still
+//! switches the process to the login keychain. Items don't move between the
+//! two.
 
 use super::{SecureStoreError, Target};
 use std::ffi::c_void;
@@ -89,6 +95,14 @@ unsafe extern "C" {
     static kSecMatchLimitOne: CFTypeRef;
     #[cfg(target_os = "macos")]
     static kSecUseDataProtectionKeychain: CFTypeRef;
+    #[cfg(target_os = "macos")]
+    fn SecTaskCreateFromSelf(allocator: CFTypeRef) -> CFTypeRef;
+    #[cfg(target_os = "macos")]
+    fn SecTaskCopyValueForEntitlement(
+        task: CFTypeRef,
+        entitlement: CFTypeRef,
+        error: *mut CFTypeRef,
+    ) -> CFTypeRef;
 }
 
 /// An owned CoreFoundation object, released on drop.
@@ -148,16 +162,66 @@ fn dict(pairs: &[(CFTypeRef, CFTypeRef)]) -> Result<Cf, SecureStoreError> {
 /// Which keychain this process uses on macOS (see the module's comment).
 #[cfg(target_os = "macos")]
 mod keychain {
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use super::{Cf, SecTaskCopyValueForEntitlement, SecTaskCreateFromSelf, cf_string};
+    use std::sync::atomic::{AtomicU8, Ordering};
 
-    static LEGACY: AtomicBool = AtomicBool::new(false);
+    const UNDECIDED: u8 = 0;
+    const DATA_PROTECTION: u8 = 1;
+    const LEGACY: u8 = 2;
+
+    static MODE: AtomicU8 = AtomicU8::new(UNDECIDED);
+
+    /// Whether the process's code signature carries an entitlement the data
+    /// protection keychain takes (an application identifier, or keychain
+    /// access groups).
+    fn entitled() -> bool {
+        let task = Cf(unsafe { SecTaskCreateFromSelf(std::ptr::null()) });
+        if task.0.is_null() {
+            // Can't tell: try the data protection keychain (a refused write
+            // falls back).
+            return true;
+        }
+        [
+            "com.apple.application-identifier",
+            "application-identifier",
+            "keychain-access-groups",
+        ]
+        .iter()
+        .any(|key| {
+            let Ok(key) = cf_string(key) else {
+                return false;
+            };
+            let value =
+                Cf(unsafe { SecTaskCopyValueForEntitlement(task.0, key.0, std::ptr::null_mut()) });
+            !value.0.is_null()
+        })
+    }
 
     pub(super) fn data_protection() -> bool {
-        !LEGACY.load(Ordering::Relaxed)
+        match MODE.load(Ordering::Relaxed) {
+            DATA_PROTECTION => true,
+            LEGACY => false,
+            _ => {
+                let mode = if entitled() { DATA_PROTECTION } else { LEGACY };
+                match MODE.compare_exchange(UNDECIDED, mode, Ordering::Relaxed, Ordering::Relaxed) {
+                    Ok(_) => {
+                        if mode == LEGACY {
+                            super::super::debug(
+                                "the data protection keychain needs a signed app (no \
+                                 application identifier entitlement): using the login keychain",
+                            );
+                        }
+                        mode == DATA_PROTECTION
+                    }
+                    // Another thread decided (or a write was refused) first.
+                    Err(now) => now == DATA_PROTECTION,
+                }
+            }
+        }
     }
 
     pub(super) fn fall_back() {
-        if !LEGACY.swap(true, Ordering::Relaxed) {
+        if MODE.swap(LEGACY, Ordering::Relaxed) != LEGACY {
             super::super::debug(
                 "the data protection keychain needs a signed app \
                  (errSecMissingEntitlement): using the login keychain",
@@ -215,7 +279,9 @@ fn with_keychain(
 ) -> Result<OSStatus, SecureStoreError> {
     #[cfg(target_os = "macos")]
     {
-        if keychain::data_protection() {
+        // With an access group, the data protection keychain is the only
+        // one that has it.
+        if target.access_group.is_some() || keychain::data_protection() {
             let status = op(true)?;
             // With an access group, the entitlement is what the app asked
             // for: no quiet fallback to a keychain without groups.
