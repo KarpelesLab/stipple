@@ -5752,7 +5752,7 @@ jobs:
             grep -q 'extra checks:' "$DATA/tmp/nativegallery.log" 2>/dev/null && break
             sleep 1
           done
-          grep -E 'extra check|level 2|after a tap|drag list|live UISlider|live UIButton' "$DATA/tmp/nativegallery.log" || true
+          grep -E 'extra check|level 2|after a tap|drag list|live UISlider|live UIButton|nativegallery: trace' "$DATA/tmp/nativegallery.log" || true
           grep -q 'nativegallery extra checks: passed' "$DATA/tmp/nativegallery.log"
 
       # The simulator can't script touches or typing, so touchdemo drives
@@ -6449,9 +6449,12 @@ jobs:
           grep -q "cameraview: selftest passed" "$LOG"
 
       # URLs that open the app (App::on_open_url): touchdemo's bundle claims
-      # the stipple-demo scheme (CFBundleURLTypes), and `simctl openurl`
-      # opens it as a link would: the URL launches the app (the scene's
-      # connection options) and then reaches it running
+      # the stipple-demo scheme (CFBundleURLTypes), and an XCUITest
+      # (StippleOpenURLTests) opens it as a link would, through the system
+      # (XCUIDevice.system.open; `simctl openurl` never started the app on
+      # the runner's simulator), answering iOS's "Open in …?" prompt if it
+      # shows: the URL launches the app (the scene's connection options) and
+      # then reaches it running
       # (scene:openURLContexts:); touchdemo logs each. Universal links need a
       # domain's apple-app-site-association and a signed entitlement, which
       # the simulator can't check here. Not blocking until it has passed.
@@ -6483,14 +6486,19 @@ jobs:
             echo "missing: $1"; cat "$LOG" || true
             return 1
           }
-          # Cold: the URL launches the app.
-          xcrun simctl openurl "$DEV" 'stipple-demo://callback?code=1'
-          wait_for 'touchdemo: opened url "stipple-demo://callback?code=1"'
-          sleep 2
-          # Warm: the running app hears the next one.
-          xcrun simctl openurl "$DEV" 'stipple-demo://callback?code=2'
-          wait_for 'touchdemo: opened url "stipple-demo://callback?code=2"'
+          [ -d .github/a11y/ios/StippleAX.xcodeproj ] || (cd .github/a11y/ios && xcodegen generate)
+          status=0
+          xcodebuild test -project .github/a11y/ios/StippleAX.xcodeproj -scheme StippleAXTests \
+            -destination "platform=iOS Simulator,id=$DEV" \
+            -only-testing:StippleAXTests/StippleOpenURLTests \
+            -derivedDataPath "$RUNNER_TEMP/stipple-ax" > visual_output/xcuitest-urls.log 2>&1 || status=$?
           xcrun simctl io "$DEV" screenshot visual_output/stipple-ios-open-url.png || true
+          grep "stipple-url:" visual_output/xcuitest-urls.log || true
+          grep -E "error:|Test Suite .*(passed|failed)|TEST (SUCCEEDED|FAILED)" visual_output/xcuitest-urls.log | tail -20 || true
+          # Cold, then warm.
+          wait_for 'touchdemo: opened url "stipple-demo://callback?code=1"'
+          wait_for 'touchdemo: opened url "stipple-demo://callback?code=2"'
+          [ "$status" = 0 ]
           grep -E "touchdemo: (opened url|lifecycle)" "$LOG"
           [ "$(grep -c 'touchdemo: opened url' "$LOG")" -eq 2 ]
 
