@@ -209,7 +209,9 @@ is the largest the content has a use for, where that is finite. The App
 measures them each time it builds the view, gives them to the window when
 they change, and resizes the window into them: a view that gets a wider
 row grows its window. No second layout pass runs for it; it reuses the
-same measuring.
+same measuring, and a build that measures as the last one did (only
+colors, decoration or handlers changed, as when a button is hovered) keeps
+the limits it had rather than measuring them again.
 
 What counts toward the smallest size:
 

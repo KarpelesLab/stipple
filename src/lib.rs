@@ -1593,14 +1593,14 @@ impl<S: 'static> Pane<S> {
         self.transitions.end();
 
         let size = self.layout_size();
-        // The window's size limits follow the view's.
-        self.limits
-            .measure(&element, &self.attrs, size.width, follows_window, font);
         let win = Rect::from_xywh(0.0, 0.0, size.width, size.height);
         // A right-to-left theme mirrors the view and its overlays.
         let dir = theme.layout_direction;
         let rtl = dir.is_rtl();
         let main = layout_with_direction(&element, win, font, dir);
+        // The window's size limits follow the view's.
+        self.limits
+            .measure(element, &self.attrs, size.width, follows_window, font);
 
         // Compose the main tree with any floating overlay layers under one
         // routable/paintable root: each overlay (with a scrim behind a modal

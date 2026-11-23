@@ -24,7 +24,7 @@ use crate::render::{Color, ImageSource};
 use core::fmt;
 use core::ops::Range;
 use oxideav_core::{Group, LineJoin, Node, Paint, Stroke, Transform2D};
-use oxideav_scribe::{Face, FaceChain, PositionedGlyph, Shaper};
+use oxideav_scribe::{Face, PositionedGlyph, Shaper};
 use std::sync::Arc;
 
 /// A shapeable font: a family (its regular, bold, italic … faces) drawn in
@@ -60,10 +60,39 @@ impl core::hash::Hash for Font {
 /// variant (so per family, style and fallback chain). Cleared wholesale when
 /// it grows past [`ShapeCache::MAX`], which a UI's working set of strings
 /// stays well under.
+///
+/// Views rebuild every frame and measure the same strings many times per
+/// layout (and again for the window's size limits), so a hit is made cheap:
+/// looked up by `&str` without building a key, hashed with
+/// [`FastHash`](super::glyph_mask::FastHash) rather than SipHash, and handed
+/// out as a shared [`Shaped`] (its width summed once) rather than a copy of
+/// its glyphs.
 #[derive(Default)]
-pub(crate) struct ShapeCache(
-    std::sync::Mutex<std::collections::HashMap<(String, u32), Vec<PositionedGlyph>>>,
-);
+pub(crate) struct ShapeCache(std::sync::Mutex<ShapeMap>);
+
+/// Runs by size (in 1/64 px), then by text, and how many there are.
+#[derive(Default)]
+pub(crate) struct ShapeMap {
+    by_size: std::collections::HashMap<
+        u32,
+        std::collections::HashMap<Box<str>, Arc<Shaped>, super::glyph_mask::FastHash>,
+        super::glyph_mask::FastHash,
+    >,
+    len: usize,
+}
+
+/// A run shaped once, as the cache keeps it.
+pub(crate) struct Shaped {
+    pub(crate) glyphs: Vec<PositionedGlyph>,
+    /// The sum of the glyphs' advances.
+    pub(crate) width: f64,
+    /// Whether a glyph is missing from every face (a system fallback may
+    /// have it).
+    pub(crate) missing: bool,
+    /// Whether the text may hold an emoji sequence (the system's emoji
+    /// family may draw it).
+    pub(crate) emoji: bool,
+}
 
 impl ShapeCache {
     const MAX: usize = 4096;
@@ -71,30 +100,41 @@ impl ShapeCache {
     /// Forget every run (the chain they were shaped with changed).
     pub(crate) fn clear(&self) {
         if let Ok(mut map) = self.0.lock() {
-            map.clear();
+            *map = ShapeMap::default();
         }
     }
 
-    pub(crate) fn shape(
+    /// `text` at `size_px`, shaped through `chain` (asked for only when
+    /// the cache doesn't have it).
+    pub(crate) fn shape<C: core::ops::Deref<Target = Chain>>(
         &self,
-        chain: &FaceChain,
+        chain: impl FnOnce() -> C,
         text: &str,
         size_px: f64,
-    ) -> Vec<PositionedGlyph> {
-        let key = (text.to_string(), (size_px * 64.0).round() as u32);
+    ) -> Arc<Shaped> {
+        let size = (size_px * 64.0).round() as u32;
         if let Ok(map) = self.0.lock()
-            && let Some(glyphs) = map.get(&key)
+            && let Some(hit) = map.by_size.get(&size).and_then(|m| m.get(text))
         {
-            return glyphs.clone();
+            return hit.clone();
         }
-        let glyphs = super::shaping::shape(chain, text, size_px as f32);
+        let glyphs = super::shaping::shape(&chain(), text, size_px as f32);
+        let shaped = Arc::new(Shaped {
+            width: glyphs.iter().map(|g| g.x_advance).sum::<f32>() as f64,
+            missing: glyphs.iter().any(|g| g.glyph_id == 0),
+            emoji: super::emoji_seq::may_have_sequences(text),
+            glyphs,
+        });
         if let Ok(mut map) = self.0.lock() {
-            if map.len() >= Self::MAX {
-                map.clear();
+            if map.len >= Self::MAX {
+                *map = ShapeMap::default();
             }
-            map.insert(key, glyphs.clone());
+            let runs = map.by_size.entry(size).or_default();
+            if runs.insert(text.into(), shaped.clone()).is_none() {
+                map.len += 1;
+            }
         }
-        glyphs
+        shaped
     }
 }
 
@@ -277,10 +317,7 @@ impl Font {
 
     /// Summed advance width of a single line (no newlines) at `size_px`.
     fn line_width(&self, line: &str, size_px: f64) -> f64 {
-        self.shape_cached(line, size_px)
-            .iter()
-            .map(|g| g.x_advance)
-            .sum::<f32>() as f64
+        self.shaped_run(line, size_px).width
     }
 
     /// Measure the rendered size of `text` at `size_px`: the widest line's

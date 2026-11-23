@@ -7,7 +7,7 @@
 //! `min_size`/`max_size` narrow them, and what comes out is given the window
 //! when it changes, the window resized into it when it's outside.
 
-use crate::core::{Element, content_limits, natural_size};
+use crate::core::{Element, content_limits, natural_size, same_measure};
 use crate::geometry::Size;
 use crate::platform::{Window, WindowAttributes};
 use crate::render::Font;
@@ -38,6 +38,11 @@ pub(crate) struct Limits {
     sent: Option<SizeLimits>,
     /// The window's size when it was last asked into its limits.
     asked_at: Option<Size>,
+    /// What [`layout`](Self::layout) was measured from: the view's root,
+    /// the width, the font, and how many times fonts' chains had grown.
+    /// A rebuild that measures alike (only colors or handlers changed, a
+    /// hovered button) keeps the limits rather than measuring again.
+    measured_from: Option<(Element, f64, Option<Font>, u64)>,
 }
 
 impl Limits {
@@ -45,9 +50,12 @@ impl Limits {
     /// say: nothing when the window doesn't follow its content, or when the
     /// content follows the window (the view read its size: limits from such
     /// content would chase the window, which would chase them).
+    ///
+    /// The root is kept (it was built to be dropped after layout) for the
+    /// next build to compare with.
     pub(crate) fn measure(
         &mut self,
-        root: &Element,
+        root: Element,
         attrs: &WindowAttributes,
         width: f64,
         follows_window: bool,
@@ -56,11 +64,23 @@ impl Limits {
         if !RESIZABLE_WINDOWS {
             return;
         }
-        self.layout =
-            (attrs.layout_limits && !follows_window).then(|| content_limits(root, width, font));
         if self.want_natural {
-            self.natural = Some(natural_size(root, font));
+            self.natural = Some(natural_size(&root, font));
         }
+        if !attrs.layout_limits || follows_window {
+            self.layout = None;
+            self.measured_from = None;
+            return;
+        }
+        let grown = crate::render::font::chains_grown();
+        let same = self.layout.is_some()
+            && self.measured_from.as_ref().is_some_and(|(r, w, f, g)| {
+                *w == width && f.as_ref() == font && *g == grown && same_measure(r, &root)
+            });
+        if !same {
+            self.layout = Some(content_limits(&root, width, font));
+        }
+        self.measured_from = Some((root, width, font.cloned(), grown));
     }
 
     /// Ask the next build for the content's natural size (or stop).

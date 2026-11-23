@@ -421,8 +421,19 @@ impl Variant {
         if Arc::ptr_eq(&chain, from) {
             *chain = Arc::new(longer);
             self.shapes.clear();
+            CHAINS_GREW.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
     }
+}
+
+/// How many times a font's chain has grown (a system fallback loaded),
+/// across all fonts: text measured before may measure otherwise since, so
+/// what keeps measurements (the window's size limits) measures again.
+static CHAINS_GREW: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// See [`CHAINS_GREW`].
+pub(crate) fn chains_grown() -> u64 {
+    CHAINS_GREW.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// The installed family `name` resolves to (see [`Font::from_family`]),
@@ -657,18 +668,25 @@ impl Font {
     /// fallbacks on, a glyph missing from every face first loads the system
     /// family that has it (see [`system_fallback_for`]) and shapes again.
     pub(crate) fn shape_cached(&self, text: &str, size_px: f64) -> Vec<PositionedGlyph> {
-        let mut glyphs = self.variant.shapes.shape(&self.chain(), text, size_px);
+        self.shaped_run(text, size_px).glyphs.clone()
+    }
+
+    /// [`shape_cached`](Self::shape_cached)'s run as the cache shares it,
+    /// with its width, for callers that only read it.
+    pub(crate) fn shaped_run(&self, text: &str, size_px: f64) -> Arc<crate::render::text::Shaped> {
+        let shapes = &self.variant.shapes;
+        let mut shaped = shapes.shape(|| self.chain(), text, size_px);
         // A few rounds: Hangul tries the CJK family, then a Korean one.
         for _ in 0..3 {
             if !self.family.system_fallbacks
-                || !(glyphs.iter().any(|g| g.glyph_id == 0) || self.wants_color_emoji(text))
+                || !(shaped.missing || (shaped.emoji && self.wants_color_emoji(text)))
                 || !self.load_system_fallbacks(text)
             {
                 break;
             }
-            glyphs = self.variant.shapes.shape(&self.chain(), text, size_px);
+            shaped = shapes.shape(|| self.chain(), text, size_px);
         }
-        glyphs
+        shaped
     }
 
     /// Whether `text` has an emoji sequence (a keycap, a flag, an emoji
@@ -676,7 +694,8 @@ impl Font {
     /// tried: its characters may all be in the text font (digits, a
     /// monochrome heart), but the sequence asks for the color emoji.
     fn wants_color_emoji(&self, text: &str) -> bool {
-        !self.chain().system.contains(&"emoji")
+        crate::render::emoji_seq::may_have_sequences(text)
+            && !self.chain().system.contains(&"emoji")
             && !crate::render::emoji_seq::sequences(text).is_empty()
     }
 
@@ -733,8 +752,8 @@ impl Font {
     /// it's ready.
     pub fn has_glyph(&self, c: char) -> bool {
         let mut buf = [0u8; 4];
-        let glyphs = self.shape_cached(c.encode_utf8(&mut buf), 16.0);
-        !glyphs.is_empty() && glyphs.iter().all(|g| g.glyph_id != 0)
+        let shaped = self.shaped_run(c.encode_utf8(&mut buf), 16.0);
+        !shaped.glyphs.is_empty() && !shaped.missing
     }
 
     /// The fonts consulted, in order, for characters this one lacks.

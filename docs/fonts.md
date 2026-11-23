@@ -324,6 +324,11 @@ monochrome one. Text with a sequence loads the system's `emoji` family if
 the chain doesn't have it yet, even when the text font covers every
 character (the digit and the keycap mark of 1️⃣).
 
+Text without a pictograph, a regional indicator or a keycap mark (any
+ASCII text, most of a UI's) skips the search for sequences altogether, and
+the shaping cache remembers whether a run may have one, so a cached run
+costs nothing more for it.
+
 `fontdemo --emoji` draws each kind of sequence through the system's fonts
 and checks it is one emoji wide and in color; CI runs it on Linux (Noto
 Color Emoji), Windows (Segoe UI Emoji, which has no country flags: they stay

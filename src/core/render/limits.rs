@@ -426,6 +426,152 @@ fn grid_rows(columns: usize, children: &[Element]) -> usize {
     cells.div_ceil(columns.max(1))
 }
 
+/// Whether `a` and `b` measure alike: everything [`content_limits`] and
+/// [`natural_size`] read of them (their layout, scrolling and wrapping,
+/// their text with its style, images, and so on down their children) is
+/// equal; what only paints or routes input (colors, decoration, handlers,
+/// transforms, semantics) may differ. A rebuilt view that only changed
+/// those (a hovered button's fill) keeps the limits measured before.
+///
+/// Every field is named, so a new one has to be sorted here.
+pub(crate) fn same_measure(a: &Element, b: &Element) -> bool {
+    let Element {
+        layout,
+        decoration,
+        background: _,
+        action: _,
+        focus: _,
+        drag: _,
+        context: _,
+        drop: _,
+        drag_source: _,
+        pointer: _,
+        caret: _,
+        selection: _,
+        preedit: _,
+        keyboard: _,
+        text_pos: _,
+        wrap,
+        scroll,
+        scroll_x,
+        scroll_gutters,
+        clip: _,
+        native: _,
+        cursor: _,
+        semantics: _,
+        layout_direction,
+        transform: _,
+        opacity: _,
+        offstage: _,
+        hit_through: _,
+        indicator: _,
+        reactive: _,
+        kind,
+    } = a;
+    // Only whether it has any decoration counts (an undecorated empty
+    // stack is a spacer, see `is_spacer`).
+    let plain = |d: &crate::core::element::BoxStyle| *d == Default::default();
+    if *layout != b.layout
+        || *wrap != b.wrap
+        || scroll.is_some() != b.scroll.is_some()
+        || scroll_x.is_some() != b.scroll_x.is_some()
+        || *scroll_gutters != b.scroll_gutters
+        || *layout_direction != b.layout_direction
+        || plain(decoration) != plain(&b.decoration)
+    {
+        return false;
+    }
+    let children = |x: &[Element], y: &[Element]| {
+        x.len() == y.len() && x.iter().zip(y).all(|(x, y)| same_measure(x, y))
+    };
+    match (kind, &b.kind) {
+        (
+            ElementKind::Text {
+                text,
+                size,
+                color: _,
+                direction,
+                underline: _,
+                style,
+            },
+            ElementKind::Text {
+                text: text2,
+                size: size2,
+                direction: direction2,
+                style: style2,
+                ..
+            },
+        ) => text == text2 && size == size2 && direction == direction2 && style == style2,
+        (
+            ElementKind::Stack {
+                axis,
+                gap,
+                main_align,
+                cross_align,
+                children: c,
+            },
+            ElementKind::Stack {
+                axis: axis2,
+                gap: gap2,
+                main_align: main2,
+                cross_align: cross2,
+                children: c2,
+            },
+        ) => {
+            axis == axis2
+                && gap == gap2
+                && main_align == main2
+                && cross_align == cross2
+                && children(c, c2)
+        }
+        (
+            ElementKind::Grid {
+                columns,
+                rows,
+                column_gap,
+                row_gap,
+                align,
+                children: c,
+            },
+            ElementKind::Grid {
+                columns: columns2,
+                rows: rows2,
+                column_gap: column_gap2,
+                row_gap: row_gap2,
+                align: align2,
+                children: c2,
+            },
+        ) => {
+            columns == columns2
+                && rows == rows2
+                && column_gap == column_gap2
+                && row_gap == row_gap2
+                && align == align2
+                && children(c, c2)
+        }
+        (
+            ElementKind::Layers {
+                align,
+                children: c,
+                flow,
+            },
+            ElementKind::Layers {
+                align: align2,
+                children: c2,
+                flow: flow2,
+            },
+        ) => align == align2 && flow == flow2 && children(c, c2),
+        (ElementKind::Image { .. }, _)
+        | (ElementKind::Leaf, _)
+        | (ElementKind::Viewport { .. }, _)
+        | (ElementKind::Canvas { .. }, _) => kind == &b.kind,
+        (ElementKind::Text { .. }, _)
+        | (ElementKind::Stack { .. }, _)
+        | (ElementKind::Grid { .. }, _)
+        | (ElementKind::Layers { .. }, _) => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -536,5 +682,35 @@ mod tests {
     fn the_natural_size_is_the_unwrapped_content() {
         let col = Element::stack(Axis::Vertical, vec![fixed(120.0, 20.0), fixed(60.0, 30.0)]);
         assert_eq!(natural_size(&col, None), Size::new(120.0, 50.0));
+    }
+
+    #[test]
+    fn paint_only_changes_measure_alike() {
+        use crate::render::Color;
+        let tree = |fill: Color, text: &str, w: f64| {
+            Element::stack(
+                Axis::Vertical,
+                vec![
+                    Element::boxed(BoxStyle::filled(fill)).width(w).height(10.0),
+                    Element::text(text, 14.0, fill),
+                ],
+            )
+        };
+        let a = tree(Color::rgb(0, 0, 0), "Save", 40.0);
+        // Another fill and text color: the same limits.
+        assert!(same_measure(&a, &tree(Color::rgb(200, 0, 0), "Save", 40.0)));
+        // Other text, another size, another child: measured again.
+        assert!(!same_measure(&a, &tree(Color::rgb(0, 0, 0), "Saved", 40.0)));
+        assert!(!same_measure(&a, &tree(Color::rgb(0, 0, 0), "Save", 41.0)));
+        let mut more = tree(Color::rgb(0, 0, 0), "Save", 40.0);
+        if let ElementKind::Stack { children, .. } = &mut more.kind {
+            children.push(fixed(1.0, 1.0));
+        }
+        assert!(!same_measure(&a, &more));
+        // A spacer and a decorated empty box differ.
+        assert!(!same_measure(
+            &crate::widgets::spacer(),
+            &crate::widgets::spacer().fill(Color::rgb(1, 2, 3))
+        ));
     }
 }

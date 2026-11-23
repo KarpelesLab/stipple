@@ -25,7 +25,7 @@ use crate::platform::native::NativeState;
 use crate::render::{Color, Font, Scene, TextDirection, TextLayout};
 
 mod limits;
-pub(crate) use limits::{content_limits, natural_size};
+pub(crate) use limits::{content_limits, natural_size, same_measure};
 
 /// Neutral fill painted into an embedded-content viewport before its content is
 /// composited in, so the reserved area reads as a defined surface (a dark slate

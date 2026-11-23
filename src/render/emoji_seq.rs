@@ -71,10 +71,25 @@ fn is_emoji_presentation(c: char) -> bool {
         | 0x1F90C..=0x1F93A | 0x1F93C..=0x1F945 | 0x1F947..=0x1F9FF | 0x1FA70..=0x1FAFF)
 }
 
+/// Whether `text` may hold an emoji sequence: every sequence has a
+/// pictograph, a regional indicator or a keycap mark in it, none of them
+/// ASCII. Shaping asks on every call, cached or not, so plain text (most
+/// of it ASCII) answers without a scan of its characters or an
+/// allocation.
+pub(crate) fn may_have_sequences(text: &str) -> bool {
+    !text.is_ascii()
+        && text.chars().any(|c| {
+            (c as u32) >= 0xA9 && (is_pictographic(c) || is_regional_indicator(c) || c == KEYCAP)
+        })
+}
+
 /// The byte ranges of `text`'s emoji sequences, in order: sequences of
 /// two characters or more, and lone emoji that draw as emoji by default
 /// (other lone pictographs shape as any character).
 pub(crate) fn sequences(text: &str) -> Vec<Range<usize>> {
+    if !may_have_sequences(text) {
+        return Vec::new();
+    }
     let chars: Vec<(usize, char)> = text.char_indices().collect();
     let end_of = |k: usize| chars.get(k).map_or(text.len(), |&(i, _)| i);
     let at = |k: usize| chars.get(k).map(|&(_, c)| c);
@@ -154,6 +169,12 @@ mod tests {
         assert!(seqs("123 #* \u{263A} \u{1F1EF} \u{1F600}\u{FE0E}").is_empty());
         assert!(seqs("\u{0915}\u{094D}\u{200D}\u{0937}").is_empty());
         assert!(seqs("\u{2764}\u{FE0E}").is_empty());
+        // Plain text never gets as far as the scan.
+        assert!(!may_have_sequences("Cell 12.3 #* 0123456789"));
+        assert!(!may_have_sequences("caf\u{E9} \u{B7} na\u{EF}ve \u{3042}"));
+        assert!(may_have_sequences("1\u{20E3}"));
+        assert!(may_have_sequences("\u{1F1EF}"));
+        assert!(may_have_sequences("\u{A9}"));
         // A lone emoji that is one by default.
         assert_eq!(seqs("a\u{1F600}b"), ["\u{1F600}"]);
         // Three regional indicators: one flag, then a lone letter.
