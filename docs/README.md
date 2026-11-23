@@ -817,8 +817,9 @@ emulators (passing on local API 34 and 30 emulators); the Linux and Windows
 steps are required. The macOS selftest passed through the login keychain
 fallback, but the cross-process read failed until a fix that passed in a CI
 scratch run (non-blocking until it has passed on master); the iOS
-simulator's round trip fails with `errSecMissingEntitlement`, as the bundle
-CI installs carries no application identifier (a warning). See
+simulator's round trip passes and is required, the app's entitlements
+linked into its executable's `__TEXT,__entitlements` section as Xcode does
+for the simulator (`cargo stipple ios --simulator` does the same). See
 [secure-storage.md](secure-storage.md).
 
 ⁹³ In a window, buttons, switches, sliders, progress bars and selects (and

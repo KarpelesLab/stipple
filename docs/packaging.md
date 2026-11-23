@@ -219,7 +219,15 @@ rustup target add aarch64-apple-ios aarch64-apple-ios-sim
 ```
 
 **The simulator.** `cargo-stipple ios --simulator` builds for
-`aarch64-apple-ios-sim` and signs ad hoc:
+`aarch64-apple-ios-sim` and signs ad hoc. As Xcode does for the simulator,
+the app's entitlements are linked into its executable (`cargo rustc` with
+`-sectcreate __TEXT __entitlements`, and their DER form from macOS's `derq`
+in `__TEXT,__ents_der`), where the simulator reads them: an application
+identifier and a keychain access group (`<team>.<id>`, the team from
+`STIPPLE_IOS_TEAM_ID` or `SIMULATOR`), so the Keychain
+([secure-storage.md](secure-storage.md)) works, then the manifest's
+entitlements. (An ad hoc signature carrying an application identifier
+doesn't launch.)
 
 ```sh
 xcrun simctl install booted "target/stipple-package/ios-sim/QR Master.app"

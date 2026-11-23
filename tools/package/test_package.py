@@ -427,6 +427,31 @@ class IosTests(unittest.TestCase):
     def test_strings(self):
         self.assertEqual(ios._strings_file({"A": 'say "hi"'}), '"A" = "say \\"hi\\"";\n')
 
+    def test_simulator_entitlements(self):
+        m = manifest(ios={"app-groups": ["group.com.example.app"]})
+        ent = ios.simulator_entitlements(m, env={})
+        self.assertEqual(ent["application-identifier"], "SIMULATOR.com.example.app")
+        self.assertEqual(ent["keychain-access-groups"], ["SIMULATOR.com.example.app"])
+        self.assertEqual(ent["com.apple.security.application-groups"], ["group.com.example.app"])
+        ent = ios.simulator_entitlements(m, env={"STIPPLE_IOS_TEAM_ID": "ABCDE12345"})
+        self.assertEqual(ent["keychain-access-groups"], ["ABCDE12345.com.example.app"])
+
+    def test_simulator_link_args(self):
+        ent = {"application-identifier": "T.com.example.app"}
+        with tempfile.TemporaryDirectory() as d:
+            args = ios.simulator_link_args(ent, d, derq="/nonexistent/derq")
+            self.assertEqual(args[0::2], ["-C"] * 8)
+            self.assertEqual(
+                [a.removeprefix("link-arg=") for a in args[1::2]][:6],
+                ["-Xlinker", "-sectcreate", "-Xlinker", "__TEXT", "-Xlinker", "__entitlements"],
+            )
+            path = Path(args[-1].removeprefix("link-arg="))
+            self.assertEqual(path.parent, Path(d))
+            self.assertEqual(plistlib.loads(path.read_bytes()), ent)
+            # Another content, another file (cargo relinks).
+            other = ios.simulator_link_args({"x": True}, d, derq="/nonexistent/derq")
+            self.assertNotEqual(other[-1], args[-1])
+
 
 def with_extension(groups=("group.com.example.app",), **ext):
     e = {"name": "Tunnel", "bin": "tunnel", "point": "com.apple.networkextension.packet-tunnel",

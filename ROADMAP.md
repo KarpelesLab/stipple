@@ -1979,10 +1979,12 @@ Most input only works on X11 today.
   against GNOME Keyring in a private session and on the Android emulators
   (both passing locally), and on Windows (required), macOS and the iOS
   simulator. On macOS the selftest passes through the login keychain, but
-  the cross-process read failed until a fix (passed in a CI scratch run);
-  the iOS simulator's round trip fails with `errSecMissingEntitlement`, the
-  bundle CI installs carrying no application identifier; both non-blocking,
-  as is the Android one. User authentication (Face ID, fingerprint) per item is
+  the cross-process read failed until a fix (passed in a CI scratch run;
+  non-blocking, as is the Android one). The iOS simulator's round trip
+  passes and is required: the app's entitlements (an application
+  identifier, a keychain access group) are linked into the executable's
+  `__TEXT,__entitlements` section as Xcode links a simulator build, by
+  `cargo stipple ios --simulator` too. User authentication (Face ID, fingerprint) per item is
   still to do. See [docs/secure-storage.md](docs/secure-storage.md)._
 - ✅ Message boxes (`AppHandle::message`, `platform::dialog::message`): a
   question with a kind (icon), buttons, a default and a cancel button and an

@@ -256,7 +256,11 @@ byte value, reads it back, replaces it and removes it). On Android,
   process stored (its attributes: reading its secret from `security`, another
   binary, would ask the user), and another process reading it back.
 - **iOS**: `touchdemo`'s self-test on the simulator logs the Keychain round
-  trip.
+  trip, in the bundle the visual job assembles and in the one
+  `cargo stipple ios --simulator` packages; both executables carry an
+  application identifier and a keychain access group in their
+  `__TEXT,__entitlements` section (and `__TEXT,__ents_der`), as Xcode links
+  a simulator build, where the simulator reads them.
 
 The Windows, macOS and iOS checks run on CI only. The Linux and Windows
 steps pass in CI and are required. On macOS the selftest passed (the data
@@ -266,9 +270,11 @@ process that only read went to the data protection keychain and missed
 the item in the login keychain. The keychain is now chosen up front from
 the process's signature, which passed in a CI scratch run; the step stays
 non-blocking until it has passed on master. The iOS simulator's round
-trip fails with `errSecMissingEntitlement`: the bundle CI installs carries
-no application identifier (one signed ad hoc into its code signature was
-refused a launch); it is a warning, not a failure. The data protection keychain of
+trip passes and is required in both jobs: it failed with
+`errSecMissingEntitlement` while the bundle carried no application
+identifier (one signed ad hoc into its code signature was refused a
+launch), and passes with the entitlements linked into the executable's
+section instead. The data protection keychain of
 a signed macOS app, and access groups shared with an extension, need
 signing that CI doesn't do: they are unverified.
 

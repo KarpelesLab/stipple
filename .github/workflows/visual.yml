@@ -5697,13 +5697,44 @@ jobs:
       # logs to its tmp dir, read back here.
       - name: Touch scrolling, gestures, back swipe, the keyboard, composition, accessibility and document pickers (touchdemo self-test)
         run: |
-          cargo build --release --example touchdemo --target aarch64-apple-ios-sim
+          # Linked with its entitlements (an application identifier and a
+          # keychain access group, for the Keychain) as Xcode links a
+          # simulator build: in the executable's __TEXT,__entitlements
+          # section (and their DER form in __TEXT,__ents_der), the bundle then
+          # signed ad hoc without them (tools/package/ios.py does the same).
+          ENT="$RUNNER_TEMP/touchdemo.xcent"
+          cat > "$ENT" <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>application-identifier</key><string>SIMULATOR.com.karpeleslab.stipple</string>
+            <key>keychain-access-groups</key><array><string>SIMULATOR.com.karpeleslab.stipple</string></array>
+          </dict></plist>
+          PLIST
+          SECTIONS=(__entitlements "$ENT")
+          if derq query -f xml -i "$ENT" -o "$ENT.der" --raw; then
+            SECTIONS+=(__ents_der "$ENT.der")
+          else
+            echo "::warning::no derq: touchdemo carries its entitlements as XML only"
+          fi
+          LINK=()
+          for ((i = 0; i < ${#SECTIONS[@]}; i += 2)); do
+            for a in -sectcreate __TEXT "${SECTIONS[i]}" "${SECTIONS[i+1]}"; do
+              LINK+=(-C link-arg=-Xlinker -C "link-arg=$a")
+            done
+          done
+          cargo rustc --release --example touchdemo --target aarch64-apple-ios-sim -- "${LINK[@]}"
+          otool -l target/aarch64-apple-ios-sim/release/examples/touchdemo | grep -A2 -E "sectname __(entitlements|ents_der)" || true
           cp target/aarch64-apple-ios-sim/release/examples/touchdemo Stipple.app/window
           # Its packaged files, in the bundle's assets/ (platform::assets).
           rm -rf Stipple.app/assets
           cp -R examples/touchdemo/assets Stipple.app/assets
+          codesign --force --sign - --timestamp=none Stipple.app
+          codesign -d --entitlements - Stipple.app 2>&1 || true
           xcrun simctl terminate "$DEV" com.karpeleslab.stipple || true
           xcrun simctl install "$DEV" Stipple.app
+          # The steps after this one change the bundle's files: no stale seal.
+          rm -rf Stipple.app/_CodeSignature
           # Start in light mode: the next step switches to dark.
           xcrun simctl ui "$DEV" appearance light || true
           SIMCTL_CHILD_TOUCHDEMO_SELFTEST=1 SIMCTL_CHILD_STIPPLE_APP_DEBUG=1 SIMCTL_CHILD_STIPPLE_DEBUG_WINDOWS=1 xcrun simctl launch \
@@ -5726,11 +5757,10 @@ jobs:
           grep -E "touchdemo: (app|dirs) " "$LOG" || true
           grep -qF 'touchdemo: app id=com.karpeleslab.stipple name="Stipple" version=1.0 build=1' "$LOG"
           grep -qE "touchdemo: dirs data=/.+/Library/Application Support cache=/.+/Library/Caches temp=/.+/tmp exist=true" "$LOG"
-          # platform::secure_store: a round trip through the Keychain (not
-          # blocking until it has passed on CI's simulators).
+          # platform::secure_store: a round trip through the Keychain, which
+          # the entitlements linked in above allow.
           grep -E "touchdemo: secure store " "$LOG" || true
-          grep -qF "touchdemo: secure store set=Ok(()) same=Ok(true) removed=Ok(true)" "$LOG" \
-            || echo "::warning::the Keychain round trip didn't pass on the simulator (not blocking yet)"
+          grep -qF "touchdemo: secure store set=Ok(()) same=Ok(true) removed=Ok(true)" "$LOG"
           # platform::assets reads the bundle's assets/ (resourcePath): the
           # file's size and FNV-1a hash as on disk, the listings, a missing
           # file, and an SVG loaded off the UI thread (AppHandle::load_asset).
@@ -6491,6 +6521,13 @@ jobs:
           cat "$LOG" || true
           grep -qF 'touchdemo: app id=com.karpeleslab.stipple name="Stipple Touch" version=1.2.3 build=7' "$LOG"
           grep -qE "touchdemo: assets dir=/.+/Stipple Touch\.app/assets$" "$LOG"
+          # The executable carries the entitlements the Keychain wants
+          # (cargo-stipple links them in its __TEXT,__entitlements section):
+          # a round trip through platform::secure_store.
+          APP="target/stipple-package/ios-sim/Stipple Touch.app"
+          otool -l "$APP/touchdemo" | grep -A2 -E "sectname __(entitlements|ents_der)" || true
+          grep -E "touchdemo: secure store " "$LOG" || true
+          grep -qF "touchdemo: secure store set=Ok(()) same=Ok(true) removed=Ok(true)" "$LOG"
           grep -qE "Stipple iOS: window shown, framebuffer [1-9][0-9]*x[1-9][0-9]*" "$DATA/tmp/stipple-ios.txt"
 
       # App extensions (examples/extensiondemo/package.toml): extensiondemo

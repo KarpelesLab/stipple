@@ -10,6 +10,7 @@ with the entitlements the profile grants. App extensions go in `PlugIns/`
 and are signed first (ios_extensions.py).
 """
 
+import hashlib
 import os
 import plistlib
 import shlex
@@ -319,6 +320,50 @@ def bundle_entitlements(bundle_id, profile, file, groups, extra=None):
     return ent
 
 
+# --- The simulator's entitlements ---------------------------------------------
+
+# The team part of a simulator build's application identifier when
+# STIPPLE_IOS_TEAM_ID doesn't give one (the simulator takes any).
+SIMULATOR_TEAM = "SIMULATOR"
+
+
+def simulator_entitlements(m, env=os.environ):
+    """What a simulator build is entitled to: its application identifier and
+    keychain access group (the Keychain refuses an app with neither:
+    errSecMissingEntitlement), then the app's own entitlements."""
+    team = env.get("STIPPLE_IOS_TEAM_ID") or SIMULATOR_TEAM
+    app_id = f"{team}.{m.ios_bundle_id}"
+    ent = {"application-identifier": app_id, "keychain-access-groups": [app_id]}
+    ent.update(bundle_entitlements(m.ios_bundle_id, None, m.ios_entitlements, m.ios_app_groups,
+                                   link_entitlements(m)))
+    return ent
+
+
+def simulator_link_args(ent, work, derq="derq"):
+    """The rustc arguments embedding `ent` in the executable, as Xcode links a
+    simulator build: the XML plist as `__TEXT,__entitlements`, and its DER
+    form (when macOS's derq is there) as `__TEXT,__ents_der`. The simulator
+    reads them there, not from the signature (an ad hoc signature carrying
+    application-identifier doesn't launch). The files are named by their
+    content, so that a change relinks."""
+    xml = plistlib.dumps(ent)
+    path = Path(work) / f"simulator-{hashlib.sha256(xml).hexdigest()[:16]}.xcent"
+    path.write_bytes(xml)
+    sections = [("__entitlements", path)]
+    der = Path(f"{path}.der")
+    try:
+        subprocess.run([derq, "query", "-f", "xml", "-i", str(path), "-o", str(der), "--raw"],
+                       check=True, capture_output=True)
+        sections.append(("__ents_der", der))
+    except (OSError, subprocess.CalledProcessError):
+        warn("no derq: the simulator build carries its entitlements as XML only")
+    args = []
+    for section, file in sections:
+        for a in ("-sectcreate", "__TEXT", section, str(file)):
+            args += ["-C", "link-arg=-Xlinker", "-C", f"link-arg={a}"]
+    return args
+
+
 def sign(m, app, work, simulator):
     """Sign the app (after its extensions: the app's seal covers them)."""
     return sign_bundle(
@@ -529,7 +574,18 @@ def package(m, args, target, target_dir, work, helper):
     if not os.environ.get("IPHONEOS_DEPLOYMENT_TARGET"):
         env["IPHONEOS_DEPLOYMENT_TARGET"] = m.ios_minimum
     log(f"building {target.name} for {triple}")
-    cargo_build(args.manifest_path, target, triple, args.profile, args.features, env)
+    if simulator:
+        # `cargo rustc`: the entitlements' sections go in the app's
+        # executable only, without rebuilding its dependencies.
+        cmd = ["cargo", "rustc", "--manifest-path", args.manifest_path, "--target", triple]
+        cmd += ["--release"] if args.profile == "release" else ["--profile", args.profile]
+        cmd += target.cargo_args()
+        if args.features:
+            cmd += ["--features", args.features]
+        cmd += ["--"] + simulator_link_args(simulator_entitlements(m), work)
+        run(cmd, env={**os.environ, **env})
+    else:
+        cargo_build(args.manifest_path, target, triple, args.profile, args.features, env)
     exe = target.artifact(target_dir, triple, args.profile, cdylib=False)
     if not exe.exists():
         raise PackageError(f"no {exe}: is the {target.kind} a binary?")
