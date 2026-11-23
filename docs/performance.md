@@ -237,7 +237,7 @@ iPhone runs only signed apps, so on iOS it's the simulator for now.
 Its `transition` frames are held to 8.3 ms at the 95th percentile (120 Hz;
 `perf/budgets.json`, platforms `android` and `ios`). CI runs both in the
 simulator and on the API 34 emulator (`gpu-ios-sim`, `gpu-android` in
-`visual.yml`, not blocking), and compile-checks the benchmark for phones
+`visual.yml`, both required), and compile-checks the benchmark for phones
 (the `mobile` job in `ci.yml`). Locally (November 2026), in the iOS 27
 simulator and on an API 35 arm64 emulator with the host's GPU, both on an
 Apple M5 Max, so a desktop GPU behind a translation layer, not a phone's:

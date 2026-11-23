@@ -317,7 +317,7 @@ App::new(Game::default(), view)
 motion and the total; `L` or Escape releases it. CI runs it on X11 under
 Xvfb with `--lock-test` (lock on the first click), moves the mouse with
 `xdotool mousemove_relative` and checks the motion and that the pointer
-stayed at the window's center (non-blocking for now). `App::set_pointer_locked`
+stayed at the window's center (required). `App::set_pointer_locked`
 locks as a platform would without a window, and `App::pointer_event` with
 `Event::PointerDelta` feeds motion, for unit tests.
 

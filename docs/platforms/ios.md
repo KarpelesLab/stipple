@@ -96,7 +96,7 @@ Inside an extension there is no `UIApplication` and no `App::run`, but
 `platform::dirs()`, `app_info()`, `shared_dir(group)` (the container the
 app and its extensions share), `preferred_languages()` and `locale()` work.
 CI packages it and runs the extension's executable in its bundle on the
-simulator (not blocking; passed in a CI trial run). A Network Extension provider runs on devices
+simulator (required). A Network Extension provider runs on devices
 only, and none has been tried yet.
 
 ## Layout
@@ -601,7 +601,7 @@ document pickers and cancels them (checking `presentedViewController` and the
 callbacks), presents them again and answers them through their delegate with a
 file it wrote (`simulate::pick_document`), posts a memory warning, and
 reads the notification permission. A part of its own (`touchdemo: mobile
-input passed`, not blocking in CI until it has passed there) types a dead
+input passed`, required in CI) types a dead
 key the way UIKit does (marked `´`, then `insertText:` of `é`; marked `ü`,
 then `unmarkText`), drops a text and a file on the pinch box through the
 view's drop delegate (`simulate::drop_item`: a stand-in session over real
@@ -609,7 +609,7 @@ view's drop delegate (`simulate::drop_item`: a stand-in session over real
 real drop's is), reads the trackpad recognizers' settings back
 (`simulate::pointer_status`) and scrolls the list through their action's
 code (`simulate::trackpad_scroll`). Another (`touchdemo: drag out and
-trackpad passed`, not blocking either) lifts its two drag sources through
+trackpad passed`, required too) lifts its two drag sources through
 the drag interaction's delegate (`simulate::lift_and_drop`: the items it
 answers, their providers' types and names, the lift's preview) and drops
 those items on the pinch box, which must get the text and a copy of the
@@ -680,8 +680,8 @@ All of these passed in the one CI run that reached them (an iPhone simulator
 on `macos-latest`), with the edit menu's *Paste* taking the text and Safari
 coming up. The `pbpaste` after the test timed out in that run (the test saw
 the pasteboard's change count move and `hasStrings` true), so the step now
-retries it and only warns when simctl can't read. The step doesn't block the
-job yet. By hand, with `touchdemo` installed as `com.karpeleslab.stipple`:
+retries it and only warns when simctl can't read. The step is required.
+By hand, with `touchdemo` installed as `com.karpeleslab.stipple`:
 
 ```sh
 brew install xcodegen

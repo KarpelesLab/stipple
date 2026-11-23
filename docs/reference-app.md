@@ -89,8 +89,8 @@ reaching every pane, the keys, and the translations. In CI, out of process:
 an AT-SPI walk on X11 (`.github/scripts/atspi-mediabrowser.sh`, the walk
 Orca's library does), a UI Automation walk on Windows
 (`.github/scripts/uia-roles.ps1`), and `axprobe` on macOS, which also presses
-Play through `AXPress`. All three are non-blocking for now; the AT-SPI one
-passes locally.
+Play through `AXPress`. The UI Automation and AX ones are required; the
+AT-SPI one passes locally and doesn't fail the job yet.
 
 ## Localized
 
@@ -133,7 +133,7 @@ Each step's frame is saved as a PNG (`--out DIR`). Then it opens the real
 window on the same folder for a few seconds (`--hold SECS`): the grid's
 thumbnails load on the workers, the list then shows a picture previewed, and
 timers check it before it quits. `--headless` skips the window. CI runs it
-on X11 and macOS (non-blocking) and on Windows (required), and keeps the PNGs and a screenshot
+on X11, macOS and Windows (required), and keeps the PNGs and a screenshot
 of the window.
 
 ## What the toolkit gained for it

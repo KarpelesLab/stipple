@@ -573,7 +573,7 @@ wrote), the device `.ipa` is checked (signature, icon catalog, plists, the
 `Payload/` layout), `extensiondemo` is packaged with its extension (the
 `.appex`'s plist, both signatures and their app-group entitlements; in the
 simulator the extension's executable, run in its bundle, reads what the app
-wrote in the shared container; not blocking, passed in a CI trial run), and the bundle is validated and split by bundletool and
+wrote in the shared container; required), and the bundle is validated and split by bundletool and
 the APK read back by `aapt2`, `apksigner` and `zipalign`. The
 `os-integration-linux` job packages `instancedemo` for Linux, validates its
 `.desktop` file, installs it, and lets a private session bus start it

@@ -932,8 +932,7 @@ node) and a foreign one taking `LINEAR` only. CI runs widgetsdemo
 and framepacing under sway on a `vkms` virtual display (its DRM backend and
 GLES renderer, on llvmpipe), the app on lavapipe and llvmpipe (Mesa exports
 through `udmabuf`), screenshots it with `grim` and checks the frames come at
-the display's 60 Hz (`visual-gpu-present`, not blocking yet; seen passing
-with both), noting whether that sway offers explicit sync (the runner's
+the display's 60 Hz (`visual-gpu-present`, required; passing with both), noting whether that sway offers explicit sync (the runner's
 sway 1.11 offers `linux-drm-syncobj` only when its renderer and DRM device
 do timeline syncobjs, which `vkms` with llvmpipe doesn't: no driver a
 runner has does, `vkms` and `vgem` lack `DRIVER_SYNCOBJ_TIMELINE`, so no
@@ -943,7 +942,7 @@ under headless Weston 14 (no `xdg-decoration`, `linux-dmabuf` from its GL
 renderer on llvmpipe, no explicit sync), checking Stipple draws the
 title bar and the GPU frames go in the subsurface through `linux-dmabuf`,
 with Vulkan (lavapipe) and GLES (llvmpipe), screenshotting it with
-`weston-screenshooter` (not blocking yet; seen passing on a scratch run).
+`weston-screenshooter` (required).
 
 Explicit sync against a real compositor: sway 1.11 (wlroots 0.19) built
 from source, its headless backend with the GLES renderer on an RTX 5080's
@@ -1035,11 +1034,11 @@ becoming fully hidden, and visible again, as `Event::Occluded`:
 
 | Platform | Hidden when | Checked |
 |---|---|---|
-| macOS | `windowDidChangeOcclusionState:` without `NSWindowOcclusionStateVisible` (minimized, covered, on another Space, the display asleep) | compile-checked; a non-blocking CI step miniaturizes `framepacing` on the CPU and on Metal, not seen run yet |
+| macOS | `windowDidChangeOcclusionState:` without `NSWindowOcclusionStateVisible` (minimized, covered, on another Space, the display asleep) | CI miniaturizes `framepacing` on the CPU and on Metal, required |
 | iOS | the app in the background (`Lifecycle::Background`, as before: UIKit posts it once every scene is) | lifecycle tests |
 | Windows | `IsIconic`, or cloaked (`DWMWA_CLOAKED`: another virtual desktop), read on resize, move, paint and focus changes; and a swap chain's `DXGI_STATUS_OCCLUDED` from `Present` | CI minimizes `framepacing` on the CPU and on Direct3D 11 (WARP), required: 0 presents in 3 s hidden, 60 (CPU) and 46 (WARP) in the second back |
-| X11 | unmapped (iconified by an ICCCM window manager), `_NET_WM_STATE_HIDDEN`, or `VisibilityNotify` saying `FullyObscured` (never under a compositing manager) | locally under xfwm4 on Xvfb (CPU, Vulkan and GLES on NVIDIA); CI under openbox, non-blocking |
-| Wayland | `xdg_toplevel`'s `suspended` state (`xdg_wm_base` version 6, now bound up to 6), or a frame callback unanswered for 500 ms (sway, which has no `suspended`; see below) | `suspended` against the scripted compositor; the frame callbacks locally under sway 1.11 (a workspace switch, on the CPU, Vulkan and GLES, with and without a title bar Stipple draws) and in CI under sway, non-blocking |
+| X11 | unmapped (iconified by an ICCCM window manager), `_NET_WM_STATE_HIDDEN`, or `VisibilityNotify` saying `FullyObscured` (never under a compositing manager) | locally under xfwm4 on Xvfb (CPU, Vulkan and GLES on NVIDIA); CI under openbox, required |
+| Wayland | `xdg_toplevel`'s `suspended` state (`xdg_wm_base` version 6, now bound up to 6), or a frame callback unanswered for 500 ms (sway, which has no `suspended`; see below) | `suspended` against the scripted compositor; the frame callbacks locally under sway 1.11 (a workspace switch, on the CPU, Vulkan and GLES, with and without a title bar Stipple draws) and in CI under sway, required |
 | Android | the activity's window destroyed (`onNativeWindowDestroyed`) until a new one comes | compile-checked |
 | Web | the canvas out of view or the tab hidden (an `IntersectionObserver`, `visibilitychange`), as before | headless Chrome |
 
@@ -1160,18 +1159,17 @@ Android emulator run (API 34) starts the demo built with `vk`, then with
 `cameraview` with each, its preview drawing the camera's buffers (those
 not blocking yet); `gpu-android` runs the corpus itself on that
 emulator with GLES and Vulkan, and `gpu-ios-sim` with Metal in the iOS
-simulator, each as a test executable (`tools/gpu-mobile.sh`; not blocking
-yet); the macOS visual
+simulator, each as a test executable (`tools/gpu-mobile.sh`; required); the macOS visual
 job runs the corpus on the runner's Metal device, prints the frame times, and
 screenshots `widgetsdemo` with `STIPPLE_RENDERER=metal`; the Windows visual
 job runs them on WARP and screenshots `widgetsdemo` with
-`STIPPLE_RENDERER=d3d11` (both required, having passed there; the macOS
-ones non-blocking). Both also run `nativegallery --gpu-check`, the native
-theme on Metal and on Direct3D 11 against the CPU (required on Windows). They all upload the frames. The
+`STIPPLE_RENDERER=d3d11` (both required, having passed there). Both also
+run `nativegallery --gpu-check`, the native theme on Metal and on Direct3D
+11 against the CPU (required on both). They all upload the frames. The
 `visual-gpu-present` jobs and the macOS and Windows visual jobs also run
 `spritedemo --selftest` drawn with their GPU (it fails if pixels were
 uploaded each frame) and `spritedemo --bench` on that GPU and on the CPU,
-not blocking yet.
+required.
 
 ## The default
 
@@ -1186,10 +1184,10 @@ stands (November 2026):
 
 | Criterion | macOS | iOS | Windows | Linux, X11 | Linux, Wayland | Android | Web |
 |---|---|---|---|---|---|---|---|
-| Presents straight to the window | **met**: Metal into a `CAMetalLayer`; CI screenshots `widgetsdemo` on the runner's (paravirtual) Metal, blocking; run on an M5 Max | **unverified**: the window's Metal layer is compile-checked only, never presented to on a device or the simulator (the executor itself runs there: see below) | **met on WARP only**: CI screenshots `widgetsdemo` on Direct3D 11 (required) and paces it (non-blocking, passing); never run on a hardware GPU | **met**: CI presents with Vulkan (lavapipe) and GLES (llvmpipe) on Xvfb, non-blocking (passing); run locally with Vulkan and GLES on an RTX 5080 (Xvfb, 60 presents a second) | **partly**: `dma-buf`s for every window (under a title bar Stipple draws, in a subsurface), explicit sync where the compositor has `linux-drm-syncobj`; CI under sway on `vkms` and headless Weston (client-side decorations) non-blocking, and under headless Mutter (Stipple's title bar, the GPU's frames in a subsurface under it) and KWin (server-side decorations), Vulkan and GLES each presenting `dma-buf`s at 60 frames a second, non-blocking (passing); never on a hardware GPU there; locally under sway 1.11 on an RTX 5080 with explicit sync (Vulkan and GLES), which no CI compositor can offer (no runner DRM driver does timeline syncobjs) | **met on the emulator only**: Vulkan and GLES on API 34, non-blocking | **met**: WebGPU or WebGL2 into the canvas |
-| Matches the CPU on the corpus in CI | **met**: `visual-macos`, Metal, blocking | **met on the simulator**: `gpu-ios-sim` spawns the corpus in CI's simulator (non-blocking, not seen yet); passed locally in the iOS 27 simulator, whose Metal is the Mac's GPU (an M5 Max; 107 tests, every comparison within tolerance, none fixed for it); never on an iPhone | **met on WARP**: `visual-windows`, required (93 tests) | **met**: `visual-gpu`, GLES on llvmpipe and Vulkan on lavapipe, blocking; also run locally on the RTX 5080 (104 tests, both APIs) | **met** (the same executors as X11) | **met on the emulator**: `gpu-android` runs it with GLES and Vulkan on API 34 (SwiftShader, non-blocking, not seen yet); passed locally on an API 35 arm64 emulator with both, on SwiftShader and on the host's GPU (an M5 Max through the emulator's gfxstream and MoltenVK; 106 tests each); never on a phone | **met, non-blocking**: `gpucompare.html` in headless Chrome (SwiftShader, flaky) |
+| Presents straight to the window | **met**: Metal into a `CAMetalLayer`; CI screenshots `widgetsdemo` on the runner's (paravirtual) Metal, blocking; run on an M5 Max | **unverified**: the window's Metal layer is compile-checked only, never presented to on a device or the simulator (the executor itself runs there: see below) | **met on WARP only**: CI screenshots `widgetsdemo` on Direct3D 11 (required) and paces it (non-blocking, passing); never run on a hardware GPU | **met**: CI presents with Vulkan (lavapipe) and GLES (llvmpipe) on Xvfb, required; run locally with Vulkan and GLES on an RTX 5080 (Xvfb, 60 presents a second) | **partly**: `dma-buf`s for every window (under a title bar Stipple draws, in a subsurface), explicit sync where the compositor has `linux-drm-syncobj`; CI under sway on `vkms` and headless Weston (client-side decorations), required, and under headless Mutter (Stipple's title bar, the GPU's frames in a subsurface under it) and KWin (server-side decorations), Vulkan and GLES each presenting `dma-buf`s at 60 frames a second, required; never on a hardware GPU there; locally under sway 1.11 on an RTX 5080 with explicit sync (Vulkan and GLES), which no CI compositor can offer (no runner DRM driver does timeline syncobjs) | **met on the emulator only**: Vulkan and GLES on API 34, non-blocking | **met**: WebGPU or WebGL2 into the canvas |
+| Matches the CPU on the corpus in CI | **met**: `visual-macos`, Metal, blocking | **met on the simulator**: `gpu-ios-sim` spawns the corpus in CI's simulator (required); passed locally in the iOS 27 simulator, whose Metal is the Mac's GPU (an M5 Max; 107 tests, every comparison within tolerance, none fixed for it); never on an iPhone | **met on WARP**: `visual-windows`, required (93 tests) | **met**: `visual-gpu`, GLES on llvmpipe and Vulkan on lavapipe, blocking; also run locally on the RTX 5080 (104 tests, both APIs) | **met** (the same executors as X11) | **met on the emulator**: `gpu-android` runs it with GLES and Vulkan on API 34 (SwiftShader, required); passed locally on an API 35 arm64 emulator with both, on SwiftShader and on the host's GPU (an M5 Max through the emulator's gfxstream and MoltenVK; 106 tests each); never on a phone | **met, non-blocking**: `gpucompare.html` in headless Chrome (SwiftShader, flaky) |
 | Benchmarks meet their targets on a hardware GPU | **met** on an M5 Max: 0.76 ms, 2.6 ms, 3.5 ms (locally; CI's runner has no hardware GPU) | **unverified** on an iPhone; in the simulator on an M5 Max: 0.96 ms, 3.1 ms, p95 5.6 ms (locally, `tools/gpu-mobile.sh ios-sim bench`; within the targets, but the simulator's Metal is a desktop GPU) | **unverified**: no hardware GPU run | **met with Vulkan** on an RTX 5080: 0.33 ms, 1.07 ms, p95 2.9 ms; **not with GLES**: 5.7 ms, 7.7 ms (p95 3.2 ms) (locally) | as X11 (the same offscreen benchmark) | **unverified** on a phone; on an emulator over an M5 Max: Vulkan 1.6 ms, 5.2 ms, p95 6.7 ms; GLES 13 ms, 17 ms, p95 8.4 ms (locally, `tools/gpu-mobile.sh android bench`; through the emulator's translation, not a phone's GPU) | **unverified** for the benchmark (it runs on the CPU in the module); a 2560×1600 widget frame takes 2.8 ms on WebGPU on an M5 Max |
-| Device loss and a missing GPU fall back in tests | **met**: `compare.rs` loses the runner's Metal device (blocking); the App's fallback on a stand-in | **met in the simulator**: `compare.rs` loses the Metal device there (locally; `gpu-ios-sim`, non-blocking); the App's fallback on a stand-in | **met on WARP** (non-blocking) | **met**: on lavapipe (blocking) and the RTX 5080 (locally) | **met** (the same executors) | **met on the emulator**: `compare.rs` loses the GLES and the Vulkan device (locally; `gpu-android`, non-blocking); the App's fallback on a stand-in | **met, non-blocking**: two lost devices in headless Chrome |
+| Device loss and a missing GPU fall back in tests | **met**: `compare.rs` loses the runner's Metal device (blocking); the App's fallback on a stand-in | **met in the simulator**: `compare.rs` loses the Metal device there (locally; `gpu-ios-sim`, required); the App's fallback on a stand-in | **met on WARP** (non-blocking) | **met**: on lavapipe (blocking) and the RTX 5080 (locally) | **met** (the same executors) | **met on the emulator**: `compare.rs` loses the GLES and the Vulkan device (locally; `gpu-android`, required); the App's fallback on a stand-in | **met, non-blocking**: two lost devices in headless Chrome |
 | **`Auto` draws on the GPU** | **yes**, on a hardware Metal device | no | no | **yes**, on a hardware Vulkan device | **yes**, on a hardware Vulkan device (run on one so far: sway on NVIDIA, locally) | no | **yes**, on a hardware GPU (since 6e) |
 
 So `Auto` draws on the GPU on macOS (Metal), on Linux (Vulkan, X11 and
@@ -1266,14 +1264,14 @@ Today:
   DRI3, and Wayland under sway); AMD and Intel, a real X server, and Mutter
   and KWin on a hardware GPU are yet to be tried.
 - Occlusion ([Occlusion](#occlusion)) has run on X11 and, in CI, on
-  Windows; macOS's is compile-checked (its CI step hasn't run yet); Wayland's
-  stalled frame callbacks under sway (locally, and in CI non-blocking),
+  Windows and macOS; Wayland's
+  stalled frame callbacks under sway (locally, and in CI, required),
   its `suspended` state against the scripted compositor only; Android's is
   compile-checked only, and a window covered by others is
   reported only on X11 without a compositing manager, on macOS, and by a
   Direct3D 11 swap chain.
 - On iOS the Metal executor runs the corpus in the simulator (locally and
-  in CI's non-blocking `gpu-ios-sim`), but presenting to a window's Metal
+  in CI's required `gpu-ios-sim`), but presenting to a window's Metal
   layer is compile-checked only, and nothing has run on an iPhone.
 - Only frames presented to a window are redrawn in part; a frame that is
   read back (`render_once`, the native benchmark's GPU runs, a Wayland

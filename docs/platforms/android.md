@@ -225,8 +225,8 @@ declaring them into the manifest it writes; see
 [`examples/androidservice`](../../examples/androidservice) has a `Service`
 and a `BroadcastReceiver` calling into Rust, and
 `examples/androidservice/test-on-device.sh` checks them on an emulator
-(passed on a local API 34 one and in CI trial runs on API 34; CI runs it
-there without blocking).
+(passed on a local API 34 one and in CI trial runs on API 34; CI packages
+it (required) and runs it there without blocking).
 
 **Reaching the Rust code.** The classes call into the app's library, the
 same `.so` the `NativeActivity` runs: a static initializer loads it with

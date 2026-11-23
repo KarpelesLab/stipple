@@ -322,8 +322,8 @@ U into the focused field, which must show the accent as a preedit and end in
 `éü`. It passed on a local API 34 emulator; CI runs it without blocking until
 it has passed there. `touchdemo`'s iOS self-test sends the view what UIKit
 sends for a dead key (the accent as marked text, then `insertText:` of the
-composed letter, or the letter marked and then `unmarkText`), also not
-blocking yet. Neither is a person typing on a real keyboard, and a real
+composed letter, or the letter marked and then `unmarkText`), required in
+CI. Neither is a person typing on a real keyboard, and a real
 iPad's hardware keyboard hasn't been tried.
 
 X11's XIM client runs against a real input method in CI: IBus started with
@@ -356,7 +356,7 @@ were refused the self-test would insert `日本` with `ITfInsertAtSelection`,
 and CI fails.) With `STIPPLE_TSF=0` TSF must stay off. No real IME is
 installed on the runner for this job, so what an input method does on its own (keys,
 candidates, display attributes, reconversion) isn't exercised here (the
-non-blocking attempt below tries the real one); the IMM32 fallback is build-checked only.
+`ime-windows` job below tries the real one); the IMM32 fallback is build-checked only.
 
 Wayland's `text-input-v3` runs against a real input method in CI:
 fcitx5 under headless sway (`.github/scripts/wayland-ime.sh`). fcitx5 binds
@@ -422,15 +422,14 @@ turns the IME back off. A failing run ends with `FAILED at <stage>`, the
 window's input state, and whether the window answers messages
 (`IsHungAppWindow`, a `WM_NULL` sent with a timeout); each line has the
 time. It has been
-required since it passed three runs in a row after those fixes. On macOS a non-blocking step of the
+required since it passed three runs in a row after those fixes. On macOS a required step of the
 `interaction-macos` job (`.github/scripts/ime-macos.sh`) compiles a small
 Swift helper that enables and selects the built-in Japanese input source
 (Kotoeri, romaji typing, with live conversion off) and posts the same keys
-as CGEvents. It hasn't been seen passing yet: whether a CLI process may
-post keys (Accessibility) and switch the input source there is what its
-runs will show; it logs the stage it stopped at. Until the macOS one
-passes, macOS input methods are also checked as protocol wiring (above) and
-by hand (below), and iOS by its protocol self-test.
+as CGEvents (posting keys needs the Accessibility permission, and the
+input source must take); it logs the stage it stopped at. macOS input
+methods are also checked as protocol wiring (above) and by hand (below),
+and iOS by its protocol self-test.
 
 ## Manual checklist
 
@@ -455,8 +454,7 @@ preedit) and `examples/textarea` for multi-line text.
 
 Record the platform, input method and version with any failure. CI covers:
 Japanese (Mozc) on X11 and Wayland, cancel on Wayland, pinyin and Korean on
-Wayland; Japanese on Windows (required); the macOS row runs in CI as a
-non-blocking attempt.
+Wayland; Japanese on Windows and macOS (required).
 
 ## Not yet
 
@@ -465,8 +463,7 @@ non-blocking attempt.
   asynchronous keys a stopped server never answers.
 - Reconversion and `attributedSubstringForProposedRange:` on macOS
   (Stipple doesn't hand the IME the field's text there).
-- A real input method required in CI on macOS (attempted, see
-  [Testing](#testing)), and on iOS, Android and the web.
+- A real input method required in CI on iOS, Android and the web.
 - Per-segment styling of the preedit (IMEs mark the segment being converted;
   Stipple shows the highlighted range as the selection and underlines all of
   it).

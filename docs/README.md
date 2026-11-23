@@ -160,8 +160,7 @@ runs against a real input method in CI (IBus with `--xim`: a dead key's preedit 
 and falling back when the server quits), and so does Wayland's
 `text-input-v3` (fcitx5 under sway: Japanese through Mozc with a cancel,
 Chinese pinyin, Korean Hangul). On Windows and macOS CI tries the
-Microsoft Japanese IME and Kotoeri without failing the run (not yet seen
-passing), so there only the protocol wiring is verified. See [ime.md](ime.md).
+Microsoft Japanese IME and Kotoeri (both required). See [ime.md](ime.md).
 ¹⁷ From the locale's Compose file, on X11 and Wayland. CI types dead keys and a
 compose sequence with `xdotool` (X11) and `wtype` (sway).
 ¹⁸ Linux has no system menu bar, so Stipple draws one in the window, with
@@ -344,8 +343,8 @@ store, composition sink and display attributes), with IMM32 when TSF can't
 be activated or `STIPPLE_TSF=0`. The text store's logic is unit-tested; CI
 activates TSF on the Windows runner and drives a composition through the real
 TSF manager (the app playing the input method), checking the preedit and the
-commit reach the field. A job that tries the real Microsoft Japanese IME
-runs without failing the workflow (not yet seen passing). See
+commit reach the field. A required job types Japanese through the real
+Microsoft Japanese IME. See
 [ime.md](ime.md#per-platform).
 ⁴⁹ The view is a `UIAccessibilityContainer` with one `UIAccessibilityElement`
 per node (label, value, traits, frame in screen coordinates; a double tap
@@ -538,8 +537,7 @@ yet run in CI). Value, Toggle, Selection / SelectionItem, ExpandCollapse,
 Scroll / ScrollItem and Text (ranges by character, word, line and document)
 patterns, property- and structure-changed events, and toasts announced
 with UIA's notification event, checked through their vtables and from the
-.NET client in a step that doesn't fail the job yet (not yet run on
-Windows). `ControllerFor` and tree items' `Level`, and patterns that click
+.NET client (required). `ControllerFor` and tree items' `Level`, and patterns that click
 bring a node scrolled out of view into view first. See
 [accessibility.md](accessibility.md#windows).
 
@@ -555,9 +553,9 @@ required). The focused node is `AXFocused` and the application's
 selected text range, checkboxes a value, scroll containers an
 `AXScrollArea` with a settable scroll bar,
 and tree swaps post value, selection, expansion and layout notifications;
-`axprobe --depth` checks them in a step that doesn't fail the job yet (not
-yet run). Title elements, linked elements, outline rows' disclosure and
-static text values (`axprobe --links`, not failing the job; build-checked).
+`axprobe --depth` checks them (passing in CI; required). Title elements,
+linked elements, outline rows' disclosure and static text values
+(`axprobe --links`, not failing the job; not yet seen passing in CI).
 See [accessibility.md](accessibility.md#macos).
 
 ⁶⁹ In the shared core, so the same everywhere: `Cx::memo` and `Cx::derive`,
@@ -592,7 +590,7 @@ Output stops while a phone app is in the background. See [audio.md](audio.md).
 picture from a MacBook's camera, and the permission prompt answers). On the
 iOS simulator, which has no camera, CI checks that opening one says so. On
 the Android emulator CI grants the permission and reads frames from its
-virtual camera (not yet required to pass). The web glue and the iOS and
+virtual camera (required). The web glue and the iOS and
 Android permission prompts are build-checked only. The preview goes through
 the renderer, a conversion per frame shown; with the Metal renderer the
 frame's `IOSurface` is drawn without a copy (compile-checked). See
@@ -657,7 +655,7 @@ keyboard (the Generic key map's dead acute and diaeresis), which must give
 text system composes, handing the accent over as marked text and the letter
 through `insertText:` (or marked, then `unmarkText`), which the backend's
 `UITextInput` takes as a preedit and a commit; `touchdemo`'s simulator
-self-test drives that sequence through objc dispatch (not blocking yet); no
+self-test drives that sequence through objc dispatch (required in CI); no
 real hardware keyboard types in CI. See [ime.md](ime.md#dead-keys-on-mobile-hardware-keyboards).
 ⁷⁹ iOS: a `UIDropInteraction` on the view (iPad split view and Slide Over,
 and iPhone apps since iOS 15); text and links as text, images and files
@@ -669,7 +667,7 @@ emulator drops a text and a `MediaStore` `content:` URI the app drags
 itself with `View.startDragAndDrop` (`DRAG_FLAG_GLOBAL`), through the
 system's `DragEvent`s (passed on local API 34 and 30 emulators, not blocking in CI
 yet); `touchdemo`'s iOS self-test drives the drop delegate with a stand-in
-session over real item providers (not blocking yet). Drags between two apps
+session over real item providers (required in CI). Drags between two apps
 aren't run in CI, and dragging out of the app isn't done on either. See
 [drag-and-drop.md](drag-and-drop.md#ios-and-android).
 ⁸⁰ iPadOS 13.4 and later: a `UIPanGestureRecognizer` taking only indirect
@@ -682,12 +680,11 @@ context menu), and the app's cursor as the pointer's shape
 (`UIPointerInteraction`: the I-beam, hidden). The conversion and the
 deceleration are unit-tested; `touchdemo`'s simulator self-test reads the
 recognizers' settings back and feeds scroll steps, a flick, a secondary
-click and hovers through the same code (not blocking yet; passed in CI, one
-run); a real trackpad
+click and hovers through the same code (required in CI); a real trackpad
 or mouse isn't used in CI. See
 [platforms/ios.md](platforms/ios.md#trackpad-and-mouse).
 ⁸¹ CI drives `touchdemo` on the iPhone simulator from an XCUITest runner
-with real touches (not blocking yet; passed in one run): a repeating timer
+with real touches (required): a repeating timer
 changes a label, a one-shot timer and a thread's `AppHandle::update` arrive
 after a tap, the system edit menu's Paste brings in what `xcrun simctl
 pbcopy` copied, the app writes the pasteboard (`simctl pbpaste` reads it
@@ -721,9 +718,9 @@ once every window is hidden; it's drawn afresh when it shows. X11 unmaps,
 `occlusionState`; Wayland `xdg_toplevel`'s `suspended`, or a frame callback
 left unanswered for 500 ms (sway hides a workspace that way); Android the window
 destroyed; iOS the app in the background; the web the canvas out of view.
-`framepacing --hidden` checks it on X11 (openbox) and Windows in CI, not
-blocking yet (macOS has the step, not seen run yet), and on Wayland under
-sway switching workspaces (locally, and in CI not blocking yet); Wayland's
+`framepacing --hidden` checks it on X11 (openbox), Windows and macOS in CI
+(required), and on Wayland under sway switching workspaces (locally, and in
+CI, required); Wayland's
 `suspended` against a scripted compositor, Android's compile-checked. See
 [gpu.md](gpu.md#occlusion).
 
@@ -731,9 +728,9 @@ sway switching workspaces (locally, and in CI not blocking yet); Wayland's
 folder (navigation, sorting, type-to-select, multi-select, image and Markdown
 previews, a sound played and seeked, the thumbnail grid loading on worker
 threads, French and Arabic) and then in a real window. Passes locally on
-X11/Xvfb, with an AT-SPI walk of its tree; CI runs it non-blocking on X11
-(plus the AT-SPI walk), Windows (plus a UI Automation walk) and macOS (plus
-`axprobe`), not yet seen there. The web build browses the sample in memory
+X11/Xvfb, with an AT-SPI walk of its tree; CI requires it on X11, Windows
+(plus a UI Automation walk) and macOS (plus `axprobe`), and runs the AT-SPI
+walk on X11 without failing the job. The web build browses the sample in memory
 (checked in headless Chrome locally). See [reference-app.md](reference-app.md).
 ⁸⁶ A long press on a drag source of files or text lifts it out of the app:
 iOS's `UIDragInteraction` (its own long press asks the app for the items:
@@ -746,7 +743,7 @@ app itself on local API 34 and 30 ones; in CI both on API 34, 33 and 30;
 not blocking.
 On iOS the simulator self-test asks the drag delegate for the items and
 drops them on the app, and an XCUITest lifts and drops with a real touch
-inside the app (not blocking yet; both passed in CI); a drag between two apps can't be
+inside the app (both required in CI); a drag between two apps can't be
 scripted on the simulator. See
 [drag-and-drop.md](drag-and-drop.md#dragging-out-of-the-app).
 ⁸⁷ The `JavaVM`, the current activity, the application context, work run on
@@ -762,8 +759,9 @@ hears them in the scene delegate (and the connection options at launch);
 Android through Stipple's `Link` activity, a windowless trampoline in its APK
 dex, as `NativeActivity` doesn't pass `onNewIntent` on: passed on local API
 34 and 30 emulators cold, warm and from the background
-(`examples/androiddemo/test-open-url.sh`), non-blocking in CI. The iOS
-simulator's `simctl openurl` runs non-blocking in CI. macOS is
+(`examples/androiddemo/test-open-url.sh`), non-blocking in CI. On the iOS
+simulator an XCUITest opens the URLs through the system, cold and warm
+(passed in a CI scratch run; non-blocking until it has passed on master). macOS is
 `application:openURLs:` (build-checked); Windows and Linux take the URL a
 protocol handler starts the app with on its command line (checked on X11),
 and with `App::single_instance` the one a second launch hands the running
@@ -776,7 +774,7 @@ an extension's Rust `main` registers its principal class and calls
 `platform::extension_main()`. CI packages `extensiondemo` (a notification
 service extension in Rust) and, in the simulator, runs the extension's
 executable in its bundle, where it reads what the app wrote in the group's
-container (not blocking; passed in a CI trial run). The system starting the extension, and
+container (required in CI). The system starting the extension, and
 Network Extensions (devices only), haven't been run. See
 [packaging.md](packaging.md#app-extensions).
 ⁹⁰ `android.java` (sources compiled with the developer's `javac` and `d8`
@@ -787,23 +785,23 @@ clashes with Stipple's own entries are errors). The classes call into the
 app's Rust through `native` methods; Stipple defines no `JNI_OnLoad`.
 `examples/androidservice` (a `Service` started with no activity and a
 `BroadcastReceiver`) passed on a local API 34 emulator and in two CI trial
-runs there (three times in a row each); CI packages it and runs it on API
-34 without blocking. See
+runs there (three times in a row each); CI packages it (required) and runs
+it on API 34 without blocking. See
 [packaging.md](packaging.md#the-apps-own-java-classes-and-components).
 ⁹¹ Online, the transport, metered, constrained (Low Data Mode, Data Saver)
 and a generation that changes with the default network, as `Event::Network`
 and `App::on_network`. Linux: run locally in a user and network namespace
 (`unshare -rn`) whose links and default routes a script adds and removes,
 through `platform::network` and through an App's hook on X11 (CI runs the
-script, not blocking yet; it passed in a CI trial run); NetworkManager's metering and connection type
+script, required); NetworkManager's metering and connection type
 read on the desktop. Android: Wi-Fi, mobile data and Data Saver turned
 off and on on local API 34 and 30 emulators, heard by androiddemo's hook
 (Wi-Fi to cellular a new generation, without an offline between; on API
 30 Data Saver shows a brief offline first); in CI not blocking yet. Windows
 (IP Helper's route and connectivity hint notifications), macOS and iOS
-(`nw_path_monitor`) and the web: build-checked; Windows read the runner's
-Ethernet as online in a CI trial run, and macOS reads its network in CI
-(not blocking). See [network.md](network.md).
+(`nw_path_monitor`) and the web: build-checked; Windows reads the runner's
+Ethernet as online in CI, and macOS reads its network in CI (both
+required). See [network.md](network.md).
 ⁹² Small values (keys and tokens, up to 2560 bytes) by key, under the app's
 id: Keychain generic passwords readable after the first unlock and never
 restored to another device (macOS: the data protection keychain for a
@@ -814,9 +812,12 @@ when there is one); Windows Credential Manager; the Secret Service over
 D-Bus on Linux, unlocking through its prompt, and an error rather than a
 plain file without one. CI runs the Linux checks against GNOME Keyring in a
 private session (passing locally too), and the Android one on its
-emulators (passing on local API 34 and 30 emulators). In a CI trial run the
-Windows step passed, and the macOS selftest passed through the login keychain
-fallback; the iOS simulator's round trip is CI only. None blocks yet. See
+emulators (passing on local API 34 and 30 emulators); the Linux and Windows
+steps are required. The macOS selftest passed through the login keychain
+fallback, but the cross-process read failed until a fix that passed in a CI
+scratch run (non-blocking until it has passed on master); the iOS
+simulator's round trip fails with `errSecMissingEntitlement`, as the bundle
+CI installs carries no application identifier (a warning). See
 [secure-storage.md](secure-storage.md).
 
 ⁹³ In a window, buttons, switches, sliders, progress bars and selects (and
@@ -840,7 +841,7 @@ picture of it instead. See
 `NSTextView` / multi-line `EDIT`, editing the field's `TextInput`: typing,
 selection, composition, the edit menu and undo are the OS's, and each edit
 reaches the field's state and handlers; the state the app sets goes back
-into the control. In CI trial runs (non-blocking steps for now)
+into the control. In CI (required steps, apart from iOS's extra checks)
 `nativegallery`'s self-test typed, composed (iOS, macOS), set the state and
 submitted through the real controls on all three; VoiceOver's elements and
 the macOS accessibility dump listed the field once, named by its hint; on
@@ -848,7 +849,7 @@ Windows a real click and real keys typed into the `EDIT`, UI Automation
 listed it once and MSAA named it by its hint. An iPad's hardware Tab moves
 focus out of a `UITextField` / `UITextView` (key commands, self-tested
 through UIKit's action dispatch, not with real keys); CI's Windows IME job
-also composes Japanese into a live `EDIT` (non-blocking).
+also composes Japanese into a live `EDIT` (required).
 See [native-theme.md](native-theme.md#text-fields).
 
 ⁹⁵ MP4 and Matroska natively, with the `video` feature: H.264 and HEVC
@@ -871,7 +872,7 @@ and `ActivateAction` with `platform_data`'s activation token, startup id and
 directory, as GApplication does; `cargo stipple linux` writes the
 `DBusActivatable=true` `.desktop` file and the `.service` file. Unit-tested,
 a second launch reaches the owner over a private `dbus-daemon` in `cargo
-test`, and CI (not blocking yet) packages and installs `instancedemo` and
+test`, and CI (required) packages and installs `instancedemo` and
 lets a private bus start it for `gdbus call` (passing locally under Xvfb).
 See [os-integration.md](os-integration.md#one-instance-reopening-and-the-dock).
 
@@ -911,7 +912,7 @@ backend keeps it on a monitor that is still there (RandR on X11,
 `EnumDisplayMonitors` on Windows, `NSScreen` on macOS). Wayland restores the
 size and maximized state only (the compositor places windows). App-tested;
 CI moves, resizes and reopens the lifecycle example on X11 and Windows (and
-maximizes it on Windows), non-blocking; macOS is build-checked. See
+maximizes it on Windows), required; macOS is build-checked. See
 [window-lifecycle.md](window-lifecycle.md#remembering-where-the-window-was).
 
 ¹⁰¹ The accessibility tree carries a slider's, progress bar's and number
@@ -934,8 +935,8 @@ value as words; no table or caption relation. Android: `RangeInfo`,
 `aria-labelledby` (read-only). A screen reader sets a slider by pressing it at
 the value's place (`platform::access`), a spin button by typing the number.
 App tests set them through those events; from outside, the AT-SPI walk and
-the UIA checks and the Android probe pass in CI (non-blocking); the AX
-check hasn't run yet (macOS and iOS are build-checked). See [accessibility.md](accessibility.md#range-values-tables-and-captions).
+the UIA checks, the Android probe and the AX check (`axprobe --ranges`) pass
+in CI and are required (iOS is build-checked). See [accessibility.md](accessibility.md#range-values-tables-and-captions).
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled;

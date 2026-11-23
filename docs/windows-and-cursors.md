@@ -416,8 +416,8 @@ itself sideways (the simulator's interface turns), checks the view
 followed, turns back upright and checks the idle timer is off after
 `set_keep_awake`. On the Android emulator, `androiddemo` (edge to edge,
 upright only, kept awake) reports a non-zero safe area, and `dumpsys`
-shows the requested orientation and `FLAG_KEEP_SCREEN_ON`. Both are
-non-blocking for now. Keeping the screen awake on the desktops is
+shows the requested orientation and `FLAG_KEEP_SCREEN_ON`. The iOS one
+is required; the Android one is non-blocking for now. Keeping the screen awake on the desktops is
 build-checked only.
 
 On X11 (Xvfb), CI reads the window's `WM_NORMAL_HINTS` and `_NET_WM_ICON` back
@@ -430,8 +430,8 @@ build-checked only.
 
 Translucent windows: CI runs `glass` at 0% and 100% background opacity
 under sway, under Xvfb with `xcompmgr` as the compositing manager, and on
-Windows, and checks the background differs (required on Windows,
-non-blocking elsewhere for now); it was
+Windows, and checks the background differs (required on Windows and under
+`xcompmgr`, a warning under sway for now); it was
 looked at by hand on macOS, with and without blur. Blur is checked only by
 hand, on macOS.
 

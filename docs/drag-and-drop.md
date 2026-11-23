@@ -304,9 +304,9 @@ provider has no state of its own, so a target may read it after the drag
   pinch box through the drop interaction, which must read the text and a
   copy of the file. An XCUITest (`StippleRealTouchTests`) long-presses a
   drag source with a real touch and drags it onto the pinch box: a real
-  lift and drop within the app. Both passed in CI (one run). A drag between
-  two apps can't be scripted on the simulator (`simctl` and XCUITest can't
-  open a second app beside it). Not blocking yet. The data conversion (types, file names, the drop's
+  lift and drop within the app. Both pass in CI and are required. A drag
+  between two apps can't be scripted on the simulator (`simctl` and XCUITest
+  can't open a second app beside it). The data conversion (types, file names, the drop's
   directory, merging items; Android's provider URIs) is unit-tested on every
   host (`src/platform/backend/mobile_drop.rs`, `mobile_drag.rs`), and the
   App's lift (`Window::lift_drag`) against a stand-in window.

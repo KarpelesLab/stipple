@@ -586,14 +586,14 @@ the buffer onto the screen, and the declarative UI toolkit itself.
   from being undone), focus both ways, keyboard hints, secure entry, hint,
   read-only; the OS control speaks for the field, named by its label. A
   field being edited stays live through its focus ring (and an invalid
-  number). Verified in CI trial runs by `nativegallery`'s self-test on iOS,
+  number). Verified in CI (required) by `nativegallery`'s self-test on iOS,
   macOS and Windows (typing, composition on iOS and macOS, state set by the
   app, Return, the field read once by VoiceOver / the AX dump / UIA; on
   Windows also real keys and MSAA's name). Tab and Shift-Tab from a live
   `UITextField` / `UITextView` on a hardware keyboard (key commands with
   priority; self-tested through UIKit's action dispatch, not real keys);
   composition into a live `EDIT` through the Microsoft Japanese IME in the
-  `ime-windows` job (non-blocking).
+  `ime-windows` job (required).
   See `docs/native-theme.md`, *Text fields*.
 - ✅ **High-DPI** on Windows (per-monitor v2), macOS (`backingScaleFactor`), iOS
   (`UIScreen.scale`), X11 (`Xft.dpi`) and Wayland (output scale). X11 and Wayland
@@ -960,7 +960,7 @@ abstraction is frozen at the end of Phase 2.
   on the web over an in-memory sample. Its selftest passes locally on
   X11/Xvfb (off screen and in the window), with an AT-SPI walk of its tree;
   CI runs it on X11, Windows and macOS, with AT-SPI, UI Automation and AX
-  walks, all non-blocking and not yet seen passing there. Toolkit additions
+  walks, all required except the AT-SPI walk. Toolkit additions
   it needed: `Voice::position`/`seek`/`is_paused`, `TableSpec::on_key`, and a
   focusable `slider` with `Role::Slider` (its value now a platform range
   value: see the range values item under Phase 7). The window's position
@@ -1032,12 +1032,11 @@ CPU elsewhere, and the CPU is always the fallback.
   (the web). A hidden window draws no frames, CPU or GPU, and once all are
   hidden the frame clock stops (docs/gpu.md#occlusion). Run on X11
   (locally under xfwm4 with the CPU, Vulkan and GLES; CI under openbox) and
-  in CI on Windows, required (`framepacing --hidden`); macOS's
-  compile-checked (its CI step not seen run yet), Android's
+  in CI on Windows and macOS, required (`framepacing --hidden`), Android's
   compile-checked. On Wayland without `suspended` (sway 1.11 on a
   workspace switch), a window's frame callback unanswered for 500 ms
   (timed from its commit) hides it and the answer shows it again: run
-  under sway locally (CPU, Vulkan, GLES) and in CI, non-blocking.*
+  under sway locally (CPU, Vulkan, GLES) and in CI, required.*
 - ✅ A renderer trait over the lowered operations, so each backend is an
   executor of `ops.rs`'s list (GLES2 becomes the first implementation), with
   per-backend texture, glyph and offscreen-target caches behind it.
@@ -1132,8 +1131,7 @@ CPU elsewhere, and the CPU is always the fallback.
   frames go in a synchronized `wl_subsurface` with an empty input region,
   the decorations in the window surface's `wl_shm` buffer around it. Run
   locally on NVIDIA against a scripted compositor; in CI on lavapipe under
-  sway on `vkms` and (client-side decorations) headless Weston, not blocking
-  yet. Explicit sync run against a real compositor locally: sway 1.11
+  sway on `vkms` and (client-side decorations) headless Weston, required. Explicit sync run against a real compositor locally: sway 1.11
   (headless, GLES renderer) on NVIDIA, Vulkan and GLES, with and without a
   title bar Stipple draws, release points signalled and buffers reused; not
   in CI, where no DRM driver does timeline syncobjs (`vkms`, `vgem`), so no
@@ -1309,7 +1307,7 @@ CPU elsewhere, and the CPU is always the fallback.
   window's scale changed, low memory). `compare.rs` checks a native-themed
   screen GPU against CPU (with uxtheme's controls on Windows WARP, and
   their uploads), and `nativegallery --gpu-check` does on the main thread
-  for AppKit on Metal (non-blocking) and on Direct3D 11 (required). On
+  for AppKit on Metal and on Direct3D 11 (both required). On
   WARP both have passed (mean difference under 0.14 of 255, no pixel off by
   more than 64); on Metal, run on an M5 Max, AppKit's controls matched at
   scales 1, 1.5 and 2 (mean 0.18, 0.11 and 0.06). Linux has no OS-drawn
@@ -1341,7 +1339,7 @@ CPU elsewhere, and the CPU is always the fallback.
   subsurface under Stipple's title bar), so `Auto` presents there too; its
   hardware runs so far: sway on NVIDIA only, locally. CI presents under
   headless Mutter and KWin too, Vulkan and GLES, on Mesa's software GPUs
-  (non-blocking, passing; `Auto` stays on the CPU there). Left: iOS (Metal never run on an iPhone, nor presented
+  (required; `Auto` stays on the CPU there). Left: iOS (Metal never run on an iPhone, nor presented
   to a window), Windows (Direct3D 11 never run on a hardware GPU), Android
   (the benchmark not on a phone); Linux on AMD and Intel, X11 on a real X
   server.*
@@ -1472,8 +1470,8 @@ Most input only works on X11 today.
   rectangle; `text-input-v3` on Wayland, IMM32 (now TSF, below) on Windows and
   `NSTextInputClient` on macOS. Unit-tested, and the macOS protocol is driven
   through objc dispatch in CI. Wayland runs against a real input method in
-  CI (fcitx5 under sway, below); the Windows and macOS paths are verified
-  end to end only by hand so far (CI attempts them, non-blocking). See
+  CI (fcitx5 under sway, below), and so do the Windows and macOS paths
+  (the Microsoft Japanese IME and Kotoeri, required). See
   [docs/ime.md](docs/ime.md).
 - ✅ IME on X11: an XIM client over the wire (no libX11), in
   `x11/xim.rs`. It finds the server from `XIM_SERVERS` and `XMODIFIERS`
@@ -1602,7 +1600,7 @@ Most input only works on X11 today.
   UIKit's text system composes and hands the accent over as marked text and
   the letter through `insertText:` (or marked, then `unmarkText`); the
   existing `UITextInput` path takes them as preedit and commit, and
-  `touchdemo`'s simulator self-test drives both sequences (not blocking yet).
+  `touchdemo`'s simulator self-test drives both sequences (required in CI).
   No real hardware keyboard has typed on either; Compose-key sequences
   (beyond the layout's dead keys) aren't supported on mobile. See
   [docs/ime.md](docs/ime.md#dead-keys-on-mobile-hardware-keyboards).
@@ -1632,11 +1630,9 @@ Most input only works on X11 today.
   Return then reached the app only with the next key, a real bug: TSF's
   sent messages run inside `PeekMessageW`, and the loop delivered what they
   queued only after a posted message; it now delivers before waiting. **macOS:
-  attempted, not yet seen passing**: a non-blocking step in
-  `interaction-macos` selects Kotoeri with a Swift helper
-  (`TISSelectInputSource`) and posts CGEvents; whether the runner allows
-  posting keys (Accessibility) and switching the input source is what its
-  runs will show. Until then both are also protocol wiring in CI (Windows:
+  required**: a step in `interaction-macos` selects Kotoeri with a Swift
+  helper (`TISSelectInputSource`) and posts CGEvents (posting keys needs
+  the Accessibility permission). Both are also protocol wiring in CI (Windows:
   the app playing the input method through the real TSF manager; macOS:
   `setMarkedText:` / `insertText:` through objc dispatch). A manual
   per-platform checklist (Japanese, pinyin, Korean, the candidate window
@@ -1769,7 +1765,7 @@ Most input only works on X11 today.
   that is still there (RandR's CRTCs on X11, `EnumDisplayMonitors` on
   Windows, `NSScreen` on macOS); Wayland keeps the size and state only.
   App-tested; CI moves, resizes and maximizes the lifecycle example and
-  opens it again on X11 and Windows (non-blocking); macOS is build-checked.
+  opens it again on X11 and Windows (required); macOS is build-checked.
   See [docs/window-lifecycle.md](docs/window-lifecycle.md#remembering-where-the-window-was).
 - ✅ Window lifecycle: `App::on_close_requested` and `on_quit_requested`
   answer `CloseResponse::Close` or `Cancel` (then `AppHandle::close_window`
@@ -1867,8 +1863,9 @@ Most input only works on X11 today.
   second launch's). Passes
   locally on API 34 and 30 emulators cold, warm and from the background, and
   an App Link with a path prefix on API 34 (`test-open-url.sh`, non-blocking
-  in CI); the iOS simulator's `simctl openurl` runs non-blocking in CI, not
-  seen yet; macOS and the desktops' registration are build-checked, the
+  in CI); on the iOS simulator an XCUITest opens the URLs through the
+  system, cold and warm (passed in a CI scratch run, non-blocking);
+  macOS and the desktops' registration are build-checked, the
   command line checked on X11. Still to do: `ASWebAuthenticationSession` /
   Custom Tabs for OAuth.
 - ✅ One instance per app (`App::single_instance`, `platform::forward_launch`,
@@ -1876,7 +1873,7 @@ Most input only works on X11 today.
   arguments, directory, environment and activation token to the running one
   over a Unix socket beside an `flock` (Linux, macOS) or a named pipe behind a
   named mutex (Windows), and exits; its URLs reach `on_open_url`. Two launches
-  pass on macOS; Linux (Xvfb) and Windows run non-blocking in CI.*
+  pass on macOS, Linux (Xvfb) and Windows in CI (required).*
 - ✅ D-Bus activation (`App::dbus_activatable`, `Launch::action` /
   `action_target` / `started_app`, `cargo stipple linux`, #88): *the single
   instance owns its id on the session bus and serves
@@ -1888,7 +1885,7 @@ Most input only works on X11 today.
   actions, scheme handlers), the session bus `.service` file and hicolor
   icons, and a tarball. The wire format is unit-tested, a second launch
   reaches the owner over a private `dbus-daemon` in `cargo test`, and CI
-  (non-blocking) packages and installs instancedemo, lets a private bus start
+  (required) packages and installs instancedemo, lets a private bus start
   it for `gdbus call … Open`, then sends `ActivateAction` and a command-line
   launch over the bus (passing locally under Xvfb). The environment doesn't
   travel over the bus, and `org.gtk.Application`'s `CommandLine` isn't
@@ -1939,7 +1936,7 @@ Most input only works on X11 today.
   focus, lens switching, paused in the background. AVFoundation on iOS and
   macOS (run on a Mac; CI checks the simulator says there's no camera),
   Camera2 NDK on Android (CI reads frames from the emulator's virtual camera,
-  non-blocking), `getUserMedia` on the web (build-checked). The preview is
+  required), `getUserMedia` on the web (build-checked). The preview is
   converted and drawn through the renderer; zero-copy is 6g. Windows (Media
   Foundation) and Linux (V4L2 / PipeWire) are still to do._
 - ✅ In-app purchases (`platform::store`, `App::on_transaction`, #56): _StoreKit's
@@ -1980,9 +1977,12 @@ Most input only works on X11 today.
   Service over Stipple's D-Bus client with prompt-driven unlocking, and an
   error rather than a file without one; unsupported on the web. CI runs it
   against GNOME Keyring in a private session and on the Android emulators
-  (both passing locally), and on Windows and macOS (both passing in a CI
-  trial run, macOS through the login keychain) and the iOS simulator; not
-  blocking yet. User authentication (Face ID, fingerprint) per item is
+  (both passing locally), and on Windows (required), macOS and the iOS
+  simulator. On macOS the selftest passes through the login keychain, but
+  the cross-process read failed until a fix (passed in a CI scratch run);
+  the iOS simulator's round trip fails with `errSecMissingEntitlement`, the
+  bundle CI installs carrying no application identifier; both non-blocking,
+  as is the Android one. User authentication (Face ID, fingerprint) per item is
   still to do. See [docs/secure-storage.md](docs/secure-storage.md)._
 - ✅ Message boxes (`AppHandle::message`, `platform::dialog::message`): a
   question with a kind (icon), buttons, a default and a cancel button and an
@@ -2006,8 +2006,8 @@ Most input only works on X11 today.
   unit-tested, and CI opens a modal window under headless Mutter and KWin
   and reads the compositor's protocol log (`WAYLAND_DEBUG=server`) for
   `set_parent`, `get_xdg_dialog` and `set_modal` with no protocol error, and
-  a KWin script reads back the window as `modal` and `transient` (not
-  blocking yet; passed on Mutter 50 and KWin 6 in a CI trial run). There's
+  a KWin script reads back the window as `modal` and `transient`
+  (required; passing on Mutter 50 and KWin 6). There's
   no way to change a window's modality once open._
 - ✅ Programmatic focus (#82): `Element::autofocus`, `Cx::focus`/`blur` and
   `AppHandle::focus`/`blur` by element key. _Applied after the next build's
@@ -2060,7 +2060,7 @@ Most input only works on X11 today.
   no Xcode project. Run by hand on an API 35 emulator (the universal APK)
   and the iOS 27 simulator; signed with a development identity; CI
   packages both demos, launches the simulator `.app` and has bundletool
-  validate and split the bundle (not blocking yet). Not yet: an upload to
+  validate and split the bundle (required). Not yet: an upload to
   either store, asset packs, on-demand resources, Stipple UI inside app
   extensions._ See [docs/packaging.md](docs/packaging.md).
 - ✅ `cargo install stipple` and Xcode-managed signing (#100): _the crate's
@@ -2090,7 +2090,7 @@ Most input only works on X11 today.
   as the entry point. `examples/extensiondemo` is a notification service
   extension in Rust. Unit tests for the manifest, plist and entitlements; CI
   packages it and runs the extension's executable in its bundle on the
-  simulator against the app's shared container (not blocking; passed in a CI trial run). Not
+  simulator against the app's shared container (required in CI). Not
   yet: the system launching an extension in CI, a device, Network
   Extensions (device only), Stipple UI in an extension._ See
   [docs/packaging.md](docs/packaging.md#app-extensions).
@@ -2106,8 +2106,8 @@ Most input only works on X11 today.
   with `RegisterNatives` from the app's own `JNI_OnLoad`, and work in a
   process started for a component with no activity.
   `examples/androidservice` (a `Service` and a `BroadcastReceiver`) passed on
-  a local API 34 emulator and in CI trial runs on API 34; CI packages it and
-  runs it there, not blocking yet. Not yet: AARs/AndroidX on the Java class path, resources for the
+  a local API 34 emulator and in CI trial runs on API 34; CI packages it
+  (required) and runs it there, not blocking yet. Not yet: AARs/AndroidX on the Java class path, resources for the
   components (an app widget's layout)._ See
   [docs/packaging.md](docs/packaging.md#the-apps-own-java-classes-and-components).
 - ✅ The user's languages and formats (#47): `platform::preferred_languages`
@@ -2255,7 +2255,7 @@ Most input only works on X11 today.
   and the web (ARIA `scrollbar`); `Skin::scroll_bar` (`ScrollBarSkin`:
   track, thumb, arrows, corner) and, under `Theme::native`, Windows' visual
   styles and macOS's legacy `NSScroller` drawing the parts (build-checked).
-  `visual-scroll` holds a press on `scrolldemo`'s track (non-blocking). Not
+  `visual-scroll` holds a press on `scrolldemo`'s track (required). Not
   yet: a table scrolling sideways with its header.*
 - ✅ Combo box and searchable select (#85, #97): `combo_box` + `ComboBox`
   (free text with the matching suggestions below, Up/Down/Enter/Tab/Escape, a
@@ -2304,8 +2304,8 @@ Most input only works on X11 today.
   `Inhibit`. Unit-tested (the insets' geometry, rebuilds on a safe-area
   change, the bar and toasts); CI's iOS simulator turns `screendemo` sideways
   and back and the Android emulator reads the safe area, the requested
-  orientation and the keep-screen-on flag (both non-blocking until they've
-  passed); the desktops' keep-awake is compile-checked only. No soft
+  orientation and the keep-screen-on flag (the iOS one required, the
+  Android one non-blocking until it has passed); the desktops' keep-awake is compile-checked only. No soft
   keyboard inset in the safe area yet, nor a status-bar style the app sets.*
 - ✅ Android: high-DPI (the density over 160 dpi; CI's emulator runs at
   2.625x), and the native theme's system colors: night mode, followed live on
@@ -2599,7 +2599,7 @@ Most input only works on X11 today.
   and drops it on its own window: a text, then a `MediaStore` `content:`
   URI, which arrives copied with its bytes. **iOS**: `touchdemo`'s self-test
   drives the delegate with a stand-in session over real `NSItemProvider`s
-  (a text, a file; not blocking yet). **Dragging out:** a long press on a
+  (a text, a file; required in CI). **Dragging out:** a long press on a
   `drag_source` of files or text lifts it out of the app
   (`Window::lift_drag`, called by the App on its own long press and when
   the platform's lift gesture asks, `Event::DragLift`): iOS's
@@ -2622,7 +2622,7 @@ Most input only works on X11 today.
   (not blocking in CI; both passed in CI on API 34, 33 and 30, the second
   three times in a row on each in a trial run, and locally on API 34, 33
   and 30). **iOS**,
-  not blocking yet, passed in one CI run: `touchdemo`'s
+  required in CI: `touchdemo`'s
   self-test asks the drag delegate for the items under its two drag sources
   and drops those items on its own drop target; an XCUITest lifts and drops
   with a real long press inside the app. A drag between two apps can't be
@@ -2644,7 +2644,7 @@ Most input only works on X11 today.
   `PointerMoved` / `PointerLeft` while nothing is pressed. The step
   conversion is unit-tested on the host (`ios/pan_scroll.rs`); `touchdemo`'s
   simulator self-test reads the recognizers' settings back and scrolls the
-  list through their action's code (not blocking yet). **Momentum:** fingers
+  list through their action's code (required in CI). **Momentum:** fingers
   that lift while moving (`velocityInView:`) leave the scroll coasting as
   `ScrollPhase::Momentum` steps every ~16 ms, at `UIScrollView`'s
   normal deceleration (unit-tested in `ios/pan_scroll.rs`), stopped by a new
@@ -2655,13 +2655,13 @@ Most input only works on X11 today.
   gives the app's cursor as the style (the I-beam over text, hidden). The
   self-test flicks the list (it must coast), secondary-clicks a row (its
   menu opens) and reads the style over the text field, through the same code
-  (not blocking yet; passed in one CI run). Not tried with a real trackpad or
+  (required in CI). Not tried with a real trackpad or
   mouse. See [docs/platforms/ios.md](docs/platforms/ios.md#trackpad-and-mouse).
 - 🚧 Mobile CI depth: run the iOS features that are only implemented (timers,
   clipboard, opening URLs) on the simulator, with real `UITouch`es rather than
   the synthetic touch path, and try both platforms on physical devices before
-  calling them supported. **Simulator and emulator part done, not blocking
-  yet:** an XCUITest (`StippleRealTouchTests`, in the `visual-ios` job)
+  calling them supported. **Simulator and emulator part done:** an XCUITest
+  (required) (`StippleRealTouchTests`, in the `visual-ios` job)
   drives `touchdemo` with real touches (HID events the simulator turns into
   `UITouch`es: taps, a swipe, an `XCUICoordinate` drag, a long press),
   launched with `TOUCHDEMO_SERVICES` (timer, clipboard and URL buttons, and
@@ -2682,7 +2682,8 @@ Most input only works on X11 today.
   whose first run is switched off); it passed on local API 34, 33 and 30
   emulators and in a CI trial run on each (three times in a row).
   **Missing:** physical devices (neither platform
-  has been tried on one), and a few passing runs before these steps block.
+  has been tried on one), and a few passing runs before the Android steps
+  block.
   See [docs/platforms/ios.md](docs/platforms/ios.md#real-touches-from-xcuitest)
   and [docs/platforms/android.md](docs/platforms/android.md#running-on-an-emulator).
 - ✅ Accessibility on the web (ARIA): `web/stipple.js` mirrors the
@@ -2811,9 +2812,9 @@ Most input only works on X11 today.
   and re-registers when the accessibility bus itself goes away and comes
   back. The `a11y-dbus` walks (X11 and sway, required) check the caret, a
   selection set from outside, the relations, and that the app is found again
-  after `at-spi2-registryd` is restarted; a separate step (not failing the job
-  yet) restarts `at-spi-bus-launcher`. All pass locally under Xvfb (sway not
-  tried locally); not yet seen in CI. (The X root window's `AT_SPI_BUS`,
+  after `at-spi2-registryd` is restarted; a separate step (required) restarts
+  `at-spi-bus-launcher`. All pass locally under Xvfb (sway not tried
+  locally) and in CI. (The X root window's `AT_SPI_BUS`,
   the other relations and the other desktops' bridges: see the next items.)
 - ✅ Accessibility depth found by the out-of-process checks and the screen
   readers. **Scrolling:** a scroll container's node says where it is
@@ -2883,11 +2884,12 @@ Most input only works on X11 today.
   (`src/a11y_relations_tests.rs`) and unit tests; the AT-SPI walks
   (`atspi-relations.sh` on `widgetsdemo` and `mediabrowser`,
   `atspi-x11-bus.sh`, and the depth walk's "Row 2" now clicked while out of
-  view) pass locally under Xvfb and passed in a CI run (on a scratch
-  branch), not failing the job yet; `uiademo --relations` passed there too
-  (non-blocking), as did the Windows, NVDA, web and Android jobs.
-  `axprobe --links` (non-blocking) hasn't run: the macOS code is build- and
-  clippy-checked only. Left: iOS's
+  view) pass locally under Xvfb and in CI; the relations and root window
+  steps are required, the depth walk doesn't fail the job yet.
+  `uiademo --relations` passes in CI and is required. `axprobe --links`
+  (non-blocking) failed on the runner because `touchdemo` gave its field the
+  "Note" caption only on Linux; it now has it on macOS too (passed in a CI
+  scratch run). Left: iOS's
   `accessibilityActivate` taps the element's frame without scrolling;
   `AXScrollToVisible` still can't be added (see above).
 - ✅ Keyboard focus for buttons and the other controls a tap activates
@@ -2930,10 +2932,9 @@ Most input only works on X11 today.
   `setLabeledBy`. **Web:** `aria-value*`, `aria-rowcount` / `rowindex` /
   `colindex`, `aria-labelledby`. App tests (`src/a11y_range_tests.rs`), unit
   tests for each bridge's logic, `uiademo --patterns` (required step).
-  CI, non-blocking: the AT-SPI walk with `ATSPI_WALK_RANGES=1` and
-  `uia-ranges.ps1` (both passing on the runners), `axprobe --ranges`
-  (macOS, not yet run; macOS and iOS build-checked), the Android (passing)
-  probe's slider checks, on `touchdemo` with `TOUCHDEMO_RANGES` and
+  CI, required: the AT-SPI walk with `ATSPI_WALK_RANGES=1`,
+  `uia-ranges.ps1`, `axprobe --ranges` (macOS; iOS build-checked) and the
+  Android probe's slider checks (all passing on the runners), on `touchdemo` with `TOUCHDEMO_RANGES` and
   `androiddemo`'s new slider. Left: tables on iOS
   (`UIAccessibilityContainerDataTable`), tree items' levels and list
   positions, text attributes past the font and runs inside a node's text,
@@ -3329,7 +3330,7 @@ game needs on top:
   85 ms on the CPU; on llvmpipe 4–5 ms, slower than the CPU blits.
   Run on Vulkan (NVIDIA) and GLES (llvmpipe, NVIDIA) under Xvfb, and in
   CI on lavapipe, llvmpipe and WARP (Direct3D 11); Metal compile-checked,
-  run by the macOS job (non-blocking). On the web, WebGPU and WebGL2 draw
+  run by the macOS job (required). On the web, WebGPU and WebGL2 draw
   the resampled layer too (an op of its own in the op buffer), and the site
   check fails `spritedemo@gpu` if a frame after the warm-up uploads a
   texture. See [games.md](docs/games.md#on-the-gpu).*

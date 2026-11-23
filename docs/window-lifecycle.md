@@ -568,9 +568,9 @@ for attention and counts the bells in the badge on the app's icon; while
   urgency hint set by the bell (`xprop WM_HINTS`) and cleared on focus. On a
   private session bus, `dbus-monitor` reads the launcher entry's `Update`
   signals: the progress at start, then the bell's count and the urgent flag
-  (non-blocking). The window is moved and resized and opens there on the
+  (required). The window is moved and resized and opens there on the
   next run; a placement off the screen comes back on it, and one under the
-  content's minimum is raised to it (non-blocking).
+  content's minimum is raised to it (required).
 - **Wayland** (headless sway): the window asks for and gets server-side
   decorations; focus moves to another window and back (`activated`);
   `swaymsg kill` (`xdg_toplevel.close`) is cancelled, then confirmed. Whether
@@ -586,10 +586,10 @@ for attention and counts the bells in the badge on the app's icon; while
   `WM_CLOSE` is confirmed and the app closes its window. A self-test
   (`STIPPLE_WIN_TASKBAR`) sets an overlay icon (a count and a dot) and a
   progress once the taskbar button exists, and checks each call succeeds
-  (non-blocking); the taskbar can't be read back, so what it shows isn't
+  (required); the taskbar can't be read back, so what it shows isn't
   checked. The window is moved, resized and maximized and opens that way on
   the next run, and a placement off every monitor opens on one
-  (non-blocking).
+  (required).
 - **macOS**: an in-process self-test sends `performClose:` and `terminate:`
   through AppKit, which reach the app through the delegates, sets the Dock
   badge and reads it back, and sets a progress and reads the bar's value

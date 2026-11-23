@@ -123,8 +123,7 @@ The `ime-windows` job types Japanese through the Microsoft IME into
 `textinput` twice: into Stipple's own field (TSF) and, with
 `STIPPLE_TEXTINPUT_NATIVE` (`Theme::native`), into a live `EDIT`, where
 the app's state must show the IME's hiragana preedit, its kanji
-conversion and the commit (a non-blocking step until it has passed a
-while).
+conversion and the commit (required).
 
 ## Fonts
 

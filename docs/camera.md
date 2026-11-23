@@ -252,10 +252,10 @@ the lens can't.
   camera: it opens it and passes once 10 frames with a picture arrived.
 - iOS simulator: `cameraview`'s self-test checks there's no camera and that
   opening says so cleanly, without a crash.
-- Android emulator (non-blocking): the APK built from `cameraview_android`,
+- Android emulator (required): the APK built from `cameraview_android`,
   the permission granted with `pm grant`, and frames from the emulator's
-  virtual camera that aren't blank read back from logcat; then the APK
-  built with `gl` and with `vk` (`examples/cameraview/test-gpu.sh`), each
+  virtual camera that aren't blank read back from logcat; then (not blocking
+  yet) the APK built with `gl` and with `vk` (`examples/cameraview/test-gpu.sh`), each
   drawing with its API and its preview taking the camera's buffers (Vulkan
   with `debug.stipple.vk_ahb` set).
 - The frame conversion (rotation, mirroring, color), the preview's size and

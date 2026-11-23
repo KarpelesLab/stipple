@@ -220,7 +220,7 @@ in it, plays half a second and checks again.
 
 Run so far: all of the above on an Apple M5 Max (macOS: VideoToolbox, the
 software decoder, Metal and the software renderer). CI runs the MPEG-2 tests
-and the self-test on Linux; on its Windows runner (non-blocking, the
+and the self-test on Linux; on its Windows runner (required, the
 `visual-windows` job) Media Foundation decodes the H.264 clip in software
 (the runner has only WARP) and Direct3D 11 on WARP draws its shared
 textures; on the API 34 emulator (non-blocking, `gpu-android`, through

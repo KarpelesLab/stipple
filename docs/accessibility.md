@@ -220,8 +220,8 @@ input, a progress bar and a 20-row table (under the light theme, so they are
 Stipple's own and not live OS controls) for the out-of-process checks:
 `atspi-walk.py` with `ATSPI_WALK_RANGES=1` (passing locally under Xvfb),
 `uia-ranges.ps1` (Windows), `axprobe --ranges` (macOS); `androiddemo` has a
-"Volume" slider the Android probe reads and sets. Each is a non-blocking CI
-step for now.
+"Volume" slider the Android probe reads and sets. Each is a required CI
+step.
 
 ## Keyboard focus
 
@@ -333,7 +333,7 @@ the scroll math and the events a swap plans are worked out without COM in
   `Level` (see [Relations](#relations)). Invoke, Toggle, SelectionItem and
   ExpandCollapse on a node scrolled out of view scroll it into view before
   their click (`uiademo --relations` checks the properties and a scrolled
-  Invoke in-process, in a step that doesn't fail the job yet).
+  Invoke in-process, in a required step).
 - **Scroll** on scroll containers (a plain `Element::scrollable` is a Pane):
   the percentages and view sizes, `Scroll` a page or a line, and
   `SetScrollPercent`; **ScrollItem** on what they hold (`ScrollIntoView`).
@@ -442,8 +442,8 @@ the spin button's and follows its `LabeledBy` to "Level", reads the table's
 Grid and Table patterns and a cell's GridItem and TableItem, a label's
 `FontName`, `FontSize` and `FontWeight`, and waits for the field's
 `TextChanged` and `TextSelectionChanged` events. It passes on the runner
-(and `uiademo --patterns`, required, drives the new patterns in-process);
-it doesn't fail the job yet.
+and is required (and `uiademo --patterns`, required, drives the new
+patterns in-process).
 
 Not covered: text attributes beyond the font (colors, alignment…) and
 runs within a node's text (rich text reads as one), glyph-accurate
@@ -451,7 +451,7 @@ character boxes, `RangeFromChild`; no Window pattern; Grid and Table on
 tables only (not trees or lists); `CanSelectMultiple` is always false; the root's `ChildrenInvalidated`
 carries the tree's runtime id, not the window's. The patterns and events
 are build- and clippy-checked for Windows and their logic unit-tested on
-every host, but haven't run on Windows yet. Narrator and JAWS aren't tried.
+every host, and run on the Windows runner in CI (required). Narrator and JAWS aren't tried.
 
 ## macOS
 
@@ -561,23 +561,25 @@ value is set to "hi" (the app logs it, and it reads back two characters),
 its selected range is set and read back, the "Remember" checkbox reads 0,
 then 1 after `AXPress` (the app logs it), "Row 2" raises a toast, the list
 is an `AXScrollArea` whose scroll bar's value, set to 0.5, scrolls it; an `AXObserver` reports the
-notifications it hears. It hasn't run on a runner yet, so it doesn't fail
-the job. Another, *Title elements, static text values and a press out of
-view*, runs `axprobe --links`: the field's `AXTitleUIElement` must be the
-static text "Note", "Rows tapped: N" must have its text as its `AXValue`,
-and `AXPress` on "Row 20", below the list, must reach the app; new, and
-doesn't fail the job. Another, *Range values and a table from outside the app*, runs
+notifications it hears. It passes on the runner and is required. Another,
+*Title elements, static text values and a press out of view*, runs
+`axprobe --links`: the field's `AXTitleUIElement` must be the static text
+"Note", "Rows tapped: N" must have its text as its `AXValue`, and `AXPress`
+on "Row 20", below the list, must reach the app. It failed on the runner
+because `touchdemo` gave its field the "Note" caption only on Linux; it now
+has it on macOS too, which passed in a CI scratch run; the step stays
+non-blocking until it has passed on master. Another, *Range values and a table from outside the app*, runs
 `axprobe --ranges` on `touchdemo` with `TOUCHDEMO_RANGES`: the slider's
 value and bounds, `AXIncrement` and setting its value (the app logs both),
 the progress bar's value, the table's row and column counts and `AXRows`,
-and a cell's index range; non-blocking too.
+and a cell's index range; it passes on the runner and is required.
 
 Not covered: the elements are
 built again after each tree change (or when the window moves), so an
 observer registered on an old element goes quiet; no `AXScrollToVisible`
-(see above). The depth checks haven't passed on a runner yet: build- and
-clippy-checked, with the AppKit-free logic unit-tested on every host; so
-are the links (`ax_links.rs`).
+(see above). The depth checks pass on the runner (required), with the
+AppKit-free logic unit-tested on every host; the links (`ax_links.rs`) are
+build- and clippy-checked and unit-tested the same way.
 
 ## iOS
 
@@ -663,7 +665,7 @@ system's accessibility framework. It:
 - reads `androiddemo`'s "Volume" slider (a `SeekBar` with a `RangeInfo` of
   0..1 at 0.5), sets it to a quarter with `ACTION_SET_PROGRESS` and steps it
   with a scroll forward: the app logs each (passing on the API 34 emulator;
-  reported without failing the check for now).
+  required).
 
 `test-on-device.sh` also reads the tree with `uiautomator dump` (another
 out-of-process client of the same framework) and taps nodes at their bounds.
@@ -869,7 +871,7 @@ Without the re-registration the last check fails, as it should. A further
 step, *Survive the accessibility bus restarting*
 (`.github/scripts/atspi-bus-restart.sh`), kills `at-spi-bus-launcher`
 itself, asks for the bus again, and a fresh pyatspi client must find the
-app on the new bus; it passes locally and doesn't fail the job yet.
+app on the new bus; it passes locally and in CI, and is required.
 Another, *Scroll panes, a check box and a toast's announcement through
 AT-SPI (X11)*, runs the walk with `ATSPI_WALK_DEPTH=1` on a fresh
 `touchdemo`: the list of rows is a scroll pane whose "scroll forward" action
@@ -910,7 +912,7 @@ window (when the launcher didn't), runs `touchdemo` with no session bus to
 ask (no `DBUS_SESSION_BUS_ADDRESS`, an empty `XDG_RUNTIME_DIR`), and a
 pyatspi client must find it registered, the bridge saying it took the
 address from the property. Both pass locally under Xvfb (at-spi2-core
-2.58) and don't fail the job yet.
+2.58) and in CI, and are required.
 
 Another, *Range values and a table through AT-SPI (X11)*, runs the walk with
 `ATSPI_WALK_RANGES=1` on `touchdemo` with `TOUCHDEMO_RANGES`: the slider's
@@ -920,7 +922,7 @@ Another, *Range values and a table through AT-SPI (X11)*, runs the walk with
 caption is "Level", and the table's `Table` (21 rows, 2 columns; the cell at
 row 1, column 0; column 1's header; no cell in a row not built) and a cell's
 `TableCell` (its position, its table). It passes locally under Xvfb
-(at-spi2-core 2.58) and in CI, and doesn't fail the job yet.
+(at-spi2-core 2.58) and in CI, and is required.
 
 `a11ydemo serve` still serves a fixed tree over the session bus for the
 `dbus-send` checks.

@@ -258,13 +258,19 @@ byte value, reads it back, replaces it and removes it). On Android,
 - **iOS**: `touchdemo`'s self-test on the simulator logs the Keychain round
   trip.
 
-The Windows, macOS and iOS checks run on CI only: in a trial run the
-Windows step passed, and on macOS the selftest passed (the data
+The Windows, macOS and iOS checks run on CI only. The Linux and Windows
+steps pass in CI and are required. On macOS the selftest passed (the data
 protection keychain refused to the unsigned binary, the login keychain
-used); the macOS cross-process check and the iOS simulator's round trip
-haven't run yet. None of these steps blocks a run yet. The data protection keychain of a signed macOS app, and
-access groups shared with an extension, need signing that CI doesn't do:
-they are unverified.
+used), but the cross-process check failed in every run: a fresh unsigned
+process that only read went to the data protection keychain and missed
+the item in the login keychain. The keychain is now chosen up front from
+the process's signature, which passed in a CI scratch run; the step stays
+non-blocking until it has passed on master. The iOS simulator's round
+trip fails with `errSecMissingEntitlement`: the bundle CI installs carries
+no application identifier (one signed ad hoc into its code signature was
+refused a launch); it is a warning, not a failure. The data protection keychain of
+a signed macOS app, and access groups shared with an extension, need
+signing that CI doesn't do: they are unverified.
 
 [`platform::secure_store`]: https://docs.rs/stipple/latest/stipple/platform/fn.secure_store.html
 [`set_app_info`]: https://docs.rs/stipple/latest/stipple/platform/fn.set_app_info.html

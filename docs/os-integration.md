@@ -445,7 +445,7 @@ Android and the web, which have no app groups. On macOS the same call gives
 needs the entitlement). Files there aren't coordinated: when both sides may
 write at once, write to a temporary name and rename. CI runs `extensiondemo`
 in the simulator, where the app writes into the group's container and the
-extension's executable reads it back (not blocking; passed in a CI trial run); macOS is
+extension's executable reads it back (required in CI); macOS is
 build-checked only.
 
 ## Packaged assets
@@ -880,17 +880,18 @@ URLs that open the app: on the Android emulators,
 `stipple-demo` scheme with the app stopped, in front and in the background,
 and reads `on_open_url`'s log back (passed locally on API 34 and 30, plus a
 verified-by-hand App Link with a path prefix on API 34; non-blocking in CI).
-On the iOS simulator, touchdemo's bundle claims the scheme and `simctl
-openurl` opens two URLs, one launching it (non-blocking, not yet seen
-passing). macOS's `application:openURLs:` is build-checked; the desktops'
+On the iOS simulator, touchdemo's bundle claims the scheme and an XCUITest
+(`StippleOpenURLTests`) opens two URLs through the system, one launching
+it (`simctl openurl` never started the app there); it passed in a CI
+scratch run and is non-blocking until it has passed on master. macOS's `application:openURLs:` is build-checked; the desktops'
 command-line URL was checked by hand on X11.
 
 Single instance: `.github/scripts/single-instance.sh` starts `instancedemo`,
 then launches it again from another directory with arguments and a
 `DESKTOP_STARTUP_ID`; the second must say it forwarded, and the first must
-list the arguments, the directory and the token, and quit. It runs on macOS
-(blocking), and on Linux under Xvfb and on Windows (both not blocking until
-they have passed on CI). On macOS, `STIPPLE_COCOA_APP_DELEGATE` then makes
+list the arguments, the directory and the token, and quit. It runs on macOS,
+on Linux under Xvfb and on Windows (all required).
+On macOS, `STIPPLE_COCOA_APP_DELEGATE` then makes
 the backend send the application delegate a reopen and an
 `application:openURLs:` with a folder and a URL, ask it for the Dock menu and
 pick its first item, through real Objective-C dispatch: each must reach its
