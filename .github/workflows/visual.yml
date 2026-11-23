@@ -176,9 +176,8 @@ jobs:
 
       # A transparent window gets the ARGB visual under a compositing manager:
       # its background shows the (black) root through at 0% and doesn't at
-      # 100%. Non-blocking: xcompmgr's painting under Xvfb is untested here.
+      # 100%.
       - name: A transparent window under a compositing manager (xcompmgr)
-        continue-on-error: true
         env:
           DISPLAY: ":99"
           STIPPLE_X11_DEBUG: "1"
@@ -238,10 +237,8 @@ jobs:
       # Occlusion (Phase 6a): minimized by a window manager (openbox, started
       # for this step only: the other steps run without one), the animating
       # window presents nothing for 3 s (UnmapNotify / _NET_WM_STATE_HIDDEN
-      # reported as Event::Occluded), then draws again once restored. Not
-      # blocking yet.
+      # reported as Event::Occluded), then draws again once restored.
       - name: A minimized window draws no frames (openbox)
-        continue-on-error: true
         env:
           DISPLAY: ":99"
         run: |
@@ -281,8 +278,7 @@ jobs:
       # minimum of its own, yet its hints carry one (its columns of text and
       # boxes); squeezed narrower and shorter (no window manager holds it to
       # its hints here), it asks for the height its wrapped text needs back.
-      - name: Window size limits from the layout (not blocking yet)
-        continue-on-error: true
+      - name: Window size limits from the layout
         env:
           DISPLAY: ":99"
         run: |
@@ -354,8 +350,7 @@ jobs:
       # loads the grid's thumbnails on worker threads, switches to French and
       # Arabic (mirrored) and saves a PNG of each step; then it opens the real
       # window for a few seconds (screenshotted here) and checks it there.
-      - name: Media browser selftest (non-blocking)
-        continue-on-error: true
+      - name: Media browser selftest
         env:
           DISPLAY: ":99"
           STIPPLE_AUDIO: "null"
@@ -727,7 +722,6 @@ jobs:
       # its GSUB. Each sequence must be one emoji wide (one glyph, not its
       # parts) and drawn in color.
       - name: Color emoji and joined sequences (Noto Color Emoji)
-        continue-on-error: true
         run: |
           ./target/release/examples/fontdemo --emoji --emoji-png visual_output/stipple-x11-emoji.png | tee visual_output/emoji-check.log
           grep -q 'fontdemo: emoji ok' visual_output/emoji-check.log
@@ -972,8 +966,7 @@ jobs:
       # pages on until the thumb reaches the pointer (some four pages: one
       # click moves the thumb some 45 px). The bar is at x 368, from y 80 to
       # 320; the dark theme's thumb is lighter than its track.
-      - name: Hold a press on the scroll bar's track (non-blocking)
-        continue-on-error: true
+      - name: Hold a press on the scroll bar's track
         env:
           DISPLAY: ":99"
         run: |
@@ -1632,10 +1625,9 @@ jobs:
           timeout 60 bash .github/scripts/runtime-windows.sh target/release/examples/multiwindow x11
 
       # A modal window owned by the first: WM_TRANSIENT_FOR names the parent,
-      # and it is a modal dialog (ownedwindows --selftest opens it at 1.2 s
-      # and closes it at 2.4 s). Not blocking yet.
+      # and it is a modal dialog (ownedwindows --selftest opens it at 1.2 s and
+      # closes it at 2.4 s).
       - name: An owned modal window
-        continue-on-error: true
         env:
           DISPLAY: ":99"
         run: |
@@ -1971,12 +1963,10 @@ jobs:
   # each renderer: Vulkan (lavapipe, VK_KHR_xcb_surface) and OpenGL ES (Mesa's
   # llvmpipe, an EGL window surface on EGL's XCB platform), both over the
   # GPU's own libxcb connection. Each must say it presents straight to the
-  # window, not fall back to the CPU, and paint a real frame. Not blocking
-  # until it has passed on the runners a few times.
+  # window, not fall back to the CPU, and paint a real frame.
   visual-gpu-present:
     name: Visual test (GPU present / X11 and Wayland, ${{ matrix.renderer }})
     runs-on: ubuntu-latest
-    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
@@ -2049,7 +2039,6 @@ jobs:
       # the software renderer's, for the log: Mesa's software GPUs may well
       # be slower than the CPU blits.
       - name: spritedemo drawn with ${{ matrix.api }} (selftest, bench)
-        continue-on-error: true
         env:
           DISPLAY: ":99"
           LIBGL_ALWAYS_SOFTWARE: "1"
@@ -2069,16 +2058,15 @@ jobs:
           [ -n "$APP_PID" ] && kill "$APP_PID" 2>/dev/null || true
           [ -n "$XVFB_PID" ] && kill "$XVFB_PID" 2>/dev/null || true
 
-      # The same app on Wayland, drawn with ${{ matrix.api }} and handed to
-      # the compositor as dma-bufs (zwp_linux_dmabuf_v1) instead of read back.
-      # sway offers linux-dmabuf only with its GLES renderer, which needs a
-      # DRM device: here vkms (a virtual display, no GPU), driven by sway's
-      # DRM backend through seatd and rendered with llvmpipe; its vblank
-      # paces the frame callbacks. The app's Mesa (lavapipe, llvmpipe) exports
-      # through udmabuf. Not blocking yet.
+      # The same app on Wayland, drawn with ${{ matrix.api }} and handed to the
+      # compositor as dma-bufs (zwp_linux_dmabuf_v1) instead of read back. sway
+      # offers linux-dmabuf only with its GLES renderer, which needs a DRM
+      # device: here vkms (a virtual display, no GPU), driven by sway's DRM
+      # backend through seatd and rendered with llvmpipe; its vblank paces the
+      # frame callbacks. The app's Mesa (lavapipe, llvmpipe) exports through
+      # udmabuf.
       - name: On Wayland (headless sway), presented through linux-dmabuf with ${{ matrix.api }}
         if: ${{ !cancelled() }}
-        continue-on-error: true
         env:
           LIBGL_ALWAYS_SOFTWARE: "1"
           GALLIUM_DRIVER: llvmpipe
@@ -2156,10 +2144,9 @@ jobs:
       # Weston has no xdg-decoration: Stipple draws the title bar, and GPU
       # frames go in a subsurface under it. Headless Weston with its GL
       # renderer (llvmpipe) takes dma-bufs where Mesa imports them (udmabuf,
-      # loaded above). Not blocking yet.
+      # loaded above).
       - name: On Wayland (headless Weston), client-side decorations over dma-bufs with ${{ matrix.api }}
         if: ${{ !cancelled() }}
-        continue-on-error: true
         env:
           LIBGL_ALWAYS_SOFTWARE: "1"
           GALLIUM_DRIVER: llvmpipe
@@ -2215,12 +2202,10 @@ jobs:
   # as the sway step above. Neither compositor speaks a screenshot protocol
   # a bare client can use (no wlr-screencopy; Mutter's and KWin's own go
   # through the shell or are restricted), so these check the logs only.
-  # Not blocking: whether a headless Mutter or KWin offers linux-dmabuf on a
-  # runner without a GPU is what this finds out.
+  # Both offer linux-dmabuf headless on the runners (no GPU).
   visual-gpu-wayland-desktops:
     name: Visual test (GPU present / Wayland, ${{ matrix.compositor }}, ${{ matrix.renderer }})
     runs-on: ubuntu-latest
-    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
@@ -2785,14 +2770,12 @@ jobs:
           kill "$SWAY_PID" 2>/dev/null || true
 
       # A window on a hidden workspace: sway sends no `suspended`, it only
-      # stops answering the window's frame callbacks, which Stipple takes
-      # for the window being hidden after 500 ms (Event::Occluded). The
-      # animating framepacing switches to workspace 2 and back: nothing may
-      # be presented while it's away, and frames must come back. Not
-      # blocking until it has passed on the runners a few times.
+      # stops answering the window's frame callbacks, which Stipple takes for
+      # the window being hidden after 500 ms (Event::Occluded). The animating
+      # framepacing switches to workspace 2 and back: nothing may be presented
+      # while it's away, and frames must come back.
       - name: A window on a hidden sway workspace draws nothing (Occluded)
         if: ${{ !cancelled() }}
-        continue-on-error: true
         run: |
           export XDG_RUNTIME_DIR="$RUNNER_TEMP/xdgrt-occl"
           mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
@@ -3130,10 +3113,9 @@ jobs:
           awk -v w="$width" 'BEGIN { exit !(w > 4 && w < 12) }'
 
       # The pointer lock: a click locks it (`--lock-test`), the grab holds the
-      # pointer at the window's center (warped back after each move), and
-      # each move arrives as relative motion. Non-blocking while it settles.
+      # pointer at the window's center (warped back after each move), and each
+      # move arrives as relative motion.
       - name: Lock the pointer (grab + warp)
-        continue-on-error: true
         env:
           DISPLAY: ":99"
           STIPPLE_X11_DEBUG: "1"
@@ -3346,22 +3328,18 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "uiademo --patterns failed" }
           .github\scripts\uia-patterns.ps1 .\target\release\examples\touchdemo.exe visual_output
 
-      # touchdemo's list and strip of chips overflow: each has a scroll bar,
-      # a ScrollBar control (with Orientation and RangeValue) after its
-      # content. Not yet seen on the runner, so it doesn't fail the job.
-      - name: Scroll bars through UI Automation (non-blocking)
-        continue-on-error: true
+      # touchdemo's list and strip of chips overflow: each has a scroll bar, a
+      # ScrollBar control (with Orientation and RangeValue) after its content.
+      - name: Scroll bars through UI Automation
         shell: powershell
         run: |
           .github\scripts\uia-roles.ps1 -Exe target\release\examples\touchdemo.exe `
             -Title "Stipple Touch" -Out visual_output -Expect "ScrollBar|*","Pane|*"
 
-      # Relations in-process (uiademo --relations): a combo box's
-      # ControllerFor names its list, a flat tree's item has its Level, and
-      # an Invoke on a row scrolled out of view scrolls, then clicks inside
-      # the viewport. New, so it doesn't fail the job yet.
-      - name: UI Automation relations (non-blocking)
-        continue-on-error: true
+      # Relations in-process (uiademo --relations): a combo box's ControllerFor
+      # names its list, a flat tree's item has its Level, and an Invoke on a
+      # row scrolled out of view scrolls, then clicks inside the viewport.
+      - name: UI Automation relations
         shell: powershell
         run: |
           cargo build --release --example uiademo
@@ -3372,12 +3350,10 @@ jobs:
       # app (.github/scripts/uia-ranges.ps1, touchdemo with TOUCHDEMO_RANGES):
       # the slider's RangeValue (set, with its property-changed event), the
       # progress bar's (read-only), the spin button's and its LabeledBy, the
-      # table's Grid and Table patterns and a cell's GridItem and TableItem,
-      # a label's FontName / FontSize / FontWeight, and the field's
-      # TextChanged and TextSelectionChanged events. New, so it doesn't fail
-      # the job yet.
-      - name: UI Automation range values, tables and text attributes (non-blocking)
-        continue-on-error: true
+      # table's Grid and Table patterns and a cell's GridItem and TableItem, a
+      # label's FontName / FontSize / FontWeight, and the field's TextChanged
+      # and TextSelectionChanged events.
+      - name: UI Automation range values, tables and text attributes
         shell: powershell
         run: |
           .github\scripts\uia-ranges.ps1 .\target\release\examples\touchdemo.exe visual_output
@@ -3580,9 +3556,7 @@ jobs:
       # its text field is an EDIT that takes typing (WM_CHAR, then real keys)
       # into the app's state, follows the state the app sets, submits on
       # Return; UI Automation sees it once and MSAA names it by its hint.
-      # Non-blocking until it has passed here a while.
       - name: Real OS controls (nativegallery self-test, a click, UIA)
-        continue-on-error: true
         shell: powershell
         run: .github\scripts\native-views-windows.ps1
 
@@ -3591,9 +3565,8 @@ jobs:
       # UIA as a CheckBox with Toggle, and real clicks on them reach the app,
       # whose state sets their check; the wheel over a trackbar in a list
       # scrolls the list, not the slider, and a horizontal wheel moves the
-      # slider. Non-blocking until it has passed here a while.
+      # slider.
       - name: Real OS controls, extras (checkboxes, the wheel over a slider)
-        continue-on-error: true
         shell: powershell
         run: |
           $r = Get-Content visual_output\native-views-extras.txt -ErrorAction SilentlyContinue
@@ -3629,7 +3602,6 @@ jobs:
       # sequence must be one emoji wide (one glyph, not its parts) and drawn
       # in color; country flags may stay letters, as Segoe UI Emoji has none.
       - name: Color emoji and joined sequences (Segoe UI Emoji)
-        continue-on-error: true
         shell: bash
         run: |
           mkdir -p visual_output
@@ -3658,14 +3630,13 @@ jobs:
           cargo test --features d3d --lib -- gpu:: app_gpu --nocapture --test-threads 1
           cargo test --release --features d3d --lib -- --ignored bench_cpu_against_gpu --nocapture
       # stipple::video's H.264 clip through Media Foundation (src/video/mf.rs):
-      # the system's decoder as a hand-driven IMFTransform, in software on
-      # this WARP-only runner; every frame's colors and time, seeking, a
-      # Video played to its last frame; then, while Direct3D 11 imports
-      # NV12, each frame a shared NV12 texture drawn by D3D11 with nothing
-      # uploaded. STIPPLE_REQUIRE_VIDEO fails the tests where Media
-      # Foundation is missing instead of skipping. Not blocking yet.
+      # the system's decoder as a hand-driven IMFTransform, in software on this
+      # WARP-only runner; every frame's colors and time, seeking, a Video
+      # played to its last frame; then, while Direct3D 11 imports NV12, each
+      # frame a shared NV12 texture drawn by D3D11 with nothing uploaded.
+      # STIPPLE_REQUIRE_VIDEO fails the tests where Media Foundation is missing
+      # instead of skipping.
       - name: Decode H.264 through Media Foundation
-        continue-on-error: true
         shell: bash
         env:
           STIPPLE_REQUIRE_VIDEO: "1"
@@ -3781,14 +3752,12 @@ jobs:
       - name: Type through the Microsoft Japanese IME
         shell: powershell
         run: .github\scripts\ime-windows.ps1 .\target\release\examples\textinput.exe visual_output
-      # The same, into a live EDIT (Theme::native: docs/native-theme.md,
-      # "Text fields"): the IME composes in the EDIT, and the app's state
-      # must show the hiragana preedit, the kanji conversion and the commit,
-      # read back from the EDIT's composition. Non-blocking until it has
-      # passed here a while.
+      # The same, into a live EDIT (Theme::native: docs/native-theme.md, "Text
+      # fields"): the IME composes in the EDIT, and the app's state must show
+      # the hiragana preedit, the kanji conversion and the commit, read back
+      # from the EDIT's composition.
       - name: Type through the Microsoft Japanese IME into a live EDIT
         if: always()
-        continue-on-error: true
         shell: powershell
         run: .github\scripts\ime-windows.ps1 .\target\release\examples\textinput.exe visual_output -Native
       - name: Upload logs and screenshots
@@ -3996,12 +3965,10 @@ jobs:
   # The site the Pages workflow publishes (tools/site): build every web
   # example and the site, open each example in headless Chrome (it must start,
   # present frames and draw more than a blank canvas, without a panic), and
-  # check the site's internal links and #anchors. Non-blocking while it
-  # settles in: a failure shows as a failed job without failing the run.
+  # check the site's internal links and #anchors.
   visual-site:
     name: Visual test (site + examples in Chrome)
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -4250,15 +4217,14 @@ jobs:
             cp "$f" "visual_output/vk-compare-$(basename "$f")"
           done
 
-      # External images (6g): real dma-bufs, made by the kernel's udmabuf
-      # from known bytes (BGRA, and NV12 as the camera's frames, in full
-      # range BT.601 and limited range BT.709), drawn by GLES on llvmpipe
-      # (imported through EGL_EXT_image_dma_buf_import, no upload) and by
-      # Vulkan on lavapipe (imported through VK_EXT_image_drm_format_modifier,
-      # NV12 as two plane images converted in quad_yuv.frag, no upload),
-      # against the software renderer, which maps them. Not blocking yet.
+      # External images (6g): real dma-bufs, made by the kernel's udmabuf from
+      # known bytes (BGRA, and NV12 as the camera's frames, in full range
+      # BT.601 and limited range BT.709), drawn by GLES on llvmpipe (imported
+      # through EGL_EXT_image_dma_buf_import, no upload) and by Vulkan on
+      # lavapipe (imported through VK_EXT_image_drm_format_modifier, NV12 as
+      # two plane images converted in quad_yuv.frag, no upload), against the
+      # software renderer, which maps them.
       - name: External dma-buf images match the software renderer (llvmpipe, lavapipe)
-        continue-on-error: true
         env:
           STIPPLE_REQUIRE_GPU: "1"
           STIPPLE_REQUIRE_UDMABUF: "1"
@@ -4317,12 +4283,10 @@ jobs:
       # macOS's own Japanese input method (Kotoeri, romaji): a Swift helper
       # selects the input source and posts n i h o n, Space, Return as
       # CGEvents; the field must get the preedit through setMarkedText: and
-      # 日本 through insertText:. Not yet seen passing on the runner (posting
-      # keys needs the Accessibility permission, and the input source must
-      # take), so it reports without failing the job; the log says which
+      # 日本 through insertText: (posting keys needs the Accessibility
+      # permission, and the input source must take); the log says which
       # stage stopped it. See .github/scripts/ime-macos.sh.
       - name: Type through the Japanese input method (Kotoeri)
-        continue-on-error: true
         timeout-minutes: 10
         env:
           OUT_DIR: visual_output
@@ -4383,21 +4347,19 @@ jobs:
           cargo test --release --features mtl --lib -- --ignored bench_cpu_against_gpu --nocapture
       # Video on Metal: VideoToolbox's H.264 frames drawn from their
       # IOSurfaces (nothing uploaded) against the software renderer, and the
-      # player off screen. Non-blocking: the runners' virtual machines may
-      # have no hardware decoder (the tests skip then) and a paravirtual GPU.
+      # player off screen. The runners' virtual machines may have no
+      # hardware decoder (the tests skip then) and a paravirtual GPU.
       - name: Video through VideoToolbox, on Metal and the software renderer
-        continue-on-error: true
         env:
           STIPPLE_REQUIRE_GPU: "1"
         run: |
           cargo test --features video,mtl --lib video:: -- --nocapture
           cargo run --features video --example videoplayer -- --selftest
       # The native theme on Metal: AppKit draws controls only on the main
-      # thread, which the tests above aren't on, so the gallery compares
-      # itself there: the controls AppKit draws, through Metal against the CPU
-      # at scales 1, 1.5 and 2. Non-blocking until it has passed here.
+      # thread, which the tests above aren't on, so the gallery compares itself
+      # there: the controls AppKit draws, through Metal against the CPU at
+      # scales 1, 1.5 and 2.
       - name: Compare the native theme on Metal with the software renderer
-        continue-on-error: true
         run: |
           cargo run --release --features mtl --example nativegallery -- --gpu-check visual_output/metal-compare | tee native-gpu.log
           grep -q 'nativegallery gpu: ok' native-gpu.log
@@ -4446,9 +4408,8 @@ jobs:
 
       # Occlusion (Phase 6a): miniaturized (NSWindow's occlusionState), the
       # animating window presents nothing for 3 s, then draws again once
-      # restored; on the CPU and on Metal. Not blocking yet.
+      # restored; on the CPU and on Metal.
       - name: A minimized window draws no frames (CPU and Metal)
-        continue-on-error: true
         env:
           STIPPLE_DEBUG_WINDOWS: "1"
         run: |
@@ -4461,7 +4422,6 @@ jobs:
       # Metal, nothing uploaded each frame; its benchmark there and on the
       # CPU, for the log.
       - name: spritedemo drawn with Metal (selftest, bench)
-        continue-on-error: true
         env:
           STIPPLE_RENDERER: metal
         run: |
@@ -4557,8 +4517,7 @@ jobs:
       # The reference app (examples/mediabrowser): its selftest off screen
       # (PNG of each step) and in a real AppKit window; then its window
       # screenshotted.
-      - name: Media browser selftest and window (non-blocking)
-        continue-on-error: true
+      - name: Media browser selftest and window
         env:
           STIPPLE_COCOA_A11Y: "1"
         run: |
@@ -4664,17 +4623,15 @@ jobs:
       # NSSlider and NSProgressIndicator back from the view, checks a click at
       # each one's middle lands on it, acts on them (performClick:) and sees
       # the app's handlers run, picks a size in the NSPopUpButton's menu
-      # (performActionForItemAtIndex:; one the app refuses goes back), opens
-      # a panel over them (screenshotted: they are pictures under it) and
-      # checks the list's half-scrolled rows are live, in its clipping
-      # container and cut by it, before and after it scrolls; then its text
-      # field, an NSTextField, takes typing (insertText:) and a composition
+      # (performActionForItemAtIndex:; one the app refuses goes back), opens a
+      # panel over them (screenshotted: they are pictures under it) and checks
+      # the list's half-scrolled rows are live, in its clipping container and
+      # cut by it, before and after it scrolls; then its text field, an
+      # NSTextField, takes typing (insertText:) and a composition
       # (setMarkedText:) into the app's state, follows the state the app sets
-      # and submits on Return. The
-      # accessibility dump (STIPPLE_COCOA_A11Y) must name Save once.
-      # Non-blocking until it has passed here a while.
+      # and submits on Return. The accessibility dump (STIPPLE_COCOA_A11Y) must
+      # name Save once.
       - name: Real OS controls (nativegallery self-test)
-        continue-on-error: true
         env:
           STIPPLE_COCOA_A11Y: "1"
           NATIVEGALLERY_SELFTEST: "1"
@@ -4700,14 +4657,12 @@ jobs:
           cat visual_output/native-views.log
           grep -q 'nativegallery selftest: passed' visual_output/native-views.log
 
-      # The same run's extras: a mouse wheel posted through the window
-      # server (CGEventPost) over the slider in a list scrolls the list and
-      # leaves the slider (a sideways one is logged), and Tab and Shift-Tab
-      # in the live NSTextField (the field editor's insertTab: and
-      # insertBacktab:) move the focus out of it. Non-blocking until it has
-      # passed here a while.
+      # The same run's extras: a mouse wheel posted through the window server
+      # (CGEventPost) over the slider in a list scrolls the list and leaves the
+      # slider (a sideways one is logged), and Tab and Shift-Tab in the live
+      # NSTextField (the field editor's insertTab: and insertBacktab:) move the
+      # focus out of it.
       - name: Real OS controls, extras (the wheel over a slider, Tab)
-        continue-on-error: true
         run: |
           grep 'extra check' visual_output/native-views.log || true
           grep -q 'nativegallery extra checks: passed' visual_output/native-views.log
@@ -4747,7 +4702,6 @@ jobs:
       # its morx table. Each sequence must be one emoji wide (one glyph, not
       # its parts) and drawn in color.
       - name: Color emoji and joined sequences (Apple Color Emoji)
-        continue-on-error: true
         run: |
           mkdir -p visual_output
           perl -e 'alarm 120; exec @ARGV' ./target/release/examples/fontdemo --emoji --emoji-png visual_output/stipple-macos-emoji.png | tee emoji-check.log
@@ -4807,14 +4761,12 @@ jobs:
 
       # Accessibility depth, from outside the app (axprobe --depth): the text
       # field's AXValue and AXNumberOfCharacters, setting its AXValue (the
-      # app's field takes the text) and its AXSelectedTextRange, the
-      # "Remember" checkbox's AXValue before and after AXPress, a toast
-      # raised by "Row 2" (AXAnnouncementRequested), the list as an
-      # AXScrollArea whose AXScrollBar's AXValue scrolls it (scrolled back
-      # through the bar too; no AXScrollToVisible, see ax_value.rs). New and not yet
-      # seen on a runner, so it doesn't fail the job.
+      # app's field takes the text) and its AXSelectedTextRange, the "Remember"
+      # checkbox's AXValue before and after AXPress, a toast raised by "Row 2"
+      # (AXAnnouncementRequested), the list as an AXScrollArea whose
+      # AXScrollBar's AXValue scrolls it (scrolled back through the bar too; no
+      # AXScrollToVisible, see ax_value.rs).
       - name: Accessibility depth from outside the app (AX API, values and scrolling)
-        continue-on-error: true
         run: |
           ./target/release/examples/touchdemo > visual_output/touchdemo-depth.log 2>&1 &
           PID=$!
@@ -4879,13 +4831,10 @@ jobs:
 
       # Range values and a table from outside the app (axprobe --ranges, on
       # touchdemo with TOUCHDEMO_RANGES): the "Volume" slider's AXValue,
-      # AXMinValue and AXMaxValue, AXIncrement and setting its AXValue (the
-      # app logs the new volume), the progress bar's value, and the "Items"
-      # table's AXRowCount, AXColumnCount and AXRows and a cell's
-      # AXRowIndexRange. New and not yet seen on a runner: it doesn't fail
-      # the job.
-      - name: Range values and a table from outside the app (AX API, non-blocking)
-        continue-on-error: true
+      # AXMinValue and AXMaxValue, AXIncrement and setting its AXValue (the app
+      # logs the new volume), the progress bar's value, and the "Items" table's
+      # AXRowCount, AXColumnCount and AXRows and a cell's AXRowIndexRange.
+      - name: Range values and a table from outside the app (AX API)
         run: |
           TOUCHDEMO_RANGES=1 ./target/release/examples/touchdemo > visual_output/touchdemo-ranges.log 2>&1 &
           PID=$!
@@ -4917,8 +4866,7 @@ jobs:
       # The reference app's tree as VoiceOver reads it (axprobe, built and
       # trusted by the steps above): the folder outline, the table, the
       # player's Play button (pressed through AXPress) and its slider.
-      - name: Media browser through the AX API (non-blocking)
-        continue-on-error: true
+      - name: Media browser through the AX API
         run: |
           cargo build --release --example mediabrowser
           ./target/release/examples/mediabrowser --sample --select Music/chime.wav \
@@ -5124,15 +5072,12 @@ jobs:
             bash .github/scripts/atspi-linux.sh target/release/examples/touchdemo visual_output/depth xdotool key Tab
 
       # Range values, a table and a caption through AT-SPI (the walk with
-      # ATSPI_WALK_RANGES=1, on touchdemo with TOUCHDEMO_RANGES): the
-      # "Volume" slider's Value (range, step; set to 0.25, the app's slider
-      # moves, with an accessible-value event), the progress bar's, the
-      # "Level" spin button's (set to 7) and its labelled-by caption, and the
-      # "Items" table's Table and TableCell interfaces. Passes locally
-      # (at-spi2-core 2.58); not yet seen on the runner, so it doesn't fail
-      # the job.
-      - name: Range values and a table through AT-SPI (X11, non-blocking)
-        continue-on-error: true
+      # ATSPI_WALK_RANGES=1, on touchdemo with TOUCHDEMO_RANGES): the "Volume"
+      # slider's Value (range, step; set to 0.25, the app's slider moves, with
+      # an accessible-value event), the progress bar's, the "Level" spin
+      # button's (set to 7) and its labelled-by caption, and the "Items"
+      # table's Table and TableCell interfaces.
+      - name: Range values and a table through AT-SPI (X11)
         run: |
           mkdir -p visual_output/ranges
           DISPLAY=:99 TOUCHDEMO_RANGES=1 ATSPI_WALK_RANGES=1 dbus-run-session --             bash .github/scripts/atspi-linux.sh target/release/examples/touchdemo visual_output/ranges xdotool key Tab
@@ -5148,14 +5093,12 @@ jobs:
             bash .github/scripts/atspi-mediabrowser.sh target/release/examples/mediabrowser visual_output
 
       # Relations, followed from outside as Orca does: widgetsdemo's "Size"
-      # select, opened by its click action, is controller-for its list (and
-      # the list controlled-by it), its "Format" chips are one radio group
-      # (member-of), and the media browser's folder "Music" is
-      # node-child-of the root folder one level up (its "level" attribute),
-      # which is node-parent-of it. Passes locally under Xvfb; not yet seen
-      # on the runner, so it doesn't fail the job.
-      - name: Relations through AT-SPI (X11, non-blocking)
-        continue-on-error: true
+      # select, opened by its click action, is controller-for its list (and the
+      # list controlled-by it), its "Format" chips are one radio group
+      # (member-of), and the media browser's folder "Music" is node-child-of
+      # the root folder one level up (its "level" attribute), which is
+      # node-parent-of it.
+      - name: Relations through AT-SPI (X11)
         run: |
           cargo build --release --example widgetsdemo
           DISPLAY=:99 dbus-run-session -- bash .github/scripts/atspi-relations.sh \
@@ -5165,21 +5108,17 @@ jobs:
 
       # The accessibility bus found from the X root window's AT_SPI_BUS
       # property alone, with no session bus for the app to ask (as libatspi
-      # finds it over ssh -X or under sudo). Passes locally under Xvfb; not
-      # yet seen on the runner, so it doesn't fail the job.
-      - name: Find the accessibility bus through the X root window (non-blocking)
-        continue-on-error: true
+      # finds it over ssh -X or under sudo).
+      - name: Find the accessibility bus through the X root window
         run: |
           sudo apt-get install -y python3-xlib
           DISPLAY=:99 dbus-run-session -- \
             bash .github/scripts/atspi-x11-bus.sh target/release/examples/touchdemo visual_output
 
       # The accessibility bus itself restarting (at-spi-bus-launcher killed,
-      # then started again on demand): the app reconnects and registers
-      # again, and a fresh pyatspi client finds it. Not yet seen passing on
-      # the runner, so it doesn't fail the job.
+      # then started again on demand): the app reconnects and registers again,
+      # and a fresh pyatspi client finds it.
       - name: Survive the accessibility bus restarting (X11)
-        continue-on-error: true
         run: |
           DISPLAY=:99 dbus-run-session -- \
             bash .github/scripts/atspi-bus-restart.sh target/release/examples/touchdemo visual_output
@@ -5295,26 +5234,23 @@ jobs:
         run: dbus-run-session -- bash .github/scripts/os-integration-linux.sh target/release/examples/traydemo
 
       # App::single_instance: a second launch hands its arguments, directory
-      # and startup id to the first over a Unix socket in $XDG_RUNTIME_DIR,
-      # and exits. Not blocking until it has passed on CI.
+      # and startup id to the first over a Unix socket in $XDG_RUNTIME_DIR, and
+      # exits.
       - name: Single instance (instancedemo, two launches)
-        continue-on-error: true
         env:
           DISPLAY: ":99"
         run: |
           cargo build --release --example instancedemo
           bash .github/scripts/single-instance.sh target/release/examples/instancedemo
 
-      # App::dbus_activatable: `cargo stipple linux` packages instancedemo
-      # (its .desktop file DBusActivatable, a session bus .service file),
-      # the job installs it, and a private session bus with that .service
-      # file starts the app for a `gdbus call` to
-      # org.freedesktop.Application.Open, which hands it the URI, the
-      # activation token and the startup id; ActivateAction and a launch
-      # from the command line reach the running one over the bus. Not
-      # blocking until it has passed on CI.
+      # App::dbus_activatable: `cargo stipple linux` packages instancedemo (its
+      # .desktop file DBusActivatable, a session bus .service file), the job
+      # installs it, and a private session bus with that .service file starts
+      # the app for a `gdbus call` to org.freedesktop.Application.Open, which
+      # hands it the URI, the activation token and the startup id;
+      # ActivateAction and a launch from the command line reach the running one
+      # over the bus.
       - name: D-Bus activation (instancedemo packaged, started by the bus)
-        continue-on-error: true
         env:
           DISPLAY: ":99"
           OUT_DIR: visual_output
@@ -5335,13 +5271,11 @@ jobs:
           cargo build --release --example instancedemo
           bash .github/scripts/dbus-activation.sh target/release/examples/instancedemo "$service"
 
-      # platform::network end to end: netstatus in a user and network
-      # namespace of its own, while the script adds and removes links and
-      # default routes (docs/network.md). Ubuntu's AppArmor keeps
-      # unprivileged user namespaces off by default: allowed for the step.
-      # Not blocking until it has passed on CI.
+      # platform::network end to end: netstatus in a user and network namespace
+      # of its own, while the script adds and removes links and default routes
+      # (docs/network.md). Ubuntu's AppArmor keeps unprivileged user namespaces
+      # off by default: allowed for the step.
       - name: Network status in a network namespace
-        continue-on-error: true
         run: |
           cargo build --release --example netstatus
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
@@ -5352,13 +5286,10 @@ jobs:
       # selftest, secret-tool reading what Stipple stored and the reverse, a
       # locked keyring answered as Locked, no Secret Service answered as
       # unavailable with no file written, and the crate's round-trip test.
-      # Not blocking until it has passed on CI.
       - name: Install GNOME Keyring and secret-tool
-        continue-on-error: true
         run: sudo apt-get install -y gnome-keyring libsecret-tools
 
       - name: Secure storage through the Secret Service (securestore selftest)
-        continue-on-error: true
         env:
           SECURE_STORE_CARGO_TEST: "1"
         run: |
@@ -5427,20 +5358,17 @@ jobs:
           grep -q stipple-note editors.txt || echo "::warning::open_path didn't show an editor with stipple-note.txt"
           powershell -NoProfile -Command "Get-Process notepad -ErrorAction SilentlyContinue | Stop-Process" || true
 
-      # App::single_instance over a named mutex and pipe: a second launch
-      # hands its arguments to the first and exits. Not blocking until it has
-      # passed on CI.
+      # App::single_instance over a named mutex and pipe: a second launch hands
+      # its arguments to the first and exits.
       - name: Single instance (instancedemo, two launches)
-        continue-on-error: true
         shell: bash
         run: |
           cargo build --release --example instancedemo
           bash .github/scripts/single-instance.sh target/release/examples/instancedemo.exe
 
-      # platform::network on the runner (IP Helper: online through its
-      # Ethernet adapter). Not blocking until it has passed on CI.
+      # platform::network on the runner (IP Helper: online through its Ethernet
+      # adapter).
       - name: Network status
-        continue-on-error: true
         shell: bash
         run: |
           cargo build --release --example netstatus
@@ -5449,10 +5377,8 @@ jobs:
           grep -q "transport=Ethernet" net.log || echo "::warning::the runner's network isn't Ethernet"
       # platform::secure_store through Credential Manager: the example's
       # selftest, then a value stored by one process, listed by cmdkey as a
-      # generic credential, read back by another process, and removed. Not
-      # blocking until it has passed on CI.
+      # generic credential, read back by another process, and removed.
       - name: Secure storage in Credential Manager (securestore selftest)
-        continue-on-error: true
         shell: bash
         run: |
           cargo build --release --example securestore
@@ -5565,10 +5491,8 @@ jobs:
           grep -q "instancedemo: open url stipple-selftest://open?x=1" dock.log
           grep -q 'instancedemo: open files \["/tmp"\]' dock.log
 
-      # platform::network on the runner (nw_path_monitor). Not blocking
-      # until it has passed on CI.
+      # platform::network on the runner (nw_path_monitor).
       - name: Network status
-        continue-on-error: true
         run: |
           cargo build --release --example netstatus
           perl -e 'alarm 60; exec @ARGV' ./target/release/examples/netstatus --watch 3 2>&1 | tee net.log
@@ -5707,18 +5631,17 @@ jobs:
       # controls"): nativegallery's self-test reads its UIButtons, UISwitch,
       # UISlider and UIProgressView back from the view, checks a tap at each
       # one's middle lands on it (hitTest:), acts on them
-      # (sendActionsForControlEvents:) and sees the app's handlers run, opens
-      # a panel over them (screenshotted: they are pictures under it), picks a
-      # size through the select's UIMenu (a UIAction; one the app refuses
-      # goes back), checks the list's half-scrolled rows are live, in its
-      # clipping container and cut by it, before and after it scrolls, types
+      # (sendActionsForControlEvents:) and sees the app's handlers run, opens a
+      # panel over them (screenshotted: they are pictures under it), picks a
+      # size through the select's UIMenu (a UIAction; one the app refuses goes
+      # back), checks the list's half-scrolled rows are live, in its clipping
+      # container and cut by it, before and after it scrolls, types
       # (insertText:) and composes (setMarkedText:selectedRange:) in its
       # UITextField and checks the app's state follows (and the field follows
-      # the state the app sets), and reads the view's accessibility elements
-      # as VoiceOver does: Save, Sync, Size and the field (Name) once each, as
-      # the UIKit controls. Non-blocking until it has passed here a while.
+      # the state the app sets), and reads the view's accessibility elements as
+      # VoiceOver does: Save, Sync, Size and the field (Name) once each, as the
+      # UIKit controls.
       - name: Real OS controls (nativegallery self-test)
-        continue-on-error: true
         run: |
           xcrun simctl terminate "$DEV" com.karpeleslab.stipple || true
           SIMCTL_CHILD_NATIVEGALLERY_SELFTEST=1 xcrun simctl launch "$DEV" com.karpeleslab.stipple
@@ -5879,17 +5802,15 @@ jobs:
           grep -q "touchdemo: edit menu passed" "$LOG" \
             || echo "::warning::touchdemo's edit menu part didn't pass (see the log above)"
 
-      # Mobile input (touchdemo, after part 1): a hardware keyboard's dead
-      # key through UITextInput's marked text (the accent, then the composed
-      # letter), a text and a file dropped through the view's
-      # UIDropInteraction delegate (a stand-in session over real
-      # NSItemProviders: the file is copied into the app's tmp directory),
-      # and the trackpad's scroll recognizer (on the view, continuous and
-      # discrete scrolling, no touches) scrolling the list. Not blocking
-      # until it has passed here.
-      - name: Dead keys, drops and trackpad scrolling (touchdemo, not blocking)
+      # Mobile input (touchdemo, after part 1): a hardware keyboard's dead key
+      # through UITextInput's marked text (the accent, then the composed
+      # letter), a text and a file dropped through the view's UIDropInteraction
+      # delegate (a stand-in session over real NSItemProviders: the file is
+      # copied into the app's tmp directory), and the trackpad's scroll
+      # recognizer (on the view, continuous and discrete scrolling, no touches)
+      # scrolling the list.
+      - name: Dead keys, drops and trackpad scrolling (touchdemo)
         if: ${{ !cancelled() }}
-        continue-on-error: true
         run: |
           DATA=$(xcrun simctl get_app_container "$DEV" com.karpeleslab.stipple data)
           LOG="$DATA/tmp/touchdemo.log"
@@ -5905,20 +5826,18 @@ jobs:
           grep -qE "touchdemo: trackpad scrolled the list [0-9]+ -> [0-9]+" "$LOG"
           grep -q "touchdemo: mobile input passed" "$LOG"
 
-      # Dragging out and the trackpad's depth (touchdemo, after mobile
-      # input): the view's UIDragInteraction delegate asked for the items
-      # under "Rows tapped" (a text) and "Drag file" (a file) as UIKit asks
-      # after its long press, whose item providers (an NSString; a file
-      # representation named after the file) are then dropped on the pinch
-      # box through the drop interaction; a secondary click opening a row's
-      # context menu; the pointer interaction's I-beam over the text field;
-      # a trackpad flick coasting on after the fingers lift. A drag between
-      # two apps can't be scripted on the simulator (no split view from
-      # simctl or XCUITest); the real lift is in the XCUITest below. Not
-      # blocking until it has passed here.
-      - name: Dragging out, secondary click, pointer shape and trackpad momentum (touchdemo, not blocking)
+      # Dragging out and the trackpad's depth (touchdemo, after mobile input):
+      # the view's UIDragInteraction delegate asked for the items under "Rows
+      # tapped" (a text) and "Drag file" (a file) as UIKit asks after its long
+      # press, whose item providers (an NSString; a file representation named
+      # after the file) are then dropped on the pinch box through the drop
+      # interaction; a secondary click opening a row's context menu; the
+      # pointer interaction's I-beam over the text field; a trackpad flick
+      # coasting on after the fingers lift. A drag between two apps can't be
+      # scripted on the simulator (no split view from simctl or XCUITest); the
+      # real lift is in the XCUITest below.
+      - name: Dragging out, secondary click, pointer shape and trackpad momentum (touchdemo)
         if: ${{ !cancelled() }}
-        continue-on-error: true
         run: |
           DATA=$(xcrun simctl get_app_container "$DEV" com.karpeleslab.stipple data)
           LOG="$DATA/tmp/touchdemo.log"
@@ -6083,17 +6002,16 @@ jobs:
       # launches touchdemo with TOUCHDEMO_SERVICES (timers, clipboard and URL
       # buttons, and labels saying what they did) and reads the labels back
       # through accessibility: a repeating timer counts up on its own, a
-      # one-shot timer fires and a thread's AppHandle::update arrives after
-      # a tap; a swipe scrolls the list without tapping a row and a slow
-      # drag scrolls it back; a tap at a row's coordinate taps it; a long
-      # press opens its context menu and a tap picks the item; the system
-      # edit menu's Paste (or the app's own button) puts what simctl pbcopy
-      # left into the app; "Set clip" writes the pasteboard, which simctl
-      # pbpaste reads back here; "Open URL" brings Safari to the foreground
-      # and the app comes back. Not blocking until it has passed here.
-      - name: Real touches, timers, clipboard and opening a URL (XCUITest, not blocking)
+      # one-shot timer fires and a thread's AppHandle::update arrives after a
+      # tap; a swipe scrolls the list without tapping a row and a slow drag
+      # scrolls it back; a tap at a row's coordinate taps it; a long press
+      # opens its context menu and a tap picks the item; the system edit menu's
+      # Paste (or the app's own button) puts what simctl pbcopy left into the
+      # app; "Set clip" writes the pasteboard, which simctl pbpaste reads back
+      # here; "Open URL" brings Safari to the foreground and the app comes
+      # back.
+      - name: Real touches, timers, clipboard and opening a URL (XCUITest)
         if: ${{ !cancelled() }}
-        continue-on-error: true
         timeout-minutes: 20
         run: |
           xcrun simctl terminate "$DEV" com.karpeleslab.stipple || true
@@ -6170,7 +6088,6 @@ jobs:
       # session.
       - name: Saved state across process death on an iPad (touchdemo)
         if: ${{ !cancelled() }}
-        continue-on-error: true
         timeout-minutes: 15
         run: |
           xcrun simctl shutdown "$DEV" || true
@@ -6271,7 +6188,6 @@ jobs:
       # back state saved under it when the user didn't close the app.
       - name: Saved state dropped when the user closes the app, on an iPad (touchdemo)
         if: ${{ !cancelled() && env.IPAD != '' }}
-        continue-on-error: true
         timeout-minutes: 10
         run: |
           DATA=$(xcrun simctl get_app_container "$IPAD" com.karpeleslab.stipple data)
@@ -6385,7 +6301,6 @@ jobs:
       # orientation.
       - name: Edge to edge, rotation and keeping awake (screendemo self-test)
         if: ${{ !cancelled() }}
-        continue-on-error: true
         timeout-minutes: 10
         run: |
           [ -z "${IPAD:-}" ] || xcrun simctl shutdown "$IPAD" || true
@@ -6421,7 +6336,6 @@ jobs:
       # bundle carries NSCameraUsageDescription, as a real app must.
       - name: Camera reports no camera on the simulator (cameraview self-test)
         if: ${{ !cancelled() }}
-        continue-on-error: true
         timeout-minutes: 10
         run: |
           xcrun simctl boot "$DEV" || true
@@ -6518,11 +6432,10 @@ jobs:
   # compiled icon catalog, the signature, the .ipa's layout), and the
   # simulator .app installed and launched: platform::app_info reads the
   # name, version and build the tool wrote, and platform::assets the assets
-  # it copied. Not blocking yet.
+  # it copied.
   package-ios:
     name: Package (iOS .app and .ipa)
     runs-on: macos-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -6584,18 +6497,16 @@ jobs:
       # with a notification service extension written in Rust in
       # PlugIns/Service.appex, the two sharing an app group. The bundles are
       # checked (the extension's Info.plist, both signatures and their
-      # app-group entitlements, the .ipa's layout); then the simulator .app
-      # is installed and launched (the app writes into the group's
-      # container), and the extension's executable is run inside its
-      # bundle in self-test mode: Stipple's non-UI parts answer without
-      # App::run (its own bundle id, directories, languages), it reads what
-      # the app wrote in the same container, and its principal class
-      # registers. NSExtensionMain itself only runs when the system starts
-      # the extension for a remote notification, which isn't scripted here.
-      # Not blocking yet.
-      - name: Package extensiondemo with its app extension (not blocking)
+      # app-group entitlements, the .ipa's layout); then the simulator .app is
+      # installed and launched (the app writes into the group's container), and
+      # the extension's executable is run inside its bundle in self-test mode:
+      # Stipple's non-UI parts answer without App::run (its own bundle id,
+      # directories, languages), it reads what the app wrote in the same
+      # container, and its principal class registers. NSExtensionMain itself
+      # only runs when the system starts the extension for a remote
+      # notification, which isn't scripted here.
+      - name: Package extensiondemo with its app extension
         if: ${{ !cancelled() }}
-        continue-on-error: true
         run: |
           tools/package/cargo-stipple ios --simulator --example extensiondemo --config examples/extensiondemo/package.toml
           tools/package/cargo-stipple ios --example extensiondemo --config examples/extensiondemo/package.toml
@@ -6623,9 +6534,8 @@ jobs:
           grep -q "Payload/Stipple Extensions.app/PlugIns/Service.appex/Info.plist$" ipa.txt
           test -d "target/stipple-package/ios/Service.appex.dSYM"
 
-      - name: Run extensiondemo and its extension in the simulator (not blocking)
+      - name: Run extensiondemo and its extension in the simulator
         if: ${{ !cancelled() }}
-        continue-on-error: true
         run: |
           DEV=$(xcrun simctl list devices booted -j | python3 -c "import sys,json;d=json.load(sys.stdin)['devices'];ids=[x['udid'] for rt,devs in d.items() if 'iOS' in rt for x in devs];print(ids[0] if ids else '')")
           [ -n "$DEV" ] || { xcrun simctl list devices; exit 1; }
@@ -6667,11 +6577,10 @@ jobs:
   # App Bundle (arm64-v8a, armeabi-v7a and x86_64, target SDK 35, 16 KB
   # pages, adaptive icons, the label in three languages) that bundletool
   # validates and splits, and a universal APK that the SDK's tools read back
-  # (badging, signature, 16 KB alignment). Not blocking yet.
+  # (badging, signature, 16 KB alignment).
   package-android:
     name: Package (Android .aab and APK)
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -6718,11 +6627,9 @@ jobs:
           for abi in arm64_v8a armeabi_v7a x86_64; do grep -q "splits/base-$abi.apk" split.txt; done
 
       # An app's own Java classes (examples/androidservice: a Service and a
-      # BroadcastReceiver compiled with javac and d8) and the manifest
-      # fragment that declares them, merged next to Stipple's NativeActivity.
-      # Not blocking yet.
+      # BroadcastReceiver compiled with javac and d8) and the manifest fragment
+      # that declares them, merged next to Stipple's NativeActivity.
       - name: Package androidservice (the app's own Java and manifest fragment)
-        continue-on-error: true
         run: |
           tools/package/cargo-stipple android --example androidservice --config examples/androidservice/package.toml
           OUT=target/stipple-package/android
@@ -6837,7 +6744,6 @@ jobs:
       # examples/androidservice/test-on-device.sh on API 34.
       - name: Package androidservice for the emulator
         if: matrix.api-level == 34
-        continue-on-error: true
         run: tools/package/cargo-stipple android --abi x86_64 --example androidservice --config examples/androidservice/package.toml --out androidservice
 
       # Another app's side of the clipboard (a receiver that copies, an
@@ -6944,14 +6850,13 @@ jobs:
   # The GPU renderer's comparison corpus (src/gpu/compare.rs: every scene on
   # Metal against the software renderer, the device-loss test with it) and
   # the benchmark, spawned in the iOS simulator as plain executables
-  # (tools/gpu-mobile.sh). Not blocking until it has passed on the runner,
-  # whose simulator draws Metal on the VM's paravirtual GPU.
+  # (tools/gpu-mobile.sh). The runner's simulator draws Metal on the VM's
+  # paravirtual GPU.
   gpu-ios-sim:
     name: GPU corpus (iOS simulator, Metal)
     runs-on: macos-latest
     # A hung device fails here instead of holding the job for six hours.
     timeout-minutes: 75
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -6977,13 +6882,12 @@ jobs:
   # The same corpus on the Android emulator (API 34, x86_64), with OpenGL ES
   # and with Vulkan, each a test executable pushed and run over adb
   # (tools/gpu-mobile.sh); then the benchmark on each. The runner's emulator
-  # has no host GPU: both APIs are SwiftShader's. Not blocking yet.
+  # has no host GPU: both APIs are SwiftShader's.
   gpu-android:
     name: GPU corpus (Android emulator, API 34, GLES and Vulkan)
     runs-on: ubuntu-latest
     # A hung device fails here instead of holding the job for six hours.
     timeout-minutes: 75
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -7028,12 +6932,10 @@ jobs:
   # cameraview reports the permission not determined until it's granted
   # (pm grant), then opens the back camera, the emulator's emulated one
   # (hw.camera.back=emulated, a moving scene), and frames with a picture in
-  # them reach its callback (examples/cameraview/test-on-device.sh). Not
-  # blocking yet: the emulator's camera HAL is new ground here.
+  # them reach its callback (examples/cameraview/test-on-device.sh).
   camera-android:
     name: Camera (Android emulator, API 34)
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -7178,7 +7080,6 @@ jobs:
       # private session bus, read with dbus-monitor: the work's progress at
       # start, then the bell's count and urgent flag, cleared on focus.
       - name: Launcher entry over D-Bus (count, progress, urgent)
-        continue-on-error: true
         run: |
           export DISPLAY=:99
           xdpyinfo > /dev/null 2>&1 || { Xvfb :99 -noreset -screen 0 1024x768x24 & sleep 2; }
@@ -7207,7 +7108,6 @@ jobs:
       # the next run; a placement on a monitor that's gone comes back on
       # screen, and one smaller than the content's minimum is raised to it.
       - name: Window placement across runs
-        continue-on-error: true
         run: |
           export DISPLAY=:99
           xdpyinfo > /dev/null 2>&1 || { Xvfb :99 -noreset -screen 0 1024x768x24 & sleep 2; }
@@ -7399,11 +7299,10 @@ jobs:
   # xdg_dialog_v1 marked modal. The compositor's own protocol log
   # (WAYLAND_DEBUG=server) shows it took the requests, and the app ran on
   # with no wl_display.error; on KWin, a script reads back that it made the
-  # window a modal transient. Not blocking yet.
+  # window a modal transient.
   dialog-wayland-desktops:
     name: Modal dialog (Wayland, ${{ matrix.compositor }})
     runs-on: ubuntu-latest
-    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
@@ -7577,7 +7476,6 @@ jobs:
       # set once the taskbar button exists. The taskbar can't be read back,
       # so this checks each call succeeds.
       - name: Taskbar badge and progress
-        continue-on-error: true
         shell: powershell
         run: |
           New-Item -ItemType Directory -Force -Path visual_output | Out-Null
@@ -7594,7 +7492,6 @@ jobs:
       # App::remember_window: the placement round-trips across runs
       # (position, size, maximized) and stays on a monitor.
       - name: Window placement across runs
-        continue-on-error: true
         shell: powershell
         run: .github\scripts\placement-windows.ps1 .\target\release\examples\lifecycle.exe visual_output
       - name: Upload log
@@ -7662,7 +7559,6 @@ jobs:
           grep -q 'lifecycle: event loop exited' lifecycle-macos.log
       # The Dock tile's progress bar, read back from its content view.
       - name: Dock progress
-        continue-on-error: true
         run: "grep -q 'Cocoa dock progress: value=0.5 cleared=true' lifecycle-macos.log"
 
   # After a fully green push to master, commit the fresh screenshots so the README
