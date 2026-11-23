@@ -2524,9 +2524,12 @@ Most input only works on X11 today.
   scrolling drag, the rich editor, scroll-into-view under a keyboard inset,
   and the system menu through a window's `show_edit_menu` and
   `Event::EditAction`). `touchdemo`'s iOS self-test long-presses the field and
-  sends `copy:` / `cut:` / `paste:`; the Android emulator script long-presses
-  the name field and taps the floating toolbar's Copy: both added and not yet
-  run (they warn rather than fail); the native menus are build-checked only.
+  sends `copy:` / `cut:` / `paste:` (it warns rather than fails); the Android
+  emulator script long-presses the name field, clicks the floating
+  toolbar's Copy through an accessibility service reading every window (the
+  toolbar's window is one `uiautomator dump` doesn't read), and another app
+  reads the word from the clipboard (API 34, required); the other native
+  menus are build-checked only.
   Not done: the caret handle doesn't fade on its own, a dragged handle doesn't
   scroll a single-line field's text, Paste shows even with an empty
   clipboard, and the system menu isn't told when the App's field moves under

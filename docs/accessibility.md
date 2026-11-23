@@ -669,6 +669,11 @@ system's accessibility framework. It:
 
 `test-on-device.sh` also reads the tree with `uiautomator dump` (another
 out-of-process client of the same framework) and taps nodes at their bounds.
+It reads only the active window, so for the floating text edit menu (a
+window of its own) the script enables the probe APK's second service,
+`Menu`, which asks for every interactive window
+(`flagRetrieveInteractiveWindows`) and clicks an item it finds in any of
+them (`getWindows()`) when told to by a broadcast.
 
 **TalkBack**: the Google APIs emulator images ship TalkBack from API 33 on
 (`/product/app/talkback`; the API 30 image doesn't), so on API 34

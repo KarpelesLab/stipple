@@ -336,8 +336,15 @@ suggestions and autocorrect work as in any Android app:
   selection; `onActionItemClicked` hands the pick to the App
   (`Event::EditAction`). Logged as `stipple: edit menu shown: ...`,
   `picked ...` and `closed`. Before Android 8 the App draws its own menu.
-  CI's emulator script long-presses the name field and taps the menu's Copy
-  (added, not yet run in CI: a warning if it fails).
+  CI's emulator script (API 34) long-presses the name field and clicks the
+  menu's Copy, and another app then reads the selected word ("Stipple日本")
+  from the clipboard; required. The toolbar is a window of its own, which
+  `uiautomator dump` doesn't read (it reads the active window only), so the
+  click comes from an accessibility service of the probe's APK
+  (`.github/a11y/android/src/org/stipple/a11yprobe/Menu.java`): it asks for
+  every interactive window (`flagRetrieveInteractiveWindows`), and on
+  `am broadcast -a org.stipple.a11yprobe.CLICK --es text Copy` finds the
+  item among their node trees (`getWindows()`) and clicks it.
 
 `stipple::platform::backend::android::input_connection_self_test()` drives
 the focused field's connection as a keyboard would and logs what it reads

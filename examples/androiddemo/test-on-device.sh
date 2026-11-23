@@ -575,8 +575,18 @@ adb exec-out screencap -p > "$shots/android-number-field.png"
 
 # Editing with a finger: a long press on the name field selects its word and
 # the system's edit menu (a floating ActionMode) shows, with the system's own
-# Cut / Copy / Paste / Select All; a tap on its Copy reaches the app. New and
-# not yet run here: a warning rather than a failure.
+# Cut / Copy / Paste / Select All; a click on its Copy reaches the app, and
+# the word is on the clipboard. The menu is a window of its own, which
+# `uiautomator dump` doesn't read (it reads the active window only): with
+# STIPPLE_A11Y_PROBE (.github/a11y/android/build-probe.sh's APK), its Menu
+# accessibility service finds Copy among every window's nodes and clicks it,
+# and with STIPPLE_CLIP_PROBE (.github/clip/android/build-clip.sh's APK),
+# another app reads the clipboard back; the check must pass then. Without
+# the first, a tap on a Copy that uiautomator finds, and a warning if it
+# can't.
+a11y_probe="${STIPPLE_A11Y_PROBE:-}"
+clip_probe="${STIPPLE_CLIP_PROBE:-}"
+plog() { adb logcat -d -s a11yprobe:I 2>/dev/null || true; }
 wait_quiet() {
   local i
   for ((i = 0; i < $2; i++)); do
@@ -585,8 +595,32 @@ wait_quiet() {
   done
   return 1
 }
+# Wait up to $2 seconds for a probe line matching $1.
+wait_probe() {
+  local i
+  for ((i = 0; i < $2; i++)); do
+    plog | grep -qE "$1" && return 0
+    sleep 1
+  done
+  return 1
+}
+menu_off() {
+  adb shell settings put secure enabled_accessibility_services '""' >/dev/null 2>&1 || true
+  adb shell settings put secure accessibility_enabled 0 >/dev/null 2>&1 || true
+}
+# The word the long press selects in "Stipple日本!" (Latin and Han letters
+# with no break between them make one word).
+edit_menu_word="Stipple日本"
 edit_menu_check() {
   local b x1 y1 x2 y2
+  if [ -n "$a11y_probe" ]; then
+    adb install -r "$a11y_probe" >/dev/null \
+      || { adb uninstall org.stipple.a11yprobe >/dev/null; adb install "$a11y_probe" >/dev/null; }
+    adb shell settings put secure enabled_accessibility_services \
+      org.stipple.a11yprobe/org.stipple.a11yprobe.Menu
+    adb shell settings put secure accessibility_enabled 1
+    wait_probe "menu connected" 30 || { echo "the Menu accessibility service didn't connect" >&2; return 1; }
+  fi
   adb shell uiautomator dump /sdcard/stipple-ui.xml >/dev/null 2>&1 || return 1
   b="$(adb shell cat /sdcard/stipple-ui.xml | sed 's/<node/\n<node/g' \
     | grep -E 'class="android.widget.EditText"' | head -1 \
@@ -601,15 +635,47 @@ edit_menu_check() {
   adb exec-out screencap -p > "$shots/android-edit-menu.png"
   adb shell uiautomator dump /sdcard/stipple-ui.xml >/dev/null 2>&1 || true
   adb shell cat /sdcard/stipple-ui.xml > "$shots/android-edit-menu-ui.xml" || true
-  tap_node 'text="Copy"' || { echo "no Copy item on screen" >&2; return 1; }
+  if [ -n "$a11y_probe" ]; then
+    adb shell am broadcast -a org.stipple.a11yprobe.CLICK -p org.stipple.a11yprobe --es text Copy >/dev/null
+    wait_probe 'menu (click "Copy"|no "Copy")' 10 || true
+    plog | grep -E "menu (looking|window|click|no )" | sed 's/.*a11yprobe: //' || true
+    plog | grep -qE 'menu click "Copy" .* -> true' || { echo "the Menu service didn't click Copy" >&2; return 1; }
+  else
+    tap_node 'text="Copy"' || { echo "no Copy item on screen" >&2; return 1; }
+  fi
   wait_quiet "stipple: edit menu picked Copy" 10 || { echo "Copy didn't reach the app" >&2; return 1; }
   wait_quiet "stipple: edit menu closed" 10 || { echo "the edit menu stayed" >&2; return 1; }
+  menu_off
+  [ -n "$clip_probe" ] || return 0
+  # Another app, in front, reads the clipboard: the word the long press
+  # selected.
+  adb install -r "$clip_probe" >/dev/null \
+    || { adb uninstall org.stipple.clip >/dev/null; adb install "$clip_probe" >/dev/null; }
+  sleep 2
+  adb shell am start -W -n org.stipple.clip/.Read >/dev/null
+  local i read=""
+  for ((i = 0; i < 15; i++)); do
+    read="$(adb logcat -d -s stipple-clip:I 2>/dev/null | grep -E "stipple-clip: read" | tail -1 || true)"
+    [ -n "$read" ] && break
+    sleep 1
+  done
+  echo "android: after the edit menu's Copy, another app ${read#*stipple-clip: }"
+  adb shell am start -W -n "$pkg/android.app.NativeActivity" >/dev/null
+  wait_top "$pkg" 20 || return 1
+  sleep 1
+  grep -qF "stipple-clip: read \"$edit_menu_word\"" <<< "$read" \
+    || { echo "the clipboard doesn't hold \"$edit_menu_word\"" >&2; return 1; }
 }
 if edit_menu_check; then
-  echo "android: a long press selected a word and the floating edit menu's Copy reached the app"
+  echo "android: a long press selected a word, the floating edit menu's Copy reached the app${clip_probe:+, and another app read the word from the clipboard}"
 else
-  echo "::warning::the floating edit menu check didn't pass"
+  menu_off
   log | grep -E "edit menu|androiddemo: text" | tail -10 || true
+  if [ -n "$a11y_probe" ]; then
+    echo "the floating edit menu check failed" >&2
+    exit 1
+  fi
+  echo "::warning::the floating edit menu check didn't pass"
 fi
 
 if ! adb shell pidof "$pkg" >/dev/null || log | grep -q "panicked"; then

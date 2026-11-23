@@ -6789,6 +6789,12 @@ jobs:
           STIPPLE_ANDROID_QUICK: ${{ matrix.quick }}
           # The edge swipe must run, not be skipped.
           STIPPLE_ANDROID_STRICT: "1"
+          # The floating edit menu's Copy, in a window uiautomator doesn't
+          # read: the probe's Menu accessibility service clicks it, and the
+          # clipboard probe reads the copied word back (test-on-device.sh,
+          # not in quick mode; required).
+          STIPPLE_A11Y_PROBE: ${{ matrix.api-level == 34 && 'a11yprobe.apk' || '' }}
+          STIPPLE_CLIP_PROBE: clipprobe.apk
         with:
           api-level: ${{ matrix.api-level }}
           arch: x86_64

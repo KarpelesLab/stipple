@@ -641,9 +641,10 @@ shown in the system's monospaced font, which the web doesn't have. See
 areas and the rich editor: the handles and the web's edit menu are drawn by
 Stipple; iOS 16+ shows the system's menu (`UIEditMenuInteraction`) and
 Android 8+ a floating `ActionMode` (the drawn menu before those). App-tested
-with synthetic touches; the iOS simulator self-test and the Android emulator
-script check the system menus, added with this change and not yet run in CI
-(they warn rather than fail). See
+with synthetic touches; the iOS simulator self-test checks the system menu
+(a warning rather than a failure), and CI's Android 14 emulator clicks the
+floating toolbar's Copy through an accessibility service and reads the word
+back from the clipboard in another app (required). See
 [text-editing.md](text-editing.md#editing-with-a-finger).
 ⁷⁸ On a hardware keyboard. Android: a key whose `KeyCharacterMap` value is a
 `COMBINING_ACCENT` shows its accent as a preedit and the next key commits the
