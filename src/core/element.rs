@@ -1588,6 +1588,18 @@ impl Element {
         self
     }
 
+    /// Say this element's [`a11y_label`](Self::a11y_label) is the text of
+    /// its text leaves `lines` (by order), a line each, joined by newlines
+    /// (an empty line shown as a space reads as empty): the text attribute
+    /// runs of those lines are then the label's (a text view's rows on
+    /// screen, with their highlighted matches).
+    pub(crate) fn a11y_text_lines(mut self, lines: std::ops::Range<usize>) -> Self {
+        self.semantics
+            .get_or_insert_with(Semantics::default)
+            .text_lines = Some(lines);
+        self
+    }
+
     /// Enable wrapping. On a text element the text word-wraps to the element's
     /// content width across as many lines as needed. On a stack (row or
     /// column), children that don't fit the main axis flow onto new lines, with

@@ -51,7 +51,7 @@ pub(crate) mod transition;
 
 pub use a11y::{
     AccessCell, AccessFont, AccessNode, AccessPosition, AccessRange, AccessScroll, AccessTable,
-    Role, accessibility_tree,
+    AccessTextRun, Role, accessibility_tree,
 };
 #[cfg_attr(not(feature = "gpu"), allow(unused_imports))]
 pub(crate) use canvas::blit as canvas_blit;

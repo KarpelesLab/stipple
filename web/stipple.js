@@ -581,11 +581,25 @@ export async function start(canvas, wasmUrl, options = {}) {
     let focused = node.f ? el : null;
     if (kids.length === 0) {
       // A leaf says its name as its content (a button's label, a text, a
-      // field's value).
+      // field's value); rich text as markup, a run each (its links, its
+      // languages, its highlights), rewritten only when its runs change.
       attr(el, "aria-label", null);
-      if (el.childElementCount > 0 || el.textContent !== node.n) el.textContent = node.n;
+      if (node.ru) {
+        const key = JSON.stringify(node.ru);
+        if (el._ru !== key) {
+          el._ru = key;
+          el.replaceChildren(...node.ru.map(runMarkup));
+        }
+      } else if (el._ru || el.childElementCount > 0 || el.textContent !== node.n) {
+        el._ru = null;
+        el.textContent = node.n;
+      }
     } else {
       attr(el, "aria-label", node.n || null);
+      if (el._ru) {
+        el._ru = null;
+        el.textContent = "";
+      }
       if (el.firstChild && el.firstChild.nodeType === Node.TEXT_NODE) el.textContent = "";
       for (let i = 0; i < kids.length; i++) {
         let child = el.children[i];
@@ -601,10 +615,50 @@ export async function start(canvas, wasmUrl, options = {}) {
     return focused;
   };
 
+  // One run of a rich text (see `aria_runs` in the web backend) as markup:
+  // its text in <strong>, <em>, <u>, <del> and <mark> as it is bold,
+  // italic, underlined, struck through and highlighted, in a lang'd span
+  // for another language, in an <a> for a link (not in the tab order: the
+  // overlay's elements are reached by the screen reader, and a click on one
+  // clicks its text in the app).
+  const runMarkup = (r) => {
+    let n = document.createTextNode(r.t);
+    const wrap = (tag) => {
+      const w = document.createElement(tag);
+      w.append(n);
+      return (n = w);
+    };
+    if (r.s) wrap("del");
+    if (r.u && r.a === undefined) wrap("u");
+    if (r.i) wrap("em");
+    if (r.b) wrap("strong");
+    if (r.m) wrap("mark");
+    if (r.l !== undefined) (n.nodeType === Node.TEXT_NODE ? wrap("span") : n).setAttribute("lang", r.l);
+    if (r.a !== undefined) {
+      const a = wrap("a");
+      // A script URL isn't a link to follow: a link role without one.
+      if (/^\s*(javascript|vbscript|data):/i.test(r.a)) a.setAttribute("role", "link");
+      else a.setAttribute("href", r.a);
+      a.tabIndex = -1;
+    }
+    return n;
+  };
+
   const updateA11y = (json) => {
     stats.a11y++;
     place();
     const tree = JSON.parse(json);
+    // Rich text's runs, by their node's place in preorder.
+    if (tree.ru) {
+      const runs = new Map(tree.ru);
+      let i = 0;
+      const walk = (n) => {
+        const r = runs.get(i++);
+        if (r) n.ru = r;
+        for (const k of n.k ?? []) walk(k);
+      };
+      walk(tree);
+    }
     relIds.clear();
     relControls.length = 0;
     relLabels.length = 0;
@@ -1486,6 +1540,13 @@ export async function start(canvas, wasmUrl, options = {}) {
   // A screen reader's "activate" clicks the element: click the node.
   overlay.addEventListener("click", (ev) => {
     const el = ev.target.closest?.("[data-stipple]");
+    // A rich text's link clicks its text in the app (which decides what
+    // following it does), never navigating the page away from it.
+    if (el && ev.target.closest("a") && el.contains(ev.target.closest("a"))) {
+      ev.preventDefault();
+      clickNode(el);
+      return;
+    }
     if (!el || !el.getAttribute("role")) return;
     ev.preventDefault();
     clickNode(el);

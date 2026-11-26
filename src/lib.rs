@@ -42,6 +42,8 @@ mod a11y_range_tests;
 #[cfg(test)]
 mod a11y_relations_tests;
 #[cfg(test)]
+mod a11y_runs_tests;
+#[cfg(test)]
 mod a11y_scroll_tests;
 pub mod anim;
 mod app_clipboard;
@@ -5444,6 +5446,9 @@ pub(crate) fn to_platform_a11y(node: &crate::core::AccessNode) -> crate::platfor
                 weight: f.weight,
                 italic: f.italic,
             }),
+        runs: crate::platform::access::A11yRuns(node.run_source().map(|s| {
+            std::sync::Arc::new(crate::core::a11y::PlatformRuns(s.clone())) as std::sync::Arc<_>
+        })),
         native_view: node.native_view,
         children: node.children.iter().map(to_platform_a11y).collect(),
     }

@@ -158,6 +158,25 @@ mod app {
         start
     }
 
+    /// "Type your name:", in runs: "Type" in British English, "your"
+    /// bold, "name" a link.
+    fn prompt(theme: &Theme) -> stipple::render::RichText {
+        use stipple::render::{RichText, SpanStyle, UnderlineStyle};
+        RichText::new()
+            .styled("Type", SpanStyle::new().language("en-GB"))
+            .push(" ")
+            .bold("your")
+            .push(" ")
+            .styled(
+                "name",
+                SpanStyle::new()
+                    .color(theme.palette.primary)
+                    .underline(UnderlineStyle::Single)
+                    .link("https://stipple.rs"),
+            )
+            .push(":")
+    }
+
     fn view(state: &State, cx: &mut Cx<State>) -> Element {
         FRAMES.fetch_add(1, Ordering::Relaxed);
         let theme = *cx.theme();
@@ -214,7 +233,9 @@ mod app {
         });
         let top = column(vec![
             title,
-            label(cx, "Type your name:"),
+            // Its text in runs, which TalkBack gets as spans (StyleSpan,
+            // URLSpan, LocaleSpan): .github/a11y/android/test-probe.sh.
+            label(cx, prompt(&theme)),
             row(vec![field, code_field]).gap(theme.spacing.sm),
             row(vec![
                 spinner(cx),

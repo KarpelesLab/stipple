@@ -27,11 +27,15 @@
 
 use std::sync::Mutex;
 
+mod spans;
+
 use super::classes;
 use super::jni::{self, Env, JObject, JValue, Jni};
 use super::{ARect, Command, post_command};
 use crate::geometry::Point;
-use crate::platform::access::{A11yCell, A11yNode, A11yRange, A11yRole, A11yScroll, A11yTable};
+use crate::platform::access::{
+    A11yCell, A11yFont, A11yNode, A11yRange, A11yRole, A11yRuns, A11yScroll, A11yTable,
+};
 use crate::platform::event::{ButtonState, Event, KeyCode, Modifiers, PointerButton, ScrollDelta};
 
 /// `AccessibilityNodeProvider.HOST_VIEW_ID`.
@@ -113,6 +117,10 @@ struct Node {
     place: Option<usize>,
     /// The node that labels this one (its caption), or `HOST_VIEW_ID`.
     label: i32,
+    /// How its text is drawn, and its runs drawn differently (built when
+    /// TalkBack asks for the node: `spans`).
+    font: Option<A11yFont>,
+    runs: A11yRuns,
 }
 
 impl Node {
@@ -121,6 +129,15 @@ impl Node {
         A11yNode {
             focused: self.focused,
             range: self.range,
+            ..A11yNode::new(self.role, self.name.clone(), self.logical)
+        }
+    }
+
+    /// The node as its text's runs are built from.
+    fn text_node(&self) -> A11yNode {
+        A11yNode {
+            font: self.font.clone(),
+            runs: self.runs.clone(),
             ..A11yNode::new(self.role, self.name.clone(), self.logical)
         }
     }
@@ -255,6 +272,8 @@ pub(super) fn update(root: &A11yNode, content: ARect, scale: f64) -> Changes {
             items: None,
             place: None,
             label: HOST_VIEW_ID,
+            font: n.font.clone(),
+            runs: n.runs.clone(),
         });
         let was = at.in_scroller;
         at.in_scroller |= n.scroll.is_some_and(|s| s.scrolls());
@@ -626,13 +645,14 @@ fn node_info(jni: &Jni, id: i32) -> Option<JObject> {
         &[JValue { l: rect }],
     )?;
     if !node.name.is_empty() {
-        let name = jni.string16(&node.name)?;
-        // Text and fields read their text; containers are described.
-        let setter = match node.role {
+        // Text and fields read their text (with its runs' spans: a bold
+        // word, a link, a phrase in another language); containers are
+        // described.
+        let (setter, name) = match node.role {
             A11yRole::Group | A11yRole::Window | A11yRole::Dialog | A11yRole::List => {
-                c"setContentDescription"
+                (c"setContentDescription", jni.string16(&node.name)?)
             }
-            _ => c"setText",
+            _ => (c"setText", spans::text_of(jni, &node.text_node())?),
         };
         jni.call_void(info, setter, seq, &[JValue { l: name }])?;
     }

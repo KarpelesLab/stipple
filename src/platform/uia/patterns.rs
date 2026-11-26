@@ -897,6 +897,7 @@ pub fn selftest_patterns() -> Result<(), String> {
                 }],
                 ..node(A11yRole::Tree, "", (0.0, 220.0, 200.0, 40.0))
             },
+            text::selftest_rich_node(),
         ]
         .into_iter()
         .chain(super::grid::selftest_nodes())
@@ -946,6 +947,13 @@ pub fn selftest_patterns() -> Result<(), String> {
         )?;
         release_through(value);
         text::selftest_text(field)?;
+        let rich = find(UIA_TextControlTypeId, "Rich bold link bonjour")?;
+        // Reported, not required yet (CI's non-blocking step greps for it).
+        match text::selftest_runs(rich) {
+            Ok(()) => println!("UIA patterns: text runs passed"),
+            Err(e) => println!("UIA patterns: text runs FAILED: {e}"),
+        }
+        release_through(rich);
         // LabeledBy: the caption's element.
         let simple = query_through(field, &IID_IRawElementProviderSimple);
         let mut lv = Variant::empty();

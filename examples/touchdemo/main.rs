@@ -237,7 +237,33 @@ fn ranges_view(r: &Ranges, cx: &mut Cx<State>) -> Element {
         },
     )
     .a11y_label("Items");
-    column(vec![row(vec![volume, level]).gap(12.0), bar, grid]).gap(8.0)
+    column(vec![
+        row(vec![volume, level]).gap(12.0),
+        bar,
+        grid,
+        rich_line(cx),
+    ])
+    .gap(8.0)
+}
+
+/// "Rich bold link bonjour": text drawn in runs, whose attributes the
+/// bridges' text attribute checks read (a bold word, a link, an italic
+/// word in French).
+fn rich_line(cx: &mut Cx<State>) -> Element {
+    use stipple::render::{RichText, SpanStyle, UnderlineStyle};
+    let blue = Color::rgb(0x1a, 0x5f, 0xd0);
+    let link = SpanStyle::new()
+        .color(blue)
+        .underline(UnderlineStyle::Single)
+        .link("https://stipple.rs");
+    let text = RichText::new()
+        .push("Rich ")
+        .bold("bold")
+        .push(" ")
+        .styled("link", link)
+        .push(" ")
+        .styled("bonjour", SpanStyle::new().italic().language("fr"));
+    label(cx, text)
 }
 
 /// What the services' controls show.

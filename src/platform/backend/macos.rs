@@ -34,6 +34,8 @@ use crate::platform::menu::{
 use crate::platform::window::{CursorIcon, Window, WindowAttributes, WindowInfo, debug_window};
 use crate::render::{Pixmap, Surface};
 
+/// `AXAttributedStringForRange`: a text's runs as an attributed string.
+mod ax_attributed;
 /// Keyboard focus through NSAccessibility (`AXFocused`, focus changes).
 mod ax_focus;
 /// Title elements, linked elements, outline rows' disclosure and static

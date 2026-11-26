@@ -6,6 +6,13 @@
 # caption, the "Items" table's Grid and Table patterns and a cell's GridItem
 # and TableItem, a label's text attributes (FontName, FontSize, FontWeight),
 # and the field's text-changed and text-selection-changed events.
+#
+# Then (not failing the script while they're new: each logs "uia-runs: ok:"
+# or "uia-runs: FAILED:", and the last line "UIA text runs checks passed")
+# the text attribute runs of "Rich bold link bonjour": FindAttribute
+# (FontWeight 700) finds "bold", the link's UnderlineStyle and
+# ForegroundColor, "bonjour"'s IsItalic and Culture (fr), the mixed value
+# of FontWeight over all of it, and a Format unit's expansion.
 param(
   [string]$Exe = ".\target\release\examples\touchdemo.exe",
   [string]$Out = "visual_output",
@@ -84,6 +91,10 @@ function Find($type, $name = '.*') {
     if ($e.Current.Name -match $name) { return $e }
   }
   $null
+}
+$runFailures = @()
+function RunCheck($ok, $what) {
+  if ($ok) { Write-Host "uia-runs: ok: $what" } else { Write-Host "uia-runs: FAILED: $what"; $script:runFailures += $what }
 }
 function Pattern($e, $p) {
   $out = $null
@@ -177,6 +188,54 @@ try {
     Check (($size -is [double]) -and $size -gt 0) "its FontSize is a size in points ($size)"
     Check ($weight -eq 400) "its FontWeight is 400 ($weight)"
     Check (($font -is [string]) -and $font.Length -gt 0) "its FontName is the app's font ('$font')"
+  }
+
+  # Text attribute runs: "Rich bold link bonjour" (plain, bold, plain, a
+  # blue underlined link, plain, italic French).
+  try {
+    $TP = [System.Windows.Automation.TextPattern]
+    $rich = Pattern (Find $C::Text '^Rich bold link bonjour$') $TP::Pattern
+    RunCheck ($rich -ne $null) "the 'Rich bold link bonjour' text has the Text pattern"
+    if ($rich -ne $null) {
+      $doc = $rich.DocumentRange
+      $bold = $doc.FindAttribute($TP::FontWeightAttribute, 700, $false)
+      $boldText = if ($bold -ne $null) { $bold.GetText(-1) } else { $null }
+      RunCheck ($boldText -eq "bold") "FindAttribute(FontWeight 700) finds '$boldText'"
+      $mixed = $doc.GetAttributeValue($TP::FontWeightAttribute)
+      RunCheck ([object]::ReferenceEquals($mixed, $TP::MixedAttributeValue)) "FontWeight over all of it is mixed (got '$mixed')"
+      $link = $doc.FindText("link", $false, $false)
+      if ($link -ne $null) {
+        $under = $link.GetAttributeValue($TP::UnderlineStyleAttribute)
+        $color = $link.GetAttributeValue($TP::ForegroundColorAttribute)
+        Write-Host "uia-runs: link UnderlineStyle $under, ForegroundColor $('{0:x6}' -f $color)"
+        RunCheck ("$under" -eq "Single") "the link is underlined (UnderlineStyle $under)"
+        RunCheck ($color -eq 0xd05f1a) "the link's ForegroundColor is 0x1a5fd0 as a COLORREF ($('{0:x6}' -f $color))"
+        # A degenerate range in it, expanded to its format run: the link.
+        $link.MoveEndpointByRange([System.Windows.Automation.Text.TextPatternRangeEndpoint]::End, $link, [System.Windows.Automation.Text.TextPatternRangeEndpoint]::Start)
+        $link.ExpandToEnclosingUnit([System.Windows.Automation.Text.TextUnit]::Format)
+        $run = $link.GetText(-1)
+        RunCheck ($run -eq "link") "ExpandToEnclosingUnit(Format) at the link is '$run'"
+      } else {
+        RunCheck $false "FindText('link')"
+      }
+      $fr = $doc.FindText("bonjour", $false, $false)
+      if ($fr -ne $null) {
+        $italic = $fr.GetAttributeValue($TP::IsItalicAttribute)
+        $culture = $fr.GetAttributeValue($TP::CultureAttribute)
+        Write-Host "uia-runs: bonjour IsItalic $italic, Culture $culture"
+        RunCheck ($italic -eq $true) "'bonjour' is italic"
+        RunCheck ("$culture" -match '^fr') "'bonjour' is French (Culture '$culture')"
+      } else {
+        RunCheck $false "FindText('bonjour')"
+      }
+    }
+  } catch {
+    RunCheck $false "reading the runs threw: $_"
+  }
+  if ($runFailures.Count -gt 0) {
+    Write-Host "UIA text runs checks failed: $($runFailures -join '; ')"
+  } else {
+    Write-Host "UIA text runs checks passed"
   }
 
   # The field's text and caret moving: TextChanged and TextSelectionChanged.

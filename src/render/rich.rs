@@ -46,6 +46,12 @@ pub struct SpanStyle {
     /// A color filled behind the run, as tall as its line: a highlighted
     /// search match, a marked word.
     pub background: Option<Color>,
+    /// Where the run links to (a URL): screen readers read it as a link.
+    /// It changes nothing drawn; style a link as it should look too.
+    pub link: Option<Arc<str>>,
+    /// The run's language, as a BCP 47 tag (`"fr"`, `"pt-BR"`), when it
+    /// isn't the text's: screen readers read it in that language's voice.
+    pub language: Option<Arc<str>>,
 }
 
 impl SpanStyle {
@@ -117,6 +123,29 @@ impl SpanStyle {
     /// Struck through.
     pub fn strikethrough(self) -> Self {
         self.decorate(Decoration::NONE.strikethrough())
+    }
+
+    /// Linking to `url`, for assistive technologies (the run looks the
+    /// same: give it a link's color and underline as well).
+    ///
+    /// ```
+    /// use stipple::render::{RichText, SpanStyle, UnderlineStyle};
+    /// let docs = SpanStyle::new()
+    ///     .underline(UnderlineStyle::Single)
+    ///     .link("https://example.com/docs");
+    /// let line = RichText::new().push("See ").styled("the docs", docs);
+    /// # let _ = line;
+    /// ```
+    pub fn link(mut self, url: impl AsRef<str>) -> Self {
+        self.link = Some(Arc::from(url.as_ref()));
+        self
+    }
+
+    /// In the language `tag` (BCP 47: `"fr"`, `"pt-BR"`), for screen
+    /// readers to read it in.
+    pub fn language(mut self, tag: impl AsRef<str>) -> Self {
+        self.language = Some(Arc::from(tag.as_ref()));
+        self
     }
 }
 

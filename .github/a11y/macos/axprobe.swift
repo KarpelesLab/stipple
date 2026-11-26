@@ -24,7 +24,9 @@
 // TOUCHDEMO_RANGES) it reads and drives the "Volume" slider (AXValue,
 // AXMinValue, AXMaxValue, AXIncrement, setting AXValue), the progress bar
 // and the "Items" table (AXRowCount, AXColumnCount, AXRows, a cell's
-// AXRowIndexRange), printing "axprobe: ranges ..." lines.
+// AXRowIndexRange), and the "Rich bold link bonjour" text's
+// AXAttributedStringForRange (its runs' fonts, link and language), printing
+// "axprobe: ranges ..." lines.
 import ApplicationServices
 import Foundation
 
@@ -430,4 +432,68 @@ func runRanges() {
     } else {
         print("axprobe: ranges no AXTable \"Items\"")
     }
+    runAttributed()
+}
+
+// The rich line's text attributes, as VoiceOver reads them: one
+// "axprobe: ranges run <location>,<length> \"<text>\" ..." line per run of
+// AXAttributedStringForRange over all of it, then over "bold" alone.
+func runAttributed() {
+    let name = "Rich bold link bonjour"
+    guard let el = allElements().first(where: { $0.0 == "AXStaticText" && $0.1 == name })?.2 else {
+        print("axprobe: ranges no AXStaticText \"\(name)\"")
+        return
+    }
+    var params: CFArray?
+    AXUIElementCopyParameterizedAttributeNames(el, &params)
+    let names = (params as? [String]) ?? []
+    print("axprobe: ranges attributed listed=\(names.contains("AXAttributedStringForRange"))")
+    func read(_ location: Int, _ length: Int) {
+        var r = CFRange(location: location, length: length)
+        guard let param = AXValueCreate(.cfRange, &r) else { return }
+        var v: CFTypeRef?
+        let err = AXUIElementCopyParameterizedAttributeValue(
+            el, "AXAttributedStringForRange" as CFString, param, &v)
+        guard err == .success, let s = v as? NSAttributedString else {
+            print("axprobe: ranges attributed \(location),\(length) -> AXError \(err.rawValue)")
+            return
+        }
+        print("axprobe: ranges attributed \(location),\(length) string=\"\(s.string)\"")
+        let all = NSRange(location: 0, length: s.length)
+        s.enumerateAttributes(in: all, options: []) { attrs, range, _ in
+            var parts: [String] = []
+            let text = (s.string as NSString).substring(with: range)
+            for (key, value) in attrs {
+                switch key.rawValue {
+                case "AXFont":
+                    if let f = value as? [String: Any] {
+                        parts.append("font=\(f["AXFontName"] ?? "?")")
+                        parts.append("size=\(f["AXFontSize"] ?? "?")")
+                    }
+                case "AXLink":
+                    if let u = value as? URL {
+                        parts.append("link=\(u.absoluteString)")
+                    } else {
+                        parts.append("link=\(value)")
+                    }
+                case "AXLanguage":
+                    parts.append("language=\(value)")
+                case "AXUnderline":
+                    parts.append("underline=\(value)")
+                case "AXStrikethrough":
+                    parts.append("strikethrough=\(value)")
+                case "AXForegroundColor":
+                    parts.append("color")
+                case "AXBackgroundColor":
+                    parts.append("background")
+                default:
+                    parts.append(key.rawValue)
+                }
+            }
+            print("axprobe: ranges run \(range.location),\(range.length) \"\(text)\" "
+                  + parts.sorted().joined(separator: " "))
+        }
+    }
+    read(0, name.utf16.count)
+    read(5, 4)
 }

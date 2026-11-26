@@ -44,6 +44,7 @@
 //! `window:deactivate`.
 
 mod address;
+mod attrs;
 mod events;
 mod marshal;
 mod registry;

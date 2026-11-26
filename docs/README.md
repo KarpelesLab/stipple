@@ -52,6 +52,7 @@ How to build, package and run on each platform, and what works there today.
 | Accessibility | AT-SPI ⁶⁶ | UI Automation ⁶⁷ | NSAccessibility ⁶⁸ | UIAccessibility ⁴⁹ | node provider ⁵⁶ | ARIA ²² |
 | Screen readers: range values, tables, captions, text attributes | ✅ ¹⁰¹ | ✅ ¹⁰¹ | ✅ ¹⁰¹ | range values, tables, captions ¹⁰¹ | ✅ ¹⁰¹ | ✅ ¹⁰¹ |
 | Screen readers: an item's position in its set ("3 of 12") | ✅ ¹⁰³ | ✅ ¹⁰³ | — ¹⁰³ | — ¹⁰³ | list items ¹⁰³ | ✅ ¹⁰³ |
+| Screen readers: text attribute runs in rich text (bold, links, language, highlights) | ✅ ¹⁰⁴ | ✅ ¹⁰⁴ | ✅ ¹⁰⁴ | language ¹⁰⁴ | ✅ ¹⁰⁴ | ✅ ¹⁰⁴ |
 | Window size limits, maximize, fullscreen | ✅ ⁹ | ✅ ¹⁰ | ✅ ¹⁰ | — | fullscreen ¹⁰ | ❌ |
 | Window size limits from the content's layout | ✅ ⁹⁸ | ✅ ⁹⁸ | ✅ ⁹⁸ | — | — | — |
 | Windows reopen where they were left (`App::remember_window`) | X11, Wayland: size and state ¹⁰⁰ | ✅ ¹⁰⁰ | ✅ ¹⁰⁰ | — | — | — |
@@ -978,6 +979,31 @@ and iOS have no such attribute (VoiceOver counts the rows itself; a macOS
 tree item's level is its `AXDisclosureLevel`). App- and unit-tested; the
 AT-SPI check passes locally under Xvfb; the CI checks are non-blocking. See
 [accessibility.md](accessibility.md#positions-in-a-set).
+
+¹⁰⁴ `AccessNode::text_runs()` returns a rich text's runs. Each run has a byte
+range of the node's name, a font, underline, strikethrough, colors, a link
+(`SpanStyle::link`) and a language (`SpanStyle::language`). They come from
+`Element::rich_text`, the rich editor's marks and links, and a text view's
+highlighted matches. They are built only when a bridge asks for them.
+
+- Windows: UIA's `GetAttributeValue` returns each run's value, or the mixed
+  value over runs that differ, and `FindAttribute` and the `Format` unit
+  work by run.
+- Linux: AT-SPI's `GetAttributeRun`, `GetAttributes`, `GetAttributeValue`
+  and `GetDefaultAttributes`.
+- macOS: `AXAttributedStringForRange`.
+- iOS: the speech language attribute on the attributed label and value.
+- Android: the node's text as a `SpannableString` with style, URL, locale
+  and color spans.
+- Web: `<strong>`, `<em>`, `<a href>`, `<mark>`, `<del>` and `lang` in the
+  ARIA overlay.
+
+App-tested and unit-tested on every bridge. The AT-SPI walk passes locally
+under Xvfb. The CI checks (AT-SPI walk, UIA in-process and from outside,
+`axprobe`, the Android probe, the web selftest) are non-blocking for now;
+iOS is build-checked. Not covered: AT-SPI's `Hypertext`, UIA's `Link`, and
+spelling errors (there is no spell checker). See
+[accessibility.md](accessibility.md#range-values-tables-and-captions).
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled;

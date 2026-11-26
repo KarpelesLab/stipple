@@ -4,7 +4,7 @@
 //! Windows-only provider (`platform::uia`) answers UIA's calls from these;
 //! kept apart (and not gated on Windows) so they're unit-tested everywhere.
 
-use crate::platform::access::{A11yChange, A11yNode, A11yRole, A11yScroll, changes};
+use crate::platform::access::{A11yChange, A11yNode, A11yRole, A11yScroll, A11yTextRun, changes};
 
 // Property ids (UIAutomationClient.h) the events report.
 pub(crate) const NAME: i32 = 30005;
@@ -21,11 +21,16 @@ pub(crate) const TEXT_SELECTION_CHANGED: i32 = 20014;
 pub(crate) const TEXT_CHANGED: i32 = 20015;
 
 // Text attributes.
+pub(crate) const BACKGROUND_COLOR: i32 = 40001;
+pub(crate) const CULTURE: i32 = 40004;
 pub(crate) const FONT_NAME: i32 = 40005;
 pub(crate) const FONT_SIZE: i32 = 40006;
 pub(crate) const FONT_WEIGHT: i32 = 40007;
+pub(crate) const FOREGROUND_COLOR: i32 = 40008;
 pub(crate) const IS_ITALIC: i32 = 40014;
 pub(crate) const IS_READ_ONLY: i32 = 40015;
+pub(crate) const STRIKETHROUGH_STYLE: i32 = 40026;
+pub(crate) const UNDERLINE_STYLE: i32 = 40030;
 
 /// `UIA_ScrollPatternNoScroll`: the percent of an axis that doesn't scroll.
 pub(crate) const NO_SCROLL: f64 = -1.0;
@@ -90,19 +95,139 @@ pub(crate) fn range_numbers(n: &A11yNode) -> Option<(f64, f64, f64, f64, f64)> {
     Some((r.value, r.min, r.max, small, large))
 }
 
-/// The value of text attribute `attr` over `n`'s text (one run: every
-/// character is drawn the same), `None` when it isn't one the tree knows.
+/// The value of text attribute `attr` over all of `n`'s text (see
+/// [`range_attribute`]), `None` when it isn't one the tree knows.
+#[cfg(test)]
 pub(crate) fn text_attribute(n: &A11yNode, attr: i32) -> Option<Val> {
-    let f = n.font.as_ref();
+    let len = text_of(n).len();
+    match range_attribute(n, attr, (0, len), &|_| None) {
+        Some(Attr::Val(v)) => Some(v),
+        _ => None,
+    }
+}
+
+/// A text attribute's value over a range: one value, or mixed (the range
+/// spans runs where it differs: UIA's reserved mixed-attribute value).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum Attr {
+    Val(Val),
+    Mixed,
+}
+
+/// `n`'s text runs, as character ranges of its text.
+pub(crate) fn char_runs(n: &A11yNode) -> Vec<((usize, usize), A11yTextRun)> {
+    n.text_runs()
+        .into_iter()
+        .map(|r| ((char_at(n, r.range.0), char_at(n, r.range.1)), r))
+        .collect()
+}
+
+/// Where `n`'s format runs start (in characters), with the text's length at
+/// the end: what the Format unit moves by.
+pub(crate) fn format_bounds(n: &A11yNode) -> Vec<usize> {
+    let len = text_of(n).len();
+    let mut out = vec![0];
+    out.extend(char_runs(n).into_iter().map(|((_, e), _)| e.min(len)));
+    out.push(len);
+    out.dedup();
+    out
+}
+
+/// A COLORREF (`0x00bbggrr`), as UIA's color attributes carry one.
+fn colorref([r, g, b, _]: [u8; 4]) -> i32 {
+    i32::from(r) | (i32::from(g) << 8) | (i32::from(b) << 16)
+}
+
+/// Attribute `attr` of run `r`; `None` when the run doesn't say (a color
+/// plain text doesn't carry, a language it doesn't name) or it isn't one
+/// the runs know. `lcid` maps a language tag to its LCID.
+fn run_attribute(r: &A11yTextRun, attr: i32, lcid: &dyn Fn(&str) -> Option<i32>) -> Option<Val> {
+    let f = &r.font;
+    let line = |on: bool| Val::I4(i32::from(on));
     Some(match attr {
-        FONT_NAME => Val::Str(f?.family.clone()?),
+        FONT_NAME => Val::Str(f.family.clone()?),
         // Points: a logical pixel is a 96th of an inch.
-        FONT_SIZE => Val::R8((f?.size * 0.75 * 2.0).round() / 2.0),
-        FONT_WEIGHT => Val::I4(i32::from(f?.weight)),
-        IS_ITALIC => Val::Bool(f?.italic),
-        IS_READ_ONLY => Val::Bool(!crate::platform::access::editable(n.role)),
+        FONT_SIZE => Val::R8((f.size * 0.75 * 2.0).round() / 2.0),
+        FONT_WEIGHT => Val::I4(i32::from(f.weight)),
+        IS_ITALIC => Val::Bool(f.italic),
+        // TextDecorationLineStyle: None 0, Single 1.
+        UNDERLINE_STYLE => line(r.underline),
+        STRIKETHROUGH_STYLE => line(r.strikethrough),
+        FOREGROUND_COLOR => Val::I4(colorref(r.color?)),
+        BACKGROUND_COLOR => Val::I4(colorref(r.background?)),
+        CULTURE => Val::I4(lcid(r.language.as_deref()?)?),
         _ => return None,
     })
+}
+
+/// The value of text attribute `attr` over the characters `[start, end)`
+/// of `n`'s text (an empty range: the run it's in): the runs' value, or
+/// [`Attr::Mixed`] where the runs it spans differ. `None` when it isn't
+/// one the tree knows (or no run says).
+pub(crate) fn range_attribute(
+    n: &A11yNode,
+    attr: i32,
+    (start, end): (usize, usize),
+    lcid: &dyn Fn(&str) -> Option<i32>,
+) -> Option<Attr> {
+    if attr == IS_READ_ONLY {
+        return Some(Attr::Val(Val::Bool(!crate::platform::access::editable(
+            n.role,
+        ))));
+    }
+    let runs = char_runs(n);
+    let last = runs.len().checked_sub(1)?;
+    let covered: Vec<&A11yTextRun> = if start >= end {
+        let i = runs.iter().position(|(r, _)| start < r.1).unwrap_or(last);
+        vec![&runs[i].1]
+    } else {
+        runs.iter()
+            .filter(|(r, _)| r.0 < end && start < r.1)
+            .map(|(_, run)| run)
+            .collect()
+    };
+    let mut values = covered.iter().map(|r| run_attribute(r, attr, lcid));
+    let first = values.next()?;
+    if values.any(|v| v != first) {
+        return Some(Attr::Mixed);
+    }
+    first.map(Attr::Val)
+}
+
+/// `FindAttribute`: the first (or last, `backward`) stretch of
+/// `[start, end)` whose runs' attribute `attr` is one `want` accepts,
+/// neighbouring runs that match joined.
+pub(crate) fn find_attribute(
+    n: &A11yNode,
+    attr: i32,
+    (start, end): (usize, usize),
+    backward: bool,
+    want: &dyn Fn(&Val) -> bool,
+    lcid: &dyn Fn(&str) -> Option<i32>,
+) -> Option<(usize, usize)> {
+    if start >= end {
+        return None;
+    }
+    let mut stretches: Vec<(usize, usize)> = Vec::new();
+    let mut joined = false;
+    for ((s, e), run) in char_runs(n) {
+        let (s, e) = (s.max(start), e.min(end));
+        if s >= e {
+            continue;
+        }
+        let hit = run_attribute(&run, attr, lcid).is_some_and(|v| want(&v));
+        match stretches.last_mut() {
+            Some(last) if hit && joined && last.1 == s => last.1 = e,
+            _ if hit => stretches.push((s, e)),
+            _ => {}
+        }
+        joined = hit;
+    }
+    if backward {
+        stretches.pop()
+    } else {
+        stretches.first().copied()
+    }
 }
 
 /// Whether `n`'s name is its text (an editable field whose caret the tree
@@ -250,18 +375,23 @@ pub(crate) fn scroll_target(s: &A11yScroll, horizontal: f64, vertical: f64) -> O
 
 /// A `TextUnit`, as the ranges here move by it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Unit {
+pub(crate) enum Unit<'a> {
     Character,
+    /// A format run: where they start, with the text's length at the end
+    /// (see [`format_bounds`]).
+    Format(&'a [usize]),
     Word,
     Line,
     Document,
 }
 
 /// `TextUnit` (Character 0, Format 1, Word 2, Line 3, Paragraph 4, Page 5,
-/// Document 6) as the unit it's served by: a format run is a character (the
-/// text has no attributes), a paragraph a line, a page the document.
-pub(crate) fn unit(id: i32) -> Unit {
+/// Document 6) as the unit it's served by: a format run by the text's
+/// runs, starting at `format` (see [`format_bounds`]), a paragraph a line,
+/// a page the document.
+pub(crate) fn unit(id: i32, format: &[usize]) -> Unit<'_> {
     match id {
+        1 => Unit::Format(format),
         2 => Unit::Word,
         3 | 4 => Unit::Line,
         5 | 6 => Unit::Document,
@@ -295,6 +425,11 @@ pub(crate) fn boundaries(text: &[char], unit: Unit) -> Vec<usize> {
     match unit {
         Unit::Character => out.extend(1..=len),
         Unit::Document => out.push(len),
+        Unit::Format(starts) => {
+            out.extend(starts.iter().map(|&x| x.min(len)));
+            out.push(len);
+            out.sort_unstable();
+        }
         Unit::Word => {
             for i in 1..len {
                 let c = class(text[i]);
@@ -762,9 +897,10 @@ mod tests {
         let lines = chars("ab\ncd\n");
         assert_eq!(boundaries(&lines, Unit::Line), vec![0, 3, 6]);
         assert_eq!(enclosing(&lines, 4, Unit::Line), (3, 6));
-        assert_eq!(unit(1), Unit::Character);
-        assert_eq!(unit(4), Unit::Line);
-        assert_eq!(unit(5), Unit::Document);
+        assert_eq!(unit(0, &[]), Unit::Character);
+        assert_eq!(unit(1, &[0, 3]), Unit::Format(&[0, 3]));
+        assert_eq!(unit(4, &[]), Unit::Line);
+        assert_eq!(unit(5, &[]), Unit::Document);
         let empty: Vec<char> = Vec::new();
         assert_eq!(enclosing(&empty, 0, Unit::Word), (0, 0));
     }
@@ -980,5 +1116,89 @@ mod tests {
         assert_eq!(text_attribute(&text, IS_READ_ONLY), Some(Val::Bool(true)));
         assert_eq!(text_attribute(&text, 40008), None, "not one it knows");
         assert_eq!(text_attribute(&leaf(A11yRole::Text, "x"), FONT_NAME), None);
+    }
+
+    /// "Rich bold link bonjour": plain, bold, plain, a blue underlined
+    /// link, plain, italic French.
+    fn rich() -> A11yNode {
+        use crate::platform::access::{A11yFont, A11yRuns};
+        let font = |weight, italic| A11yFont {
+            family: Some("Segoe UI".into()),
+            size: 16.0,
+            weight,
+            italic,
+        };
+        let plain = |s, e| A11yTextRun::plain((s, e), font(400, false));
+        let runs = vec![
+            plain(0, 5),
+            A11yTextRun::plain((5, 9), font(700, false)),
+            plain(9, 10),
+            A11yTextRun {
+                underline: true,
+                color: Some([0x1a, 0x5f, 0xd0, 0xff]),
+                link: Some("https://stipple.rs".into()),
+                ..plain(10, 14)
+            },
+            plain(14, 15),
+            A11yTextRun {
+                language: Some("fr".into()),
+                ..A11yTextRun::plain((15, 22), font(400, true))
+            },
+        ];
+        A11yNode {
+            font: Some(font(400, false)),
+            runs: A11yRuns::fixed(runs),
+            ..leaf(A11yRole::Text, "Rich bold link bonjour")
+        }
+    }
+
+    #[test]
+    fn text_attributes_by_run() {
+        let n = rich();
+        let lcid = |tag: &str| (tag == "fr").then_some(0x040c);
+        let at = |attr, range| range_attribute(&n, attr, range, &lcid);
+        let v = |v| Some(Attr::Val(v));
+        assert_eq!(at(FONT_WEIGHT, (5, 9)), v(Val::I4(700)));
+        assert_eq!(at(FONT_WEIGHT, (0, 5)), v(Val::I4(400)));
+        assert_eq!(at(FONT_WEIGHT, (3, 7)), Some(Attr::Mixed));
+        assert_eq!(at(FONT_WEIGHT, (6, 6)), v(Val::I4(700)), "the caret's run");
+        assert_eq!(at(FONT_NAME, (0, 22)), v(Val::Str("Segoe UI".into())));
+        assert_eq!(at(UNDERLINE_STYLE, (10, 14)), v(Val::I4(1)));
+        assert_eq!(at(UNDERLINE_STYLE, (9, 14)), Some(Attr::Mixed));
+        assert_eq!(at(STRIKETHROUGH_STYLE, (0, 22)), v(Val::I4(0)));
+        assert_eq!(at(FOREGROUND_COLOR, (10, 14)), v(Val::I4(0x00d0_5f1a)));
+        assert_eq!(at(FOREGROUND_COLOR, (0, 5)), None, "plain text says none");
+        assert_eq!(at(BACKGROUND_COLOR, (0, 22)), None);
+        assert_eq!(at(CULTURE, (15, 22)), v(Val::I4(0x040c)));
+        assert_eq!(at(CULTURE, (10, 22)), Some(Attr::Mixed));
+        assert_eq!(at(IS_ITALIC, (16, 18)), v(Val::Bool(true)));
+        assert_eq!(at(IS_READ_ONLY, (0, 1)), v(Val::Bool(true)));
+        assert_eq!(at(40013, (0, 1)), None, "not one it knows");
+
+        let bold = |v: &Val| *v == Val::I4(700);
+        let plain = |v: &Val| *v == Val::I4(400);
+        let find = |range, backward, want: &dyn Fn(&Val) -> bool| {
+            find_attribute(&n, FONT_WEIGHT, range, backward, want, &lcid)
+        };
+        assert_eq!(find((0, 22), false, &bold), Some((5, 9)));
+        assert_eq!(find((6, 22), false, &bold), Some((6, 9)), "clipped");
+        assert_eq!(find((9, 22), false, &bold), None);
+        // Neighbouring runs that match join: weight 400 from 9 to the end.
+        assert_eq!(find((0, 22), true, &plain), Some((9, 22)));
+        assert_eq!(find((0, 22), false, &plain), Some((0, 5)));
+
+        let b = format_bounds(&n);
+        assert_eq!(b, vec![0, 5, 9, 10, 14, 15, 22]);
+        let t = chars(&n.name);
+        let f = unit(1, &b);
+        assert_eq!(expand(&t, 6, f), (5, 9));
+        assert_eq!(move_range(&t, (5, 9), f, 2), ((10, 14), 2));
+        assert_eq!(move_endpoint(&t, (0, 0), 1, f, 1), ((0, 5), 1));
+        // Text drawn alike is one run.
+        let one = A11yNode {
+            font: rich().font,
+            ..leaf(A11yRole::Text, "abc")
+        };
+        assert_eq!(format_bounds(&one), vec![0, 3]);
     }
 }

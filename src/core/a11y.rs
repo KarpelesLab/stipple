@@ -30,6 +30,10 @@
 
 use std::collections::HashMap;
 
+mod runs;
+pub use runs::AccessTextRun;
+pub(crate) use runs::{PlatformRuns, RunSource};
+
 use crate::core::runtime::{FocusId, LayoutNode, NodeContent, ScrollId, first_text};
 use crate::geometry::Rect;
 
@@ -384,6 +388,10 @@ pub(crate) struct Semantics {
     /// An item's place in its set (see
     /// [`Element::a11y_position`](crate::core::Element::a11y_position)).
     pub position: Option<AccessPosition>,
+    /// The label is the text of these text leaves under the element (by
+    /// order), a line each: a text view's rows on screen, whose runs it
+    /// reports.
+    pub text_lines: Option<std::ops::Range<usize>>,
 }
 
 /// A select's options as its live OS control shows them: their labels, the
@@ -462,8 +470,11 @@ pub struct AccessNode {
     /// For a [`Role::Row`], [`Role::Cell`] or [`Role::ColumnHeader`] in a
     /// table, where it is.
     pub cell: Option<AccessCell>,
-    /// For text, a text field or a number input, how its text is drawn.
+    /// For text, a text field or a number input, how its text is drawn
+    /// (where it is all drawn alike; see [`text_runs`](Self::text_runs)).
     pub font: Option<AccessFont>,
+    /// For rich text, what its runs are built from, on demand.
+    pub(crate) runs: Option<std::sync::Arc<RunSource>>,
     /// When a live OS control stands for this node (under
     /// [`Theme::native`](crate::style::Theme::native), in a window that
     /// hosts them), its id: the platform exposes that control here.
@@ -598,6 +609,19 @@ fn build(node: &LayoutNode, cx: &Ctx<'_>, is_root: bool) -> AccessNode {
         }
         (name, Vec::new())
     };
+    let font = if role.is_container() {
+        None
+    } else {
+        font_of(node, role)
+    };
+    // Only rich text the node reads as its name has runs.
+    let runs = if let Some(sem) = node.semantics.as_ref().filter(|s| s.label.is_some()) {
+        sem.text_lines
+            .clone()
+            .and_then(|lines| runs::lines_source_of(node, lines, &name, font.as_ref()))
+    } else {
+        runs::source_of(node, role, &name, font.as_ref())
+    };
     let sem = node.semantics.as_ref();
     let mut out = AccessNode {
         role,
@@ -631,11 +655,8 @@ fn build(node: &LayoutNode, cx: &Ctx<'_>, is_root: bool) -> AccessNode {
                 .map(|column| AccessCell { row: 0, column }),
             _ => None,
         },
-        font: if role.is_container() {
-            None
-        } else {
-            font_of(node, role)
-        },
+        font,
+        runs,
         native_view: node.native_a11y.or(node.native_live),
         children,
     };
@@ -716,6 +737,7 @@ fn scroll_bars_of(node: &LayoutNode, offsets: &HashMap<ScrollId, f64>) -> Vec<Ac
                 table: None,
                 cell: None,
                 font: None,
+                runs: None,
                 scroll_bar: Some(AccessScroll {
                     offset: g.offset,
                     max: g.max,

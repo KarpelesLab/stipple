@@ -105,6 +105,8 @@ mod screen;
 pub(crate) mod secure_store;
 /// The share sheet: `ACTION_SEND` through the chooser.
 mod share;
+/// Text attribute runs as a node text's spans (JVM-free, tested on hosts).
+mod text_spans;
 
 pub(crate) use alarm::{cancel_scheduled, pending_scheduled, schedule};
 pub(crate) use folder::DocumentTree;

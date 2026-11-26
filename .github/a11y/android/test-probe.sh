@@ -121,4 +121,18 @@ if grep -qE 'probe node .*class=android.widget.ListView .*collection=3x1' "$log"
 else
   echo "a11y probe: note: no list collection (3x1) with \"Note 2\" at item 1,0"
 fi
+# Text attribute runs: "Type your name:" is a Spanned with "Type" in en-GB
+# (LocaleSpan), "your" bold (StyleSpan BOLD) and "name" a link (URLSpan,
+# underlined), in UTF-16 ranges. Reported here, not failing the run yet
+# (CI's "Android text spans" step checks the saved log).
+spans="$(grep -E 'probe spans text="Type your name:"' "$log" | sed 's/.*a11yprobe: //' | tail -1 || true)"
+if [ -n "$spans" ] \
+  && grep -q 'locale(en-GB)@0\.\.4' <<< "$spans" \
+  && grep -q 'style(1)@5\.\.9' <<< "$spans" \
+  && grep -q 'url(https://stipple.rs)@10\.\.14' <<< "$spans" \
+  && grep -q 'underline@10\.\.14' <<< "$spans"; then
+  echo "a11y probe: text spans: $spans"
+else
+  echo "a11y probe: note: \"Type your name:\" doesn't read with its spans: ${spans:-no spans}"
+fi
 echo "a11y probe: all checks passed"

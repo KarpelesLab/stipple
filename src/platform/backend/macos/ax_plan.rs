@@ -15,6 +15,10 @@
 //! - A table has its `AXRowCount` and `AXColumnCount` (all its rows), a
 //!   row its `AXIndex`, a cell its `AXRowIndexRange` and
 //!   `AXColumnIndexRange`.
+//! - Text (a static text's label, a field's value) has an attributed
+//!   string for any range (`AXAttributedStringForRange`): its runs drawn
+//!   differently, each with its `AXFont` (name, family, visible name,
+//!   size), colors, underline, strikethrough, `AXLink` and `AXLanguage`.
 //! - A plain group that scrolls is an `AXScrollArea`; it (and a list, tree
 //!   or table that scrolls) has a scroll bar along its trailing edge, whose
 //!   `AXValue` is how far it is scrolled, `0..=1`.
@@ -286,10 +290,167 @@ pub(crate) fn plan(new: &A11yNode, changes: &[A11yChange]) -> Vec<Post> {
     out
 }
 
+/// One run of an `AXAttributedStringForRange` string: what `ax_value`
+/// puts on its UTF-16 range.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct AttrRun {
+    /// `(location, length)` in UTF-16 units of the string asked for.
+    pub range: (usize, usize),
+    /// `AXFontName`: the face's PostScript-style name ("Inter-Bold").
+    pub font_name: String,
+    /// `AXFontFamily`.
+    pub family: String,
+    /// `AXVisibleName` ("Inter Bold").
+    pub visible_name: String,
+    /// `AXFontSize`, in points (a logical pixel each).
+    pub size: f64,
+    /// `AXForegroundColor` / `AXBackgroundColor`, `[r, g, b, a]` in `0..=1`.
+    pub foreground: Option<[f64; 4]>,
+    pub background: Option<[f64; 4]>,
+    pub underline: bool,
+    pub strikethrough: bool,
+    /// `AXLink`'s URL.
+    pub link: Option<String>,
+    /// `AXLanguage`.
+    pub language: Option<String>,
+}
+
+/// The text a node's attributed string is of: a static text's (its
+/// label) or a field's value; `None` for a password field, and for
+/// nodes without text of their own.
+pub(crate) fn attributed_text(node: &A11yNode) -> Option<&str> {
+    match node.role {
+        A11yRole::Text if !node.name.is_empty() => Some(node.name.as_str()),
+        _ => text_value(node),
+    }
+}
+
+/// The name of weight `w`'s style ("Bold"), with "Italic" after.
+fn style_name(weight: u16, italic: bool) -> String {
+    let w = match weight {
+        0..=149 => "Thin",
+        150..=249 => "ExtraLight",
+        250..=349 => "Light",
+        350..=449 => "",
+        450..=549 => "Medium",
+        550..=649 => "SemiBold",
+        650..=749 => "Bold",
+        750..=849 => "ExtraBold",
+        _ => "Black",
+    };
+    match (w, italic) {
+        ("", false) => String::new(),
+        ("", true) => "Italic".into(),
+        (w, false) => w.into(),
+        (w, true) => format!("{w}Italic"),
+    }
+}
+
+/// The runs of `node`'s attributed string over the UTF-16 range
+/// `(location, length)` of its text, their ranges in that string (from 0).
+/// Empty when it has no text or no font.
+pub(crate) fn attributed_runs(node: &A11yNode, location: usize, length: usize) -> Vec<AttrRun> {
+    let Some(text) = attributed_text(node) else {
+        return Vec::new();
+    };
+    let total = utf16_len(text);
+    let start = location.min(total);
+    let end = location.saturating_add(length).min(total);
+    let color = |c: [u8; 4]| c.map(|x| f64::from(x) / 255.0);
+    node.text_runs()
+        .into_iter()
+        .filter_map(|r| {
+            let (s, e) = (utf16_at(text, r.range.0), utf16_at(text, r.range.1));
+            let (s, e) = (s.max(start), e.min(end));
+            if s >= e {
+                return None;
+            }
+            let family = r.font.family.clone().unwrap_or_default();
+            let style = style_name(r.font.weight, r.font.italic);
+            let base: String = family.chars().filter(|c| !c.is_whitespace()).collect();
+            let (font_name, visible_name) = if style.is_empty() {
+                (base, family.clone())
+            } else {
+                (format!("{base}-{style}"), format!("{family} {style}"))
+            };
+            Some(AttrRun {
+                range: (s - start, e - s),
+                font_name,
+                family,
+                visible_name,
+                size: r.font.size,
+                foreground: r.color.map(color),
+                background: r.background.map(color),
+                underline: r.underline,
+                strikethrough: r.strikethrough,
+                link: r.link,
+                language: r.language,
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::platform::access::{A11yScroll, changes};
+
+    #[test]
+    fn attributed_strings_carry_each_runs_look() {
+        use crate::platform::access::{A11yFont, A11yRuns, A11yTextRun};
+        let font = |weight, italic| A11yFont {
+            family: Some("Helvetica Neue".into()),
+            size: 13.0,
+            weight,
+            italic,
+        };
+        // "Rich bold link bonjour", with an emoji first to count UTF-16.
+        let name = "😀Rich bold link bonjour";
+        let mut text = node(A11yRole::Text, name);
+        text.font = Some(font(400, false));
+        let bold = A11yTextRun::plain((9, 13), font(700, false));
+        let link = A11yTextRun {
+            underline: true,
+            color: Some([0, 0, 255, 255]),
+            link: Some("https://stipple.rs".into()),
+            ..A11yTextRun::plain((14, 18), font(400, false))
+        };
+        let fr = A11yTextRun {
+            language: Some("fr".into()),
+            ..A11yTextRun::plain((19, 26), font(400, true))
+        };
+        text.runs = A11yRuns::fixed(vec![bold, link, fr]);
+        let runs = attributed_runs(&text, 0, 99);
+        let ranges: Vec<_> = runs.iter().map(|r| r.range).collect();
+        assert_eq!(ranges, [(0, 7), (7, 4), (11, 1), (12, 4), (16, 1), (17, 7)]);
+        assert_eq!(runs[0].font_name, "HelveticaNeue");
+        assert_eq!(runs[1].font_name, "HelveticaNeue-Bold");
+        assert_eq!(runs[1].visible_name, "Helvetica Neue Bold");
+        assert_eq!(runs[3].link.as_deref(), Some("https://stipple.rs"));
+        assert!(runs[3].underline);
+        assert_eq!(runs[3].foreground, Some([0.0, 0.0, 1.0, 1.0]));
+        assert_eq!(runs[5].font_name, "HelveticaNeue-Italic");
+        assert_eq!(runs[5].language.as_deref(), Some("fr"));
+        // A range inside: its runs from 0.
+        let part = attributed_runs(&text, 8, 5);
+        let ranges: Vec<_> = part
+            .iter()
+            .map(|r| (r.range, r.font_name.as_str()))
+            .collect();
+        assert_eq!(
+            ranges,
+            [
+                ((0, 3), "HelveticaNeue-Bold"),
+                ((3, 1), "HelveticaNeue"),
+                ((4, 1), "HelveticaNeue")
+            ]
+        );
+        // No text of its own, no runs.
+        let mut pw = node(A11yRole::PasswordField, "secret");
+        pw.font = Some(font(400, false));
+        assert!(attributed_runs(&pw, 0, 6).is_empty());
+        assert_eq!(style_name(500, true), "MediumItalic");
+    }
 
     fn node(role: A11yRole, name: &str) -> A11yNode {
         A11yNode::new(role, name, (0.0, 0.0, 100.0, 20.0))

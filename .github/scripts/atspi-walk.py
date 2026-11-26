@@ -25,7 +25,9 @@ values and a table instead: the "Volume" slider's Value (its range and step;
 setting it moves the app's slider, with an accessible-value event), the
 progress bar's, the "Level" spin button's (set to 7; its labelled-by caption
 "Level"), and the "Items" table's Table and TableCell interfaces (its size,
-a cell by row and column, a column's header, a cell's position).
+a cell by row and column, a column's header, a cell's position), and the
+text attribute runs of the rich line "Rich bold link bonjour" (Text's
+GetAttributeRun, GetDefaultAttributes and GetAttributeValue).
 """
 import os
 import signal
@@ -276,6 +278,62 @@ if ranges:
             pos = tuple(tc.position)[-2:]
             check(pos == (2, 0), "it is at row 2, column 0 (got {})".format(pos))
             check(tc.table is not None and tc.table.name == "Items", "its table is 'Items'")
+    # Text drawn in runs: "Rich bold link bonjour", whose "bold" is bold,
+    # "link" underlined and blue, "bonjour" italic and in French. Reported,
+    # not required yet: CI's non-blocking step greps for the summary line.
+    soft_failures = []
+
+    def soft(ok, what):
+        print(("ok: " if ok else "FAILED (not required yet): ") + what, flush=True)
+        if not ok:
+            soft_failures.append(what)
+
+    rich = named(walk(frame, 0, []), pyatspi.ROLE_LABEL, "Rich bold")
+    soft(rich is not None, "a label 'Rich bold link bonjour'")
+    if rich is not None:
+        rt = rich.queryText()
+
+        def attrs(got):
+            # pyatspi gives "key:value" strings (a list, or joined by ";").
+            items = got if isinstance(got, (list, tuple)) else str(got).split(";")
+            if isinstance(got, dict):
+                return dict(got)
+            return dict(i.strip().split(":", 1) for i in items if ":" in i)
+
+        def run(offset, defaults=False):
+            a, s, e = rt.getAttributeRun(offset, defaults)
+            return attrs(a), s, e
+
+        a, s, e = run(6)
+        print("atspi: text run at 6: {} {}..{}".format(a, s, e), flush=True)
+        soft((s, e) == (5, 9) and a.get("weight") == "700",
+              "GetAttributeRun at 'bold' is 5..9 at weight 700 (got {} {}..{})".format(a, s, e))
+        a, s, e = run(11)
+        print("atspi: text run at 11: {} {}..{}".format(a, s, e), flush=True)
+        soft((s, e) == (10, 14) and a.get("underline") == "single"
+              and a.get("fg-color") == "{},{},{}".format(0x1a * 257, 0x5f * 257, 0xd0 * 257),
+              "GetAttributeRun at 'link' is 10..14, underlined, blue (got {} {}..{})".format(a, s, e))
+        a, s, e = run(16, True)
+        print("atspi: text run at 16 (with defaults): {} {}..{}".format(a, s, e), flush=True)
+        soft((s, e) == (15, 22) and a.get("style") == "italic" and a.get("language") == "fr"
+              and a.get("weight") == "400" and "size" in a,
+              "GetAttributeRun at 'bonjour' (with defaults) is 15..22, italic, French, weight 400 "
+              "(got {} {}..{})".format(a, s, e))
+        a, s, e = run(1)
+        soft((s, e) == (0, 5) and "weight" not in a,
+              "the plain 'Rich ' is 0..5 with nothing differing (got {} {}..{})".format(a, s, e))
+        d = attrs(rt.getDefaultAttributes())
+        print("atspi: default text attributes: {}".format(d), flush=True)
+        soft(d.get("weight") == "400" and d.get("style") == "normal",
+              "the default attributes are weight 400, normal (got {})".format(d))
+        v = rt.getAttributeValue(6, "weight")
+        # (pyatspi may hand back the value, or a (value, ...) tuple.)
+        v = v[0] if isinstance(v, (list, tuple)) else v
+        soft(v == "700", "GetAttributeValue(6, weight) is 700 (got {!r})".format(v))
+    if soft_failures:
+        print("atspi: text runs FAILED: " + "; ".join(soft_failures), flush=True)
+    else:
+        print("atspi: text runs passed", flush=True)
     if failures:
         print("AT-SPI range checks failed: " + "; ".join(failures), flush=True)
         sys.exit(1)

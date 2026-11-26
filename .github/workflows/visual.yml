@@ -3359,9 +3359,28 @@ jobs:
         shell: powershell
         run: |
           cargo build --release --example uiademo --example touchdemo
-          .\target\release\examples\uiademo.exe --patterns
-          if ($LASTEXITCODE -ne 0) { throw "uiademo --patterns failed" }
+          New-Item -ItemType Directory -Force visual_output | Out-Null
+          # (Kept as UTF-8 for the step below: Tee-Object writes UTF-16.)
+          $out = & .\target\release\examples\uiademo.exe --patterns
+          $code = $LASTEXITCODE
+          $out | Write-Output
+          $out | Set-Content -Encoding utf8 visual_output\uiademo-patterns.log
+          if ($code -ne 0) { throw "uiademo --patterns failed" }
           .github\scripts\uia-patterns.ps1 .\target\release\examples\touchdemo.exe visual_output
+
+      # Text attribute runs in-process (uiademo --patterns, above: reported,
+      # not failing it): a rich text's runs, each run's values, the mixed
+      # value over runs that differ, FindAttribute by run, the Format unit.
+      - name: UI Automation text attribute runs (in-process, non-blocking)
+        continue-on-error: true
+        shell: bash
+        run: |
+          L=visual_output/uiademo-patterns.log
+          grep 'text runs' $L || true
+          grep -q 'UIA patterns: ok: text runs: FindAttribute(FontWeight 700) finds Some("bold")' $L
+          grep -q 'UIA patterns: ok: text runs: Format units: "bold", then "link" (moved 2)' $L
+          grep -q 'UIA patterns: ok: text runs: FontWeight over every run is the mixed value' $L
+          grep -q 'UIA patterns: text runs passed' $L
 
       # touchdemo's list and strip of chips overflow: each has a scroll bar, a
       # ScrollBar control (with Orientation and RangeValue) after its content.
@@ -3404,7 +3423,27 @@ jobs:
       - name: UI Automation range values, tables and text attributes
         shell: powershell
         run: |
-          .github\scripts\uia-ranges.ps1 .\target\release\examples\touchdemo.exe visual_output
+          Start-Transcript -Path visual_output\uia-ranges.log
+          try {
+            .github\scripts\uia-ranges.ps1 .\target\release\examples\touchdemo.exe visual_output
+          } finally {
+            Stop-Transcript
+          }
+
+      # The rich line "Rich bold link bonjour" from outside the app (the
+      # script above reports these, not failing on them): FindAttribute
+      # (FontWeight 700) finds "bold", FontWeight over it all is mixed, the
+      # link's run by the Format unit, "bonjour"'s IsItalic and Culture.
+      - name: UI Automation text attribute runs (touchdemo, non-blocking)
+        continue-on-error: true
+        shell: bash
+        run: |
+          L=visual_output/uia-ranges.log
+          grep 'uia-runs:' $L || true
+          grep -q 'uia-runs: ok: FindAttribute(FontWeight 700) finds' $L
+          grep -q 'uia-runs: ok: FontWeight over all of it is mixed' $L
+          grep -q 'uia-runs: ok: ExpandToEnclosingUnit(Format) at the link is' $L
+          grep -q 'UIA text runs checks passed' $L
 
       - name: Timers and background work wake the event loop
         shell: bash
@@ -3963,6 +4002,10 @@ jobs:
           selftest 1 visual_output/web-selftest.txt --force-dark-mode
           grep -q "color-scheme: prefers-color-scheme: dark, theme dark" visual_output/web-selftest.txt
           selftest 2 visual_output/web-selftest-light.txt
+          # Rich text in the overlay as markup (strong, a href, mark, lang):
+          # a soft check, reported until it has passed steadily.
+          grep -q "soft-ok aria-rich-text" visual_output/web-selftest-light.txt \
+            || echo "::warning::the overlay's rich text markup check failed: $(grep aria-rich-text visual_output/web-selftest-light.txt)"
           grep -q "color-scheme: prefers-color-scheme: light, theme light" visual_output/web-selftest-light.txt
           grep -q "reduced-motion: prefers-reduced-motion: no-preference, app animates" visual_output/web-selftest-light.txt
           # Under prefers-reduced-motion: reduce, the app reduces motion and a
@@ -4920,6 +4963,22 @@ jobs:
           check 'axprobe: ranges cell "Item 1" row=2,1 column=0,1' $L
           exit $fail
 
+      # The rich line "Rich bold link bonjour" as VoiceOver reads its text
+      # attributes (the same axprobe --ranges run, above): its
+      # AXAttributedStringForRange runs, a bold face, a link, a language.
+      - name: Text attribute runs from outside the app (AX API, non-blocking)
+        continue-on-error: true
+        run: |
+          L=visual_output/axprobe-ranges.log
+          grep 'axprobe: ranges \(attributed\|run\|no AXStaticText\)' $L || true
+          grep -q 'axprobe: ranges attributed listed=true' $L
+          grep -q 'axprobe: ranges attributed 0,22 string="Rich bold link bonjour"' $L
+          grep -qE 'axprobe: ranges run 5,4 "bold" .*font=[^ ]*-Bold' $L
+          grep -qE 'axprobe: ranges run 10,4 "link" .*link=https://stipple.rs' $L
+          grep -qE 'axprobe: ranges run 10,4 "link" .*underline=1' $L
+          grep -qE 'axprobe: ranges run 15,7 "bonjour" .*font=[^ ]*-Italic.* language=fr' $L
+          grep -q 'axprobe: ranges attributed 5,4 string="bold"' $L
+
       # The reference app's tree as VoiceOver reads it (axprobe, built and
       # trusted by the steps above): the folder outline, the table, the
       # player's Play button (pressed through AXPress) and its slider.
@@ -5137,7 +5196,18 @@ jobs:
       - name: Range values and a table through AT-SPI (X11)
         run: |
           mkdir -p visual_output/ranges
-          DISPLAY=:99 TOUCHDEMO_RANGES=1 ATSPI_WALK_RANGES=1 dbus-run-session --             bash .github/scripts/atspi-linux.sh target/release/examples/touchdemo visual_output/ranges xdotool key Tab
+          DISPLAY=:99 TOUCHDEMO_RANGES=1 ATSPI_WALK_RANGES=1 dbus-run-session --             bash .github/scripts/atspi-linux.sh target/release/examples/touchdemo visual_output/ranges xdotool key Tab 2>&1 | tee visual_output/ranges/walk.log
+
+      # The rich line "Rich bold link bonjour"'s text attribute runs, which
+      # the walk above reports without failing on them: Text's
+      # GetAttributeRun at "bold" (weight 700), "link" (underlined, blue) and
+      # "bonjour" (italic, French), GetDefaultAttributes, GetAttributeValue.
+      - name: Text attribute runs through AT-SPI (X11, non-blocking)
+        continue-on-error: true
+        run: |
+          L=visual_output/ranges/walk.log
+          grep 'atspi: text run\|text runs' $L || true
+          grep -q 'atspi: text runs passed' $L
 
       # The reference app (examples/mediabrowser) through AT-SPI: its folder
       # tree, file table (headers, rows, cells), the player's Play button and
@@ -7033,6 +7103,21 @@ jobs:
             if [ "${{ matrix.api-level }}" = 34 ]; then bash examples/androiddemo/test-renderer.sh stipple-gl.apk "OpenGL ES" visual_output || echo "::warning::androiddemo didn't present with OpenGL ES on the emulator (not blocking yet)"; fi
             # platform::secure_store: a round trip through an AndroidKeyStore key, the value sealed in no_backup/, kept across process death, a changed file read as corrupt: not blocking until it has passed on CI's emulators.
             bash examples/androiddemo/test-secure-store.sh stipple.apk visual_output || echo "::warning::test-secure-store.sh failed (non-blocking)"
+
+      # Text attribute runs as spans: androiddemo's "Type your name:" reads
+      # as a Spanned with LocaleSpan(en-GB) on "Type", StyleSpan(BOLD) on
+      # "your" and a URLSpan (underlined) on "name" (the probe logs them).
+      - name: Android text spans (non-blocking)
+        if: matrix.api-level == 34
+        continue-on-error: true
+        run: |
+          L=visual_output/a11yprobe.log
+          S=$(grep -E 'probe spans text="Type your name:"' $L | tail -1)
+          echo "$S"
+          echo "$S" | grep -q 'locale(en-GB)@0\.\.4'
+          echo "$S" | grep -q 'style(1)@5\.\.9'
+          echo "$S" | grep -q 'url(https://stipple.rs)@10\.\.14'
+          echo "$S" | grep -q 'underline@10\.\.14'
 
       - name: Upload screenshots
         uses: actions/upload-artifact@v4

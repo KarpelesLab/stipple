@@ -25,6 +25,31 @@ const IID_ITextRangeProvider: Guid = Guid(
 #[link(name = "uiautomationcore")]
 unsafe extern "system" {
     fn UiaGetReservedNotSupportedValue(value: *mut *mut c_void) -> Hresult;
+    fn UiaGetReservedMixedAttributeValue(value: *mut *mut c_void) -> Hresult;
+}
+
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn LocaleNameToLCID(name: *const u16, flags: u32) -> u32;
+}
+
+/// The LCID of BCP 47 tag `tag` (`Culture`'s value), `None` for one
+/// Windows doesn't know.
+fn lcid(tag: &str) -> Option<i32> {
+    let name: Vec<u16> = tag.encode_utf16().chain([0]).collect();
+    let id = unsafe { LocaleNameToLCID(name.as_ptr(), 0) };
+    (id != 0).then_some(id as i32)
+}
+
+/// One of UIA's reserved values (not supported, mixed) as a VARIANT.
+unsafe fn reserved(get: unsafe extern "system" fn(*mut *mut c_void) -> Hresult) -> Variant {
+    let mut v = Variant::empty();
+    let mut unk: *mut c_void = core::ptr::null_mut();
+    if unsafe { get(&mut unk) } == S_OK {
+        v.vt = VT_UNKNOWN;
+        v.val = unk as u64;
+    }
+    v
 }
 
 /// `UiaPoint`.
@@ -231,6 +256,16 @@ unsafe fn span(r: &Range) -> (Vec<char>, (usize, usize)) {
     (text, (r.start.min(len), r.end.min(len)))
 }
 
+/// Where the range's node's format runs start (see
+/// `uia_logic::format_bounds`).
+unsafe fn format(r: &Range) -> Vec<usize> {
+    unsafe {
+        node_of(r.provider)
+            .map(logic::format_bounds)
+            .unwrap_or_default()
+    }
+}
+
 #[repr(C)]
 struct RangeVtbl {
     query_interface:
@@ -345,15 +380,20 @@ unsafe extern "system" fn expand_to_enclosing_unit(this: *mut c_void, unit: i32)
             return E_INVALIDARG;
         };
         let (text, (s, _)) = span(r);
-        (r.start, r.end) = logic::expand(&text, s, logic::unit(unit));
+        let format = format(r);
+        (r.start, r.end) = logic::expand(&text, s, logic::unit(unit, &format));
     }
     S_OK
 }
 
-/// The attribute `attr` over the range's text (one run: all of a node's
-/// text is drawn alike), when the tree knows it.
-unsafe fn attribute(r: &Range, attr: i32) -> Option<logic::Val> {
-    unsafe { node_of(r.provider).and_then(|n| logic::text_attribute(n, attr)) }
+/// The attribute `attr` over the range's text: its runs' value, or mixed
+/// where they differ (see `uia_logic::range_attribute`); `None` when the
+/// tree doesn't know it.
+unsafe fn attribute(r: &Range, attr: i32) -> Option<logic::Attr> {
+    unsafe {
+        let (_, sp) = span(r);
+        node_of(r.provider).and_then(|n| logic::range_attribute(n, attr, sp, &lcid))
+    }
 }
 
 /// Whether the VARIANT `v` holds `want`.
@@ -367,13 +407,13 @@ fn variant_is(v: &Variant, want: &logic::Val) -> bool {
     }
 }
 
-/// `FindAttribute`: the text is one run, so the range itself when its
-/// attribute is `value` (and it isn't empty), else nothing.
+/// `FindAttribute`: the first (last, `backward`) stretch of the range whose
+/// runs' attribute is `value`, else nothing.
 unsafe extern "system" fn find_attribute(
     this: *mut c_void,
     attr: i32,
     value: Variant,
-    _backward: i32,
+    backward: i32,
     ret: *mut *mut c_void,
 ) -> Hresult {
     unsafe {
@@ -384,8 +424,11 @@ unsafe extern "system" fn find_attribute(
         let Some(r) = range(this) else {
             return E_INVALIDARG;
         };
-        let (_, (s, e)) = span(r);
-        if e > s && attribute(r, attr).is_some_and(|a| variant_is(&value, &a)) {
+        let (_, sp) = span(r);
+        let want = |v: &logic::Val| variant_is(&value, v);
+        let found = node_of(r.provider)
+            .and_then(|n| logic::find_attribute(n, attr, sp, backward != 0, &want, &lcid));
+        if let Some((s, e)) = found {
             *ret = new_range(r.provider, s, e);
         }
     }
@@ -416,9 +459,11 @@ unsafe extern "system" fn find_text(
     S_OK
 }
 
-/// `GetAttributeValue`: the node's font name, size (points), weight,
-/// italic and read-only state (see `uia_logic::text_attribute`); UIA's
-/// reserved "not supported" value for the others.
+/// `GetAttributeValue`: the range's runs' font name, size (points),
+/// weight, italic, underline and strikethrough styles, colors and culture,
+/// and the read-only state (see `uia_logic::range_attribute`); UIA's
+/// reserved mixed value where the runs it spans differ, its "not
+/// supported" one for the others.
 unsafe extern "system" fn get_attribute_value(
     this: *mut c_void,
     attr: i32,
@@ -428,17 +473,11 @@ unsafe extern "system" fn get_attribute_value(
         if ret.is_null() {
             return E_POINTER;
         }
-        if let Some(a) = range(this).and_then(|r| attribute(r, attr)) {
-            *ret = super::events::variant(&a);
-            return S_OK;
-        }
-        let mut v = Variant::empty();
-        let mut unk: *mut c_void = core::ptr::null_mut();
-        if UiaGetReservedNotSupportedValue(&mut unk) == S_OK {
-            v.vt = VT_UNKNOWN;
-            v.val = unk as u64;
-        }
-        *ret = v;
+        *ret = match range(this).and_then(|r| attribute(r, attr)) {
+            Some(logic::Attr::Val(a)) => super::events::variant(&a),
+            Some(logic::Attr::Mixed) => reserved(UiaGetReservedMixedAttributeValue),
+            None => reserved(UiaGetReservedNotSupportedValue),
+        };
     }
     S_OK
 }
@@ -528,7 +567,8 @@ unsafe extern "system" fn move_(
             return E_INVALIDARG;
         };
         let (text, sp) = span(r);
-        let ((s, e), moved) = logic::move_range(&text, sp, logic::unit(unit), count);
+        let format = format(r);
+        let ((s, e), moved) = logic::move_range(&text, sp, logic::unit(unit, &format), count);
         (r.start, r.end) = (s, e);
         if !ret.is_null() {
             *ret = moved;
@@ -549,7 +589,9 @@ unsafe extern "system" fn move_endpoint_by_unit(
             return E_INVALIDARG;
         };
         let (text, sp) = span(r);
-        let ((s, e), moved) = logic::move_endpoint(&text, sp, which, logic::unit(unit), count);
+        let format = format(r);
+        let unit = logic::unit(unit, &format);
+        let ((s, e), moved) = logic::move_endpoint(&text, sp, which, unit, count);
         (r.start, r.end) = (s, e);
         if !ret.is_null() {
             *ret = moved;
@@ -789,6 +831,148 @@ pub(super) unsafe fn selftest_text(field: *mut c_void) -> Result<(), String> {
             "FindAttribute(FontWeight 700) finds nothing",
         )?;
         range_release(word);
+        range_release(doc);
+        release_through(tp);
+    }
+    Ok(())
+}
+
+/// "Rich bold link bonjour" (as touchdemo's ranges view shows it): plain,
+/// bold, plain, a blue underlined link, plain, italic French; 220 px wide.
+pub(super) fn selftest_rich_node() -> A11yNode {
+    use crate::platform::access::{A11yFont, A11yRuns, A11yTextRun};
+    let font = |weight, italic| A11yFont {
+        family: Some("Segoe UI".into()),
+        size: 16.0,
+        weight,
+        italic,
+    };
+    let plain = |s, e| A11yTextRun::plain((s, e), font(400, false));
+    let runs = vec![
+        plain(0, 5),
+        A11yTextRun::plain((5, 9), font(700, false)),
+        plain(9, 10),
+        A11yTextRun {
+            underline: true,
+            color: Some([0x1a, 0x5f, 0xd0, 0xff]),
+            link: Some("https://stipple.rs".into()),
+            ..plain(10, 14)
+        },
+        plain(14, 15),
+        A11yTextRun {
+            language: Some("fr".into()),
+            ..A11yTextRun::plain((15, 22), font(400, true))
+        },
+    ];
+    A11yNode {
+        font: Some(font(400, false)),
+        runs: A11yRuns::fixed(runs),
+        ..A11yNode::new(
+            crate::platform::access::A11yRole::Text,
+            "Rich bold link bonjour",
+            (0.0, 270.0, 220.0, 20.0),
+        )
+    }
+}
+
+/// The text attribute runs of `rich` ([`selftest_rich_node`]), through its
+/// Text pattern's ranges: each run's values, the mixed value over runs that
+/// differ, `FindAttribute` by run, the Format unit.
+pub(super) unsafe fn selftest_runs(rich: *mut c_void) -> Result<(), String> {
+    use super::patterns::{pattern_through, vt};
+    let check = |ok: bool, what: &str| -> Result<(), String> {
+        if ok {
+            println!("UIA patterns: ok: text runs: {what}");
+            Ok(())
+        } else {
+            Err(format!("UIA patterns: text runs: {what}"))
+        }
+    };
+    unsafe {
+        let tp = pattern_through(rich, UIA_TextPatternId);
+        check(!tp.is_null(), "the rich text has the Text pattern")?;
+        let tvt = vt::<TextVtbl>(tp);
+        let mut doc: *mut c_void = core::ptr::null_mut();
+        (tvt.get_document_range)(tp, &mut doc);
+        let rvt = vt::<RangeVtbl>(doc);
+        let i4 = |r: *mut c_void, attr: i32| {
+            let mut v = Variant::empty();
+            (rvt.get_attribute_value)(r, attr, &mut v);
+            let out = (v.vt == VT_I4).then_some(v.val as u32 as i32);
+            super::events::free(&v);
+            out
+        };
+        // The bold run, found by its weight.
+        let mut bold = Variant::empty();
+        bold.vt = VT_I4;
+        bold.val = 700;
+        let mut found: *mut c_void = core::ptr::null_mut();
+        (rvt.find_attribute)(doc, logic::FONT_WEIGHT, bold, 0, &mut found);
+        let text = (!found.is_null()).then(|| text_through(found));
+        check(
+            text.as_deref() == Some("bold"),
+            &format!("FindAttribute(FontWeight 700) finds {text:?}"),
+        )?;
+        check(
+            i4(found, logic::FONT_WEIGHT) == Some(700),
+            "the bold run's FontWeight is 700",
+        )?;
+        // Collapsed to its start, expanded to its format run, then moved on
+        // two runs: the link.
+        (rvt.move_endpoint_by_range)(found, 1, found, 0);
+        (rvt.expand_to_enclosing_unit)(found, 1);
+        let run = text_through(found);
+        let mut moved = 0;
+        (rvt.move_)(found, 1, 2, &mut moved);
+        let link = text_through(found);
+        check(
+            run == "bold" && link == "link" && moved == 2,
+            &format!("Format units: {run:?}, then {link:?} (moved {moved})"),
+        )?;
+        let (under, color) = (
+            i4(found, logic::UNDERLINE_STYLE),
+            i4(found, logic::FOREGROUND_COLOR),
+        );
+        check(
+            under == Some(1) && color == Some(0x00d0_5f1a),
+            &format!("the link: UnderlineStyle {under:?}, ForegroundColor {color:x?}"),
+        )?;
+        range_release(found);
+        // The French run, found from the end: italic, its culture French
+        // (primary language 0x0c: fr-FR is 0x040c).
+        let mut italic = Variant::empty();
+        italic.vt = VT_BOOL;
+        italic.val = 0xffff;
+        let mut fr: *mut c_void = core::ptr::null_mut();
+        (rvt.find_attribute)(doc, logic::IS_ITALIC, italic, 1, &mut fr);
+        let text = (!fr.is_null()).then(|| text_through(fr));
+        let culture = if fr.is_null() {
+            None
+        } else {
+            i4(fr, logic::CULTURE)
+        };
+        check(
+            text.as_deref() == Some("bonjour") && culture.map(|c| c & 0x3ff) == Some(0x0c),
+            &format!("FindAttribute(IsItalic, backward): {text:?}, Culture {culture:x?}"),
+        )?;
+        range_release(fr);
+        // Over all of it: one font, weights that differ.
+        let mut v = Variant::empty();
+        (rvt.get_attribute_value)(doc, logic::FONT_WEIGHT, &mut v);
+        let mut mixed: *mut c_void = core::ptr::null_mut();
+        UiaGetReservedMixedAttributeValue(&mut mixed);
+        check(
+            v.vt == VT_UNKNOWN && !mixed.is_null() && v.val as *mut c_void == mixed,
+            "FontWeight over every run is the mixed value",
+        )?;
+        let mut name = Variant::empty();
+        (rvt.get_attribute_value)(doc, logic::FONT_NAME, &mut name);
+        let family = (name.vt == VT_BSTR).then(|| bstr_to_string(name.val as *const u16));
+        super::events::free(&name);
+        check(
+            family.as_deref() == Some("Segoe UI"),
+            &format!("FontName over every run is {family:?}"),
+        )?;
         range_release(doc);
         release_through(tp);
     }

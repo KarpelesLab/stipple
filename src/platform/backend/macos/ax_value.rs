@@ -9,6 +9,8 @@
 //! associated object), and finds its window up its parents, as `AXPress`
 //! does. On top of the properties `NSAccessibilityElement` stores, they:
 //!
+//! - answer `accessibilityAttributedStringForRange:` with their text's
+//!   runs (see [`ax_attributed`](super::ax_attributed));
 //! - forward a client's `setAccessibilityValue:` on a field to the app (its
 //!   text replaced through the input-method path, after a click to focus
 //!   it), and `setAccessibilitySelectedTextRange:` (the field selects the
@@ -130,7 +132,8 @@ fn number_f64(v: f64) -> Id {
 /// # Safety
 /// `cls` is a class pair still being built.
 pub(super) unsafe fn add_common(cls: Class) {
-    let methods: [(&str, *const c_void, &std::ffi::CStr); 3] = [
+    let methods: [(&str, *const c_void, &std::ffi::CStr); 4] = [
+        super::ax_attributed::METHOD,
         (
             "setAccessibilityValue:",
             set_value as *const c_void,
@@ -291,6 +294,17 @@ fn with_node<R>(el: Id, f: impl FnOnce(&MacWindow, Kind, &A11yNode, &[usize]) ->
     let tree = win.a11y_tree.try_borrow().ok()?;
     let root = tree.as_ref()?;
     Some(f(&win, kind, root, &path))
+}
+
+/// Run `f` with the node element `el` stands for (not a scroll bar's);
+/// `None` when it isn't in a window's tree any more.
+pub(super) fn with_element_node<R>(el: Id, f: impl FnOnce(&A11yNode) -> R) -> Option<R> {
+    with_node(el, |_, kind, root, path| {
+        (kind == Kind::Node)
+            .then(|| root.at_path(path).map(f))
+            .flatten()
+    })
+    .flatten()
 }
 
 /// Queue the events `f` makes from the element's window's tree and its

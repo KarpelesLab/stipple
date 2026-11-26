@@ -2977,8 +2977,8 @@ Most input only works on X11 today.
   CI, required: the AT-SPI walk with `ATSPI_WALK_RANGES=1`,
   `uia-ranges.ps1`, `axprobe --ranges` (macOS; iOS build-checked) and the
   Android probe's slider checks (all passing on the runners), on `touchdemo` with `TOUCHDEMO_RANGES` and
-  `androiddemo`'s new slider. Left: text attributes past the font and
-  runs inside a node's text, setting a value from the web's ARIA overlay.
+  `androiddemo`'s new slider. Left: setting a value from the web's ARIA overlay.
+  (Text attribute runs: see the text attribute runs item below.)
   (Tables and captions on iOS: done, see the iOS item below.)
   (Positions in a set: see the next item.)
 - ✅ iOS data tables, captions, and acting on what's scrolled out of view.
@@ -3015,6 +3015,37 @@ Most input only works on X11 today.
   `widgetsdemo` and `mediabrowser` (passing locally under Xvfb),
   `uiademo --positions`, the web selftest's note of a menu item's
   `aria-posinset`, the Android probe's note of `androiddemo`'s list.
+- ✅ Text attribute runs for screen readers: rich text varies within one
+  node. `AccessNode::text_runs()` returns its `AccessTextRun`s: a byte range
+  of the name with its font, underline, strikethrough, colors, link and
+  language. They come from `Element::rich_text`'s spans (an inline image
+  reads as its alt text), the rich editor's marks and links, and a text
+  view's highlighted matches on screen (`Element::a11y_text_lines`). Spans
+  gained `SpanStyle::link` and `SpanStyle::language`. The runs are built
+  only when a bridge asks: the tree shares the laid-out spans, and trees
+  still compare equal frame to frame.
+  - **Windows:** `GetAttributeValue` returns each run's value or
+    `UIA_MixedAttributeValue`, for underline, strikethrough, the colors
+    and `Culture` as well as the font. `FindAttribute` works by run, and
+    so does the `Format` unit.
+  - **Linux:** AT-SPI `GetAttributeRun`, `GetAttributes`,
+    `GetAttributeValue` and `GetDefaultAttributes` / `GetDefaultAttributeSet`,
+    with the GTK names.
+  - **macOS:** `AXAttributedStringForRange` (`AXFont`, colors,
+    `AXUnderline`, `AXStrikethrough`, `AXLink`, `AXLanguage`).
+  - **iOS:** the attributed label and value carry the speech language.
+  - **Android:** the node's text as a `SpannableString` with `StyleSpan`,
+    `URLSpan`, `LocaleSpan` and color, size and decoration spans.
+  - **Web:** markup in the ARIA overlay.
+
+  App tests (`src/a11y_runs_tests.rs`) and unit tests per bridge. The CI
+  checks are non-blocking for now: the AT-SPI walk (passing locally),
+  `uiademo --patterns` and `uia-ranges.ps1`, `axprobe --ranges`, the
+  Android probe and the web selftest, on `touchdemo`'s "Rich bold link
+  bonjour", `androiddemo`'s and `webdemo`'s rich captions. iOS is
+  build-checked. Left: AT-SPI `Hypertext` / `Hyperlink` and UIA's `Link`
+  attribute, spelling errors (once there is a spell checker), and plain
+  text's own decoration and color in its run.
 - ⬜ Try the real screen readers: VoiceOver (macOS and iOS), TalkBack,
   Narrator / NVDA, Orca, by a person, on each platform.
 - ✅ Images on the GPU path, so OS-drawn controls render under `App::render_with`;

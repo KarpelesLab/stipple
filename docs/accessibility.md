@@ -253,12 +253,90 @@ its name already says it).
 
 **Text attributes.** A node with text says how it is drawn
 (`AccessNode::font`: family, size, weight, italic; the family is the app's
-font's when the text names none). Windows serves it as UIA text attributes
-(`FontName`, `FontSize` in points, `FontWeight`, `IsItalic`, and
-`IsReadOnly`), one run for the node's whole text, which `FindAttribute`
-finds; the others aren't exposed yet. A field's text changing and its caret
+font's when the text names none). A field's text changing and its caret
 or selection moving raise UIA's `TextChanged` and `TextSelectionChanged`
 events (AT-SPI had its text and caret events already).
+
+**Text attribute runs.** Rich text varies within one node: a bold word, a
+link, a phrase in another language, a highlighted search match.
+`AccessNode::text_runs()` returns its `AccessTextRun`s, in order and
+covering the node's name with no gaps. Each run has a byte range, a font
+(family, size, weight, italic), underline, strikethrough, foreground and
+background colors, a link target and a language. The runs come from the
+rich text's spans:
+
+- `Element::rich_text` and `label` / `paragraph` with a `RichText`. An
+  inline image reads as its alternative text, as the name does, and the
+  runs after it shift to match.
+- The `rich_editor`'s marks and links.
+- A `text_view`'s highlighted matches and selection, across the lines on
+  screen.
+
+`SpanStyle::link(url)` and `SpanStyle::language(tag)` say what a span
+means without changing how it's drawn.
+
+Text drawn all alike has one run. A control named by its `a11y_label` has
+no runs of its text. Text cut short with an ellipsis reads as one run,
+because its name is the whole text.
+
+The runs are built only when a bridge asks for them. The tree keeps a
+shared handle on the laid-out spans and does no work per frame. Trees
+still compare by the runs' content, so an unchanged frame is skipped.
+
+How each platform reports the runs:
+
+- **Windows (UIA).** `ITextRangeProvider::GetAttributeValue` returns the
+  run's value, or `UIA_MixedAttributeValue` over a range whose runs
+  differ. The attributes are `FontName`, `FontSize`, `FontWeight`,
+  `IsItalic`, `IsReadOnly`, `UnderlineStyle`, `StrikethroughStyle`,
+  `ForegroundColor`, `BackgroundColor` and `Culture` (its LCID).
+  `FindAttribute` goes over the runs forward and backward, and the
+  `Format` unit expands and moves by run.
+- **Linux (AT-SPI).** `Text.GetAttributeRun`, `GetAttributes`,
+  `GetAttributeValue`, `GetDefaultAttributes` and `GetDefaultAttributeSet`
+  use the GTK/ATK names: `family-name`, `size` in points, `weight`,
+  `style`, `underline`, `strikethrough`, `fg-color` / `bg-color` (16-bit
+  "r,g,b") and `language`.
+- **macOS.** `AXAttributedStringForRange` returns an attributed string per
+  run with `AXFont` (name, family and size; the weight and slant are in
+  the face's name), `AXForegroundColor`, `AXBackgroundColor`,
+  `AXUnderline`, `AXStrikethrough`, `AXLink` (an `NSURL`) and
+  `AXLanguage`.
+- **iOS.** `accessibilityAttributedLabel` / `accessibilityAttributedValue`
+  mark `UIAccessibilitySpeechAttributeLanguage` over runs in another
+  language.
+- **Android.** The node's text is a `SpannableString` carrying
+  `StyleSpan`, `UnderlineSpan`, `StrikethroughSpan`, `ForegroundColorSpan`
+  / `BackgroundColorSpan`, `URLSpan`, `LocaleSpan` and `AbsoluteSizeSpan`.
+  Text drawn all alike stays a plain string.
+- **Web.** The ARIA overlay renders rich static text as markup:
+  `<strong>`, `<em>`, `<u>`, `<del>`, `<mark>`, `<a href>` (a click on it
+  clicks the app, and the page doesn't navigate) and `lang`.
+
+Not covered:
+
+- UIA's `Link` attribute (its value is a range inside the document, not a
+  URL).
+- AT-SPI's `Hypertext` / `Hyperlink` (a link reads as underlined and
+  colored, but without its URI).
+- Spelling errors (`invalid:spelling`): there is no spell checker.
+- Plain text's own decoration (`Element::decorate`) and color in its
+  single run.
+
+App tests (`src/a11y_runs_tests.rs`) read the runs of a rich line, a rich
+editor and a text view, and check them through the platform's tree. Each
+bridge's logic has unit tests.
+
+`touchdemo` with `TOUCHDEMO_RANGES` shows the line "Rich bold link
+bonjour", and these out-of-process checks read its attributes:
+
+- `atspi-walk.py`, which passes locally under Xvfb.
+- `uia-ranges.ps1`, with `uiademo --patterns` in-process.
+- `axprobe --ranges`.
+
+`androiddemo`'s caption "Type your name:" and `webdemo`'s "Notes" caption
+are rich, for the Android probe and the web selftest. All of these are
+non-blocking CI steps for now.
 
 App tests (`src/a11y_range_tests.rs`) set a slider (both directions,
 exactly to its end, a step down) and a number input through those events,
@@ -393,9 +471,9 @@ the scroll math and the events a swap plans are worked out without COM in
   lines and the whole text, compare their endpoints, find text and report
   their boxes (the node's box shared evenly between its characters). A
   range is a COM object of its own, freed on its last release, holding a
-  reference on its element. Its text attributes are the node's font (one
-  run: `FontName`, `FontSize`, `FontWeight`, `IsItalic`, `IsReadOnly`),
-  which `FindAttribute` finds.
+  reference on its element. Its text attributes are its runs' (see [Text
+  attribute runs](#range-values-tables-and-captions)): the run's value or
+  the mixed value, `FindAttribute` by run, the `Format` unit.
 
 A tree swap raises, besides the focus change, property-changed events
 (Name, Value, ToggleState, ExpandCollapseState, SelectionItemIsSelected,
@@ -495,8 +573,7 @@ Grid and Table patterns and a cell's GridItem and TableItem, a label's
 and is required (and `uiademo --patterns`, required, drives the new
 patterns in-process).
 
-Not covered: text attributes beyond the font (colors, alignment…) and
-runs within a node's text (rich text reads as one), glyph-accurate
+Not covered: alignment and the other paragraph attributes, glyph-accurate
 character boxes, `RangeFromChild`; no Window pattern; Grid and Table on
 tables only (not trees or lists); `CanSelectMultiple` is always false; the root's `ChildrenInvalidated`
 carries the tree's runtime id, not the window's. The patterns and events
@@ -1011,7 +1088,7 @@ row 1, column 0; column 1's header; no cell in a row not built) and a cell's
 `a11ydemo serve` still serves a fixed tree over the session bus for the
 `dbus-send` checks.
 
-Not covered: no text attributes, character extents are the node's box split
+Not covered: no `Hypertext` (links), character extents are the node's box split
 evenly (not the glyphs'), a spin button's `Value` has no range, and a
 scroll pane's `Value` and its scroll bar children's say the same; nodes
 scrolled out of view still say `showing`. The `AT_SPI_BUS` property is read

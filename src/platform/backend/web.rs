@@ -25,7 +25,7 @@
 //! | `open_file(id, ptr, len)` | an `<input type=file>` (`accept` = the string); the file comes back through `stipple_file` |
 //! | `save_file(name, name_len, data, data_len)` | a download of a `Blob` |
 //! | `log(level, ptr, len)` | `console.log` / `console.error` (panics land here) |
-//! | `set_a11y(ptr, len)` | the ARIA overlay, from the accessibility tree as JSON (see [`aria_json`](crate::platform::access::aria_json)) |
+//! | `set_a11y(ptr, len)` | the ARIA overlay, from the accessibility tree as JSON (see [`aria_json`](crate::platform::access::aria_json)), its rich text's runs after it (see `aria_runs`) |
 //! | `set_ime(active, x, y, w, h)` | moves the hidden `<textarea>` that takes composition to the caret (CSS pixels) |
 //! | `set_text_input(active)` | the textarea's `inputmode`, which shows or hides a touch keyboard |
 //! | `set_input_hints(ptr, len)` | the focused field's keyboard hints, as `name=value;…` attributes for the textarea (`inputmode`, `enterkeyhint`, `autocapitalize`, `autocorrect`, `spellcheck`, `autocomplete`) |
@@ -86,6 +86,8 @@ use crate::platform::time::Instant;
 use crate::platform::window::{CursorIcon, ImeState, Window, WindowAttributes};
 use crate::platform::{ControlFlow, frame, wake};
 use crate::render::{Font, Pixmap, Surface};
+
+mod aria_runs;
 
 mod js {
     #[link(wasm_import_module = "stipple")]
@@ -445,7 +447,8 @@ impl Window for WebWindow {
             true
         });
         if changed {
-            let json = aria_json(root);
+            // Its rich text's runs after it, built now that it changed.
+            let json = aria_runs::with_runs(aria_json(root), root);
             unsafe { js::set_a11y(json.as_ptr(), json.len()) }
         }
     }

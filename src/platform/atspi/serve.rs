@@ -1107,15 +1107,29 @@ fn text_read(n: &Node, t: &str, member: &str, args: &mut Args) -> Reply {
         "ScrollSubstringTo" | "ScrollSubstringToPoint" => ret("b", |r| {
             r.bool(false);
         }),
-        "GetAttributeValue" => ret("s", |r| {
-            r.str("");
-        }),
-        "GetAttributes" | "GetAttributeRun" => ret("a{ss}ii", |r| {
-            r.str_dict(&[]).i32(0).i32(count);
-        }),
-        "GetDefaultAttributes" | "GetDefaultAttributeSet" => ret("a{ss}", |r| {
-            r.str_dict(&[]);
-        }),
+        // Text attributes: the node's runs (see `attrs`).
+        "GetAttributeValue" => {
+            let o = args.i32().unwrap_or(0);
+            let v = super::attrs::value_at(n.node, o, &args.str().unwrap_or_default());
+            ret("s", |r| {
+                r.str(&v);
+            })
+        }
+        "GetAttributes" | "GetAttributeRun" => {
+            let o = args.i32().unwrap_or(0);
+            // `GetAttributeRun`'s includeDefaults (`GetAttributes` has none).
+            let with = member == "GetAttributeRun" && args.u32().unwrap_or(0) != 0;
+            let (a, s, e) = super::attrs::run_at(n.node, o, with);
+            ret("a{ss}ii", |r| {
+                r.str_dict(&super::attrs::pairs(&a)).i32(s).i32(e);
+            })
+        }
+        "GetDefaultAttributes" | "GetDefaultAttributeSet" => {
+            let d = super::attrs::defaults(n.node);
+            ret("a{ss}", |r| {
+                r.str_dict(&super::attrs::pairs(&d));
+            })
+        }
         "GetCharacterExtents" => {
             let (o, coord) = (args.i32().unwrap_or(0), args.u32().unwrap_or(0));
             let (x, y, w, h) = char_box(o, coord);

@@ -107,6 +107,10 @@
         // What is reported without being required yet (non-blocking CI steps
         // grep these lines).
         const notes = [];
+        // Checks reported without failing the selftest (until they've proved
+        // steady in CI): "soft-ok" or "SOFT-FAILED" lines.
+        const softs = {};
+        const soft = (name, ok, detail) => { softs[name] = { ok: !!ok, detail }; };
 
         // HiDPI: the backing store is the CSS size times the pixel ratio.
         // (On a GPU, `renderer: "auto"` with a hardware one, the canvas is
@@ -232,6 +236,20 @@
         check("aria-checked", probe(8) === 1 && box?.getAttribute("aria-checked") === "true",
           `checked=${probe(8)}, aria-checked=${box?.getAttribute("aria-checked")}`);
 
+        // Rich text: the notes' caption is markup, a run each: "Notes" bold,
+        // "type" a link (out of the tab order), "copy" highlighted, "paste"
+        // in British English. Reported, not yet required (`soft`).
+        const caption = [...overlay.querySelectorAll("[data-stipple]")]
+          .find((el) => el.textContent === "Notes (type, copy, paste):");
+        const linkEl = caption?.querySelector("a");
+        soft("aria-rich-text", caption?.querySelector("strong")?.textContent === "Notes"
+          && linkEl?.getAttribute("href") === "https://stipple.rs" && linkEl.textContent === "type"
+          && linkEl.tabIndex === -1
+          && caption.querySelector("mark")?.textContent === "copy"
+          && caption.querySelector("[lang]")?.getAttribute("lang") === "en-GB"
+          && caption.querySelector("[lang]").textContent === "paste",
+          caption ? caption.innerHTML : "no caption in the overlay");
+
         // prefers-color-scheme: the native theme follows it, and a change (as
         // the media query's change event reports it) re-themes the running app.
         const prefersDark = matchMedia("(prefers-color-scheme: dark)").matches ? 1 : 0;
@@ -338,7 +356,9 @@
         const ok = Object.values(checks).every((c) => c.ok);
         const report = `SELFTEST: ${ok ? "ok" : "FAILED"}\n` + Object.entries(checks)
           .map(([k, c]) => `${c.ok ? "ok    " : "FAILED"} ${k}: ${c.detail}`)
-          .concat(notes.map((n) => `note   ${n}`)).join("\n");
+          .concat(notes.map((n) => `note   ${n}`)).join("\n")
+          + Object.entries(softs)
+            .map(([k, c]) => `\n${c.ok ? "soft-ok" : "SOFT-FAILED"} ${k}: ${c.detail}`).join("");
         console.log(report);
         document.getElementById("report").textContent = report;
         send(report);

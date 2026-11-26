@@ -39,6 +39,8 @@ use crate::render::{Pixmap, Surface};
 
 /// Accessibility: the view as a `UIAccessibilityContainer`.
 mod a11y;
+/// Rich text's languages, in its attributed label or value.
+mod a11y_speech;
 /// The accessibility tree as VoiceOver reads it (UIKit-free, tested on hosts).
 pub(crate) mod a11y_tree;
 /// Pacing animation frames by the screen (`CADisplayLink`).

@@ -8,7 +8,9 @@
 // on, in its reading order (a swipe right at a time), then clicks a button
 // (TalkBack's double tap), sets the text field's text, scrolls the list, and
 // reads and sets the "Volume" slider's range (RangeInfo, ACTION_SET_PROGRESS,
-// a scroll forward as TalkBack's volume keys step a SeekBar).
+// a scroll forward as TalkBack's volume keys step a SeekBar). A node whose
+// text is a Spanned logs its spans (text attribute runs: bold, links,
+// languages) with their UTF-16 ranges.
 // Everything it sees goes to logcat under the `a11yprobe` tag, for
 // .github/a11y/android/test-probe.sh to check.
 //
@@ -23,6 +25,15 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
+import android.text.Spanned;
+import android.text.style.AbsoluteSizeSpan;
+import android.text.style.BackgroundColorSpan;
+import android.text.style.ForegroundColorSpan;
+import android.text.style.LocaleSpan;
+import android.text.style.StrikethroughSpan;
+import android.text.style.StyleSpan;
+import android.text.style.URLSpan;
+import android.text.style.UnderlineSpan;
 import android.util.Log;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
@@ -143,6 +154,7 @@ public class Probe extends AccessibilityService {
             indent.append("  ");
         }
         log("node " + indent + describe(n));
+        logSpans(n);
         if (depth > 0 && speaks(n)) {
             order.add(n);
         }
@@ -152,6 +164,48 @@ public class Probe extends AccessibilityService {
                 walk(c, depth + 1, order);
             }
         }
+    }
+
+    /** A node's text attribute runs, as the spans of its text (a Spanned):
+     *  each span's kind and UTF-16 range. */
+    static void logSpans(AccessibilityNodeInfo n) {
+        CharSequence t = n.getText();
+        if (!(t instanceof Spanned)) {
+            return;
+        }
+        Spanned sp = (Spanned) t;
+        Object[] all = sp.getSpans(0, sp.length(), Object.class);
+        if (all.length == 0) {
+            return;
+        }
+        StringBuilder b = new StringBuilder();
+        for (Object o : all) {
+            b.append(' ').append(spanName(o)).append('@')
+                    .append(sp.getSpanStart(o)).append("..").append(sp.getSpanEnd(o));
+        }
+        log("spans text=\"" + t + "\"" + b);
+    }
+
+    static String spanName(Object o) {
+        if (o instanceof URLSpan) {
+            return "url(" + ((URLSpan) o).getURL() + ")";
+        } else if (o instanceof StyleSpan) {
+            return "style(" + ((StyleSpan) o).getStyle() + ")";
+        } else if (o instanceof LocaleSpan) {
+            java.util.Locale l = ((LocaleSpan) o).getLocale();
+            return "locale(" + (l == null ? "" : l.toLanguageTag()) + ")";
+        } else if (o instanceof UnderlineSpan) {
+            return "underline";
+        } else if (o instanceof StrikethroughSpan) {
+            return "strikethrough";
+        } else if (o instanceof ForegroundColorSpan) {
+            return "fg(#" + Integer.toHexString(((ForegroundColorSpan) o).getForegroundColor()) + ")";
+        } else if (o instanceof BackgroundColorSpan) {
+            return "bg(#" + Integer.toHexString(((BackgroundColorSpan) o).getBackgroundColor()) + ")";
+        } else if (o instanceof AbsoluteSizeSpan) {
+            return "size(" + ((AbsoluteSizeSpan) o).getSize() + ")";
+        }
+        return o.getClass().getSimpleName();
     }
 
     AccessibilityNodeInfo find(AccessibilityNodeInfo n, String text, boolean editable) {

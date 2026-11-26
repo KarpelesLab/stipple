@@ -56,6 +56,10 @@ pub(crate) struct Item {
     /// Its place in the tree (child indices from the root), where an
     /// activation brings it into view (`access::reveal`).
     pub(crate) path: Vec<usize>,
+    /// For rich text (its label, a field's value), its node without its
+    /// children: the runs its attributed label or value reads in their
+    /// languages, built when VoiceOver asks (see [`speech_languages`]).
+    pub(crate) speech: Option<A11yNode>,
 }
 
 /// The roles whose children VoiceOver reads instead of them (as
@@ -114,6 +118,13 @@ fn item(node: &A11yNode) -> Item {
     if adjust.is_some() {
         traits |= ADJUSTABLE;
     }
+    let speech =
+        (node.runs.0.is_some() && matches!(role, Text | TextField | SpinButton)).then(|| {
+            A11yNode {
+                children: Vec::new(),
+                ..node.clone()
+            }
+        });
     if node.selected && matches!(role, ListItem | Row | Cell | TreeItem | Tab) {
         traits |= SELECTED;
     }
@@ -139,6 +150,7 @@ fn item(node: &A11yNode) -> Item {
         frame: node.bounds,
         native: node.native_view,
         adjust,
+        speech,
         container: None,
         table: node.table.filter(|_| role == Table),
         cell: node.cell,
@@ -165,6 +177,28 @@ fn add_caption(root: &A11yNode, node: &A11yNode, it: &mut Item) {
     } else if !it.label.contains(caption) {
         it.label = format!("{caption}, {}", it.label);
     }
+}
+
+/// The stretches of `node`'s text (an item's label, or a field's value)
+/// in another language, as `(location, length, tag)` in UTF-16 units:
+/// where its attributed string says `UIAccessibilitySpeechAttributeLanguage`.
+pub(crate) fn speech_languages(node: &A11yNode) -> Vec<(usize, usize, String)> {
+    let text = node.name.as_str();
+    let units = |b: usize| {
+        let mut b = b.min(text.len());
+        while !text.is_char_boundary(b) {
+            b -= 1;
+        }
+        text[..b].encode_utf16().count()
+    };
+    node.text_runs()
+        .into_iter()
+        .filter_map(|r| {
+            let lang = r.language?;
+            let (s, e) = (units(r.range.0), units(r.range.1));
+            (e > s).then_some((s, e - s, lang))
+        })
+        .collect()
 }
 
 /// Every node under `root` (not `root`, which the view stands for), depth
@@ -377,6 +411,28 @@ pub(crate) fn change(old: &[Item], new: &[Item]) -> Change {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rich_text_reads_its_languages() {
+        use crate::platform::access::{A11yFont, A11yRuns, A11yTextRun};
+        let font = A11yFont {
+            family: None,
+            size: 17.0,
+            weight: 400,
+            italic: false,
+        };
+        let mut text = node(A11yRole::Text, "😀 say bonjour");
+        text.font = Some(font.clone());
+        text.runs = A11yRuns::fixed(vec![A11yTextRun {
+            language: Some("fr".into()),
+            ..A11yTextRun::plain((9, 16), font)
+        }]);
+        let items = flatten(&window(vec![text, node(A11yRole::Text, "plain")]));
+        let speech = items[0].speech.as_ref().expect("rich text keeps its node");
+        // The emoji is two UTF-16 units.
+        assert_eq!(speech_languages(speech), [(7, 7, "fr".to_string())]);
+        assert!(items[1].speech.is_none(), "plain text has no runs to read");
+    }
 
     fn node(role: A11yRole, name: &str) -> A11yNode {
         A11yNode::new(role, name, (1.0, 2.0, 30.0, 10.0))

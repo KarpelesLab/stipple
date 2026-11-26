@@ -889,11 +889,18 @@ pub fn text_view<S: 'static>(
         .partition_point(|m| m.line < window.range.start);
     let mut lines = Vec::with_capacity(window.range.len());
     let mut visible = String::new();
+    // Which of `lines` are those in `visible`.
+    let mut on_screen: Option<Range<usize>> = None;
     let (top, bottom) = (window.offset, window.offset + window.height);
     for i in window.range.clone() {
         let text = &state.lines[i];
         let row_top = i as f64 * lh;
         if row_top + lh > top + 0.5 && row_top < bottom - 0.5 {
+            let at = i - window.range.start;
+            on_screen = match on_screen {
+                Some(r) => Some(r.start..at + 1),
+                None => Some(at..at + 1),
+            };
             if !visible.is_empty() {
                 visible.push('\n');
             }
@@ -1034,7 +1041,8 @@ pub fn text_view<S: 'static>(
         .padding(Insets::uniform(1.0))
         .cursor(CursorIcon::Text)
         .role(Role::Text)
-        .a11y_label(visible);
+        .a11y_label(visible)
+        .a11y_text_lines(on_screen.unwrap_or(0..0));
     let menu = crate::core::menu::Menu::new("")
         .item(
             crate::core::menu::MenuItem::new("Copy", move |s: &mut S| copy(field(s)))

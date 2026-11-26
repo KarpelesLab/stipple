@@ -203,6 +203,9 @@ pub struct A11yNode {
     pub cell: Option<A11yCell>,
     /// For a node with text, how it's drawn.
     pub font: Option<A11yFont>,
+    /// For rich text, where its runs drawn differently come from (see
+    /// [`text_runs`](Self::text_runs), which builds them on demand).
+    pub runs: A11yRuns,
     /// The live OS control that stands for this node (see
     /// [`NativeView`](crate::platform::native::NativeView)), by id: the
     /// bridge exposes that control here, as the OS's own accessibility
@@ -238,6 +241,7 @@ impl A11yNode {
             table: None,
             cell: None,
             font: None,
+            runs: A11yRuns::default(),
             native_view: None,
             children: Vec::new(),
         }
@@ -451,6 +455,7 @@ mod changes;
 mod position;
 mod relations;
 mod reveal;
+mod runs;
 #[allow(unused_imports)]
 pub(crate) use actions::{editable, number_text};
 #[allow(unused_imports)]
@@ -459,6 +464,7 @@ pub(crate) use changes::{A11yChange, changes};
 pub(crate) use position::SetPosition;
 #[allow(unused_imports)]
 pub(crate) use relations::Relations;
+pub use runs::{A11yRuns, A11yTextRun, RunSource};
 
 /// The ARIA role the web's bridge gives `role`; empty for none (static text,
 /// and the window root, which the page's overlay itself stands for).

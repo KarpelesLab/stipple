@@ -81,6 +81,9 @@ mod android_insets;
 #[cfg(all(test, not(target_os = "android")))]
 #[path = "android/requests.rs"]
 mod android_requests;
+#[cfg(all(test, not(target_os = "android")))]
+#[path = "android/text_spans.rs"]
+mod android_text_spans;
 #[cfg(all(test, not(target_os = "ios")))]
 #[path = "ios/pan_scroll.rs"]
 mod ios_pan_scroll;
@@ -105,6 +108,10 @@ pub mod android;
 #[allow(unsafe_code)]
 #[doc(hidden)]
 pub mod web;
+// The ARIA overlay's runs are plain Rust: tested on the host too.
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "web/aria_runs.rs"]
+mod web_aria_runs;
 
 /// Deliver [`Event::ThemeChanged`] (and [`Event::LocaleChanged`]) ahead of the wake that follows an appearance
 /// change, which the OS reports through a notification, a window message or (on

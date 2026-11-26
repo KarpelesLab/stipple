@@ -7,7 +7,8 @@
 //! timer, a text editor with clipboard support (and input methods), opening
 //! and saving a file, and a checkbox. Its theme follows the page's
 //! `prefers-color-scheme`, and screen readers see it through the ARIA overlay
-//! `web/stipple.js` keeps.
+//! `web/stipple.js` keeps (the notes' caption, rich text, as markup: a link,
+//! a highlight, a language).
 //!
 //! A theme change (the page's color scheme flipping) cross-fades, and snaps
 //! under `prefers-reduced-motion: reduce`.
@@ -124,7 +125,28 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
 
 fn text_field_row<S>(cx: &Cx<S>, field: Element) -> Element {
     let theme = cx.theme();
-    column(vec![label(cx, "Notes (type, copy, paste):"), field]).gap(theme.spacing.xs)
+    column(vec![label(cx, notes_caption(theme)), field]).gap(theme.spacing.xs)
+}
+
+/// "Notes (type, copy, paste):" in runs, which the ARIA overlay writes as
+/// markup (the selftest checks it): "Notes" bold, "type" a link, "copy"
+/// highlighted, "paste" italic and in British English.
+fn notes_caption(theme: &Theme) -> stipple::render::RichText {
+    use stipple::render::{RichText, SpanStyle, UnderlineStyle};
+    let link = SpanStyle::new()
+        .color(theme.palette.primary)
+        .underline(UnderlineStyle::Single)
+        .link("https://stipple.rs");
+    let mark = SpanStyle::new().background(theme.palette.warning.with_alpha(0x60));
+    RichText::new()
+        .bold("Notes")
+        .push(" (")
+        .styled("type", link)
+        .push(", ")
+        .styled("copy", mark)
+        .push(", ")
+        .styled("paste", SpanStyle::new().italic().language("en-GB"))
+        .push("):")
 }
 
 /// The app. `web_app!` runs it in the page; natively it renders headless.

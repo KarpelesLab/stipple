@@ -1323,8 +1323,9 @@ impl RichEditor {
         if !deco.is_none() {
             st = st.decorate(deco);
         }
-        if attr.link.is_some() {
+        if let Some(link) = &attr.link {
             st = st.color(p.primary);
+            st.link = Some(link.clone());
         }
         st
     }

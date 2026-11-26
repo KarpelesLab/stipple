@@ -1222,3 +1222,95 @@ fn a_table_gives_its_cells_by_row_and_column() {
     );
     assert_eq!(paths(&heads), [node_path(4, &[2, 0, 1])]);
 }
+
+/// An `a{ss}ii` reply: the attributes, then the run's start and end.
+fn dict_ii(body: &[u8]) -> (Vec<(String, String)>, i32, i32) {
+    let mut off = 0;
+    let len = read_u32(body, &mut off).unwrap() as usize;
+    while !off.is_multiple_of(8) {
+        off += 1;
+    }
+    let end = off + len;
+    let mut out = Vec::new();
+    while off < end {
+        while !off.is_multiple_of(8) {
+            off += 1;
+        }
+        let k = read_string(body, &mut off).unwrap();
+        let v = read_string(body, &mut off).unwrap();
+        out.push((k, v));
+    }
+    let s = read_u32(body, &mut off).unwrap() as i32;
+    let e = read_u32(body, &mut off).unwrap() as i32;
+    (out, s, e)
+}
+
+#[test]
+fn text_attributes_follow_the_runs() {
+    use crate::platform::access::{A11yFont, A11yRuns, A11yTextRun};
+    let font = |weight| A11yFont {
+        family: Some("Inter".into()),
+        size: 16.0,
+        weight,
+        italic: false,
+    };
+    let mut b = Bridge::new();
+    b.bus = ":1.7".into();
+    b.win_mut(9).root = Some(Arc::new(A11yNode {
+        children: vec![A11yNode {
+            font: Some(font(400)),
+            runs: A11yRuns::fixed(vec![
+                A11yTextRun::plain((0, 4), font(400)),
+                A11yTextRun {
+                    language: Some("fr".into()),
+                    ..A11yTextRun::plain((4, 8), font(700))
+                },
+            ]),
+            ..leaf(A11yRole::Text, "é: bold", (0.0, 0.0, 70.0, 20.0))
+        }],
+        ..leaf(A11yRole::Window, "Form", (0.0, 0.0, 200.0, 60.0))
+    }));
+    let text = node_path(9, &[0]);
+    // "é: " is three characters (four bytes): the bold run is 3..7.
+    let mut body = Body::new();
+    body.i32(4).bool(false);
+    let (attrs, s, e) = dict_ii(&ok(
+        text_call(&mut b, &text, "GetAttributeRun", body),
+        "a{ss}ii",
+    ));
+    assert_eq!((s, e), (3, 7));
+    assert_eq!(
+        attrs,
+        vec![
+            ("weight".to_string(), "700".to_string()),
+            ("language".to_string(), "fr".to_string())
+        ]
+    );
+    let mut body = Body::new();
+    body.i32(4).bool(true);
+    let (attrs, _, _) = dict_ii(&ok(
+        text_call(&mut b, &text, "GetAttributeRun", body),
+        "a{ss}ii",
+    ));
+    assert!(
+        attrs.contains(&("family-name".into(), "Inter".into())),
+        "{attrs:?}"
+    );
+    let mut body = Body::new();
+    body.i32(1);
+    let (attrs, s, e) = dict_ii(&ok(
+        text_call(&mut b, &text, "GetAttributes", body),
+        "a{ss}ii",
+    ));
+    assert_eq!((attrs.len(), s, e), (0, 0, 3));
+    let mut body = Body::new();
+    body.i32(5).str("weight");
+    let v = ok(text_call(&mut b, &text, "GetAttributeValue", body), "s");
+    assert_eq!(read_string(&v, &mut 0).unwrap(), "700");
+    let d = ok(
+        text_call(&mut b, &text, "GetDefaultAttributes", Body::new()),
+        "a{ss}",
+    );
+    let d = String::from_utf8_lossy(&d);
+    assert!(d.contains("family-name") && d.contains("400"), "{d:?}");
+}

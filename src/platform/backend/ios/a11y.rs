@@ -169,6 +169,7 @@ fn element_class() -> Class {
             c"v@:".as_ptr(),
         );
         add_table_methods(cls);
+        super::a11y_speech::add_methods(cls);
         objc_registerClassPair(cls);
         cls
     }
@@ -216,6 +217,15 @@ extern "C" fn traits(this: Id, cmd: Sel) -> u64 {
     let get: unsafe extern "C" fn(Id, Sel) -> u64 =
         unsafe { std::mem::transmute(objc_msgSend as *const c_void) };
     base | unsafe { get(text_field, sel("accessibilityTraits")) }
+}
+
+/// The rich text node element `el` last showed (see `a11y_speech`).
+pub(super) fn speech_of(el: Id) -> Option<A11yNode> {
+    STATE.with(|s| {
+        let s = s.try_borrow().ok()?;
+        let (_, shown) = s.elements.iter().find(|(e, _)| *e == el)?;
+        shown.as_ref()?.0.speech.clone()
+    })
 }
 
 /// `accessibilityActivate`: tap the middle of the node, after this call
