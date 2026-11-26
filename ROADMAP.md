@@ -2275,8 +2275,18 @@ Most input only works on X11 today.
   and the web (ARIA `scrollbar`); `Skin::scroll_bar` (`ScrollBarSkin`:
   track, thumb, arrows, corner) and, under `Theme::native`, Windows' visual
   styles and macOS's legacy `NSScroller` drawing the parts (build-checked).
-  `visual-scroll` holds a press on `scrolldemo`'s track (required). Not
-  yet: a table scrolling sideways with its header.*
+  `visual-scroll` holds a press on `scrolldemo`'s track (required). A
+  `table` whose columns are wider than it scrolls sideways (both bars, the
+  corner and gutters of a two-way body), its header following
+  (`Element::scroll_follow`, applied after the containers' offsets, no bar
+  of its own), only the columns in view built (`Cx::fit_scroll_width`
+  rebuilds when the guessed width was wrong), `TableSpec::frozen_columns`
+  staying put (mirrored right to left), a cell cursor (Left/Right,
+  Ctrl+Left/Right) revealed both ways, cells declaring their column
+  (`Element::a11y_column`, `AccessTable::frozen`), and reveal-before-activate
+  scrolling sideways clear of frozen columns; `text_view`'s two bars are
+  now children of its text node. App-tested; `visual-table` scrolls
+  `tabledemo`'s table sideways (non-blocking).*
 - ✅ Combo box and searchable select (#85, #97): `combo_box` + `ComboBox`
   (free text with the matching suggestions below, Up/Down/Enter/Tab/Escape, a
   ▾ listing them all), `ComboBox::inline_completion` (the first

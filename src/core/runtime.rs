@@ -254,6 +254,15 @@ pub struct DragSourceId(pub(crate) u32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ScrollId(pub(crate) u32);
 
+/// A node whose children move with another container's sideways scrolling
+/// (by [`ScrollId`] `id`), or against it (`pin`): see
+/// [`Element::scroll_follow`](crate::core::Element::scroll_follow).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ScrollFollow {
+    pub(crate) id: ScrollId,
+    pub(crate) pin: bool,
+}
+
 /// A cloneable handle for asking the app to move scroll containers, from an
 /// event handler (which only sees the state). Get one from
 /// [`Cx::scroll_requests`]; requests apply before the next frame is built, so
@@ -526,6 +535,9 @@ pub struct Cx<'a, S> {
     /// this build assumed for them ([`Cx::fit_scroll_height`]).
     scroll_viewports: HashMap<ScrollId, Size>,
     scroll_fits: Vec<(ScrollId, f64)>,
+    /// The widths this build assumed for scroll containers it built only
+    /// part of sideways ([`Cx::fit_scroll_width`]).
+    scroll_width_fits: Vec<(ScrollId, f64)>,
     /// The running app's handle, for timers and background work.
     handle: AppHandle<S>,
     /// The frame's time on the animation timeline, and whether the view asked
@@ -600,6 +612,7 @@ impl<'a, S> Cx<'a, S> {
             scroll_requests: ScrollRequests::default(),
             scroll_viewports: HashMap::new(),
             scroll_fits: Vec::new(),
+            scroll_width_fits: Vec::new(),
             frame: FrameInfo {
                 time: crate::platform::frame::elapsed().unwrap_or_default(),
                 requested: false,
@@ -1198,6 +1211,26 @@ impl<'a, S> Cx<'a, S> {
         h
     }
 
+    /// The width to build scroll container `id`'s visible content for,
+    /// sideways (a wide table builds only the columns in view): its width
+    /// in the last frame, or the window's before it was ever laid out. If
+    /// the layout gives it another width, the app builds the frame again.
+    pub(crate) fn fit_scroll_width(&mut self, id: ScrollId) -> f64 {
+        let w = match self.last_scroll_viewport(id) {
+            Some(size) => size.width,
+            None if self.window_size.width > 0.0 => self.window_size.width,
+            None => 320.0,
+        };
+        self.scroll_width_fits.push((id, w));
+        w
+    }
+
+    /// The widths this build assumed for the containers that
+    /// [`fit_scroll_width`](Self::fit_scroll_width) asked about.
+    pub(crate) fn take_scroll_width_fits(&mut self) -> Vec<(ScrollId, f64)> {
+        std::mem::take(&mut self.scroll_width_fits)
+    }
+
     /// The size scroll container `id` was laid out at in the last frame, if
     /// it was asked about then too (asking keeps it known for the next
     /// frame; nothing is built again when this one's differs).
@@ -1716,6 +1749,10 @@ pub struct LayoutNode {
     /// [`Element::scrollable_x`](crate::core::Element::scrollable_x)): its
     /// children are shifted left by this id's offset too.
     pub(crate) scroll_x: Option<ScrollId>,
+    /// Its children follow another container's sideways scrolling, or are
+    /// pinned against it (see
+    /// [`Element::scroll_follow`](crate::core::Element::scroll_follow)).
+    pub(crate) scroll_follow: Option<crate::core::ScrollFollow>,
     /// How much further than its content a container that scrolls both ways
     /// scrolls sideways and down: the gutters its vertical and horizontal
     /// bars keep (see [`widgets::scroll_both`](crate::widgets::scroll_both)),
@@ -1816,6 +1853,7 @@ impl LayoutNode {
             native_a11y: None,
             scroll: None,
             scroll_x: None,
+            scroll_follow: None,
             scroll_tail: (0.0, 0.0),
             scroll_horizontal: false,
             clip: false,
@@ -2426,6 +2464,7 @@ mod tests {
             native_a11y: None,
             scroll: None,
             scroll_x: None,
+            scroll_follow: None,
             scroll_tail: (0.0, 0.0),
             scroll_horizontal: false,
             clip: false,
@@ -2498,6 +2537,7 @@ mod tests {
             native_a11y: None,
             scroll: None,
             scroll_x: None,
+            scroll_follow: None,
             scroll_tail: (0.0, 0.0),
             scroll_horizontal: false,
             clip: false,

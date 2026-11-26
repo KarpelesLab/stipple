@@ -934,6 +934,7 @@ mod tests {
             table: Some(A11yTable {
                 rows: 3,
                 columns: 2,
+                frozen: 0,
             }),
             ..leaf(A11yRole::Table, "")
         };

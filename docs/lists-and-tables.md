@@ -262,8 +262,24 @@ table(
   it moves the cursor, the table scrolls the new cursor row into view: a file
   list's Enter to open and type-to-select (see the
   [reference app](reference-app.md)).
-- Columns have fixed widths, so a table wider than its container is clipped;
-  there is no horizontal scrolling yet.
+- **Wide tables** scroll sideways when their columns are wider than the
+  table: a horizontal wheel or trackpad swipe, Shift+wheel, the bar along the
+  body's bottom (both bars and the corner square, with gutters, as in
+  [`scroll_both`](widgets.md#scroll-bars)), or the cell cursor. The header
+  follows the columns sideways and stays put vertically; only the columns in
+  view (and one past each edge) are built, as only the rows in view are.
+  Give the table a width (`.width(…)`, or a parent that sizes it), or it is
+  as wide as the space it has. `.frozen_columns(n)` keeps the first `n`
+  columns (and their headers) in place, the others scrolling clear of
+  them. Resizing a column works while scrolled. Right to left, the columns
+  start at the right, frozen ones there too, and the scrolling starts from
+  the right.
+- **Cell cursor**: Left/Right move it across the cursor row's cells (the
+  other way right to left), Ctrl+Left/Right (Alt on macOS) to the first or
+  last column; it's outlined, and `TableState::cursor_column` /
+  `set_cursor_column` read and set it. Whatever key moves the cursor (the
+  arrows, Home/End for the first and last row, `on_key`) scrolls its cell
+  into view both ways. Left and Right no longer reach `on_key`.
 
 ## Trees
 

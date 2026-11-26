@@ -410,6 +410,9 @@ pub struct Element {
     /// A container scrolling both ways keeps gutters for both its bars (see
     /// [`scrollable_both`](Element::scrollable_both)).
     pub(crate) scroll_gutters: bool,
+    /// Children shifted sideways by another container's scrolling (see
+    /// [`scroll_follow`](Element::scroll_follow)).
+    pub(crate) scroll_follow: Option<crate::core::ScrollFollow>,
     /// When `true`, children are clipped to this element's painted bounds. Set
     /// implicitly by [`Element::scrollable`] and via [`Element::clip`].
     pub(crate) clip: bool,
@@ -482,6 +485,7 @@ impl Element {
             native: None,
             scroll: None,
             scroll_x: None,
+            scroll_follow: None,
             scroll_gutters: false,
             clip: false,
             cursor: None,
@@ -519,6 +523,7 @@ impl Element {
             native: None,
             scroll: None,
             scroll_x: None,
+            scroll_follow: None,
             scroll_gutters: false,
             clip: false,
             cursor: None,
@@ -594,6 +599,7 @@ impl Element {
             native: None,
             scroll: None,
             scroll_x: None,
+            scroll_follow: None,
             scroll_gutters: false,
             clip: false,
             cursor: None,
@@ -633,6 +639,7 @@ impl Element {
             native: None,
             scroll: None,
             scroll_x: None,
+            scroll_follow: None,
             scroll_gutters: false,
             clip: false,
             cursor: None,
@@ -680,6 +687,7 @@ impl Element {
             native: None,
             scroll: None,
             scroll_x: None,
+            scroll_follow: None,
             scroll_gutters: false,
             clip: false,
             cursor: None,
@@ -1553,6 +1561,14 @@ impl Element {
         self
     }
 
+    /// Say this [`Role::Cell`] (or [`Role::ColumnHeader`]) is column
+    /// `index` of its table, counting from 0, for a table that builds only
+    /// the columns in view: the cells after it without one follow on.
+    pub fn a11y_column(mut self, index: usize) -> Self {
+        self.semantics.get_or_insert_with(Semantics::default).column = Some(index);
+        self
+    }
+
     /// Enable wrapping. On a text element the text word-wraps to the element's
     /// content width across as many lines as needed. On a stack (row or
     /// column), children that don't fit the main axis flow onto new lines, with
@@ -1935,6 +1951,17 @@ impl Element {
     pub(crate) fn scrollable_both(mut self, id: ScrollId) -> Self {
         self.scroll_gutters = true;
         self.scrollable_x(id)
+    }
+
+    /// Shift this element's children sideways by the offset of `id`, the
+    /// sideways scrolling ([`scrollable_x`](Element::scrollable_x)) of a
+    /// container elsewhere, as that container shifts its own (`pin`
+    /// false: a table's header following its body), or back the other way
+    /// (`pin` true, inside that container: a table's frozen columns, which
+    /// stay put). It isn't a scroll container itself: no bar, no wheel.
+    pub(crate) fn scroll_follow(mut self, id: ScrollId, pin: bool) -> Self {
+        self.scroll_follow = Some(crate::core::ScrollFollow { id, pin });
+        self
     }
 
     /// Mark this element selected (or not) for assistive technologies. Implies

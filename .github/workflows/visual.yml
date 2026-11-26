@@ -797,7 +797,8 @@ jobs:
   # the visible rows are built) next to a tree. Screenshot it, check the table
   # body holds rendered text, then wheel-scroll the table and click a header to
   # sort: each must change the frame (new rows built as they scroll in). Then
-  # drag the body's scroll bar thumb: the rows thousands in show.
+  # drag the body's scroll bar thumb: the rows thousands in show. Then scroll
+  # its wide columns sideways (the frozen one stays).
   visual-table:
     name: Visual test (Table / X11)
     runs-on: ubuntu-latest
@@ -877,6 +878,40 @@ jobs:
           low=$(luma visual_output/table-thumb.png 483 272)
           echo "after the drag, at the top: $top, further down: $low"
           [ "$low" -lt "$top" ]
+
+      # The table's columns are wider than it is: a sideways wheel (X11
+      # button 7) scrolls them, the header with them, while the frozen "#"
+      # column and its header don't move, and the thumb of the bar along
+      # the body's bottom (y 483) goes from its left end to its right one.
+      # Non-blocking until it has passed on CI.
+      - name: Scroll the table sideways
+        continue-on-error: true
+        env:
+          DISPLAY: ":99"
+        run: |
+          crop_ae() {
+            convert "$1" -crop "$3" +repage visual_output/a.png
+            convert "$2" -crop "$3" +repage visual_output/b.png
+            compare -metric AE visual_output/a.png visual_output/b.png null: 2>&1 | awk '{printf "%d", $1}' || true
+          }
+          luma() { convert "$1" -crop 1x1+"$2"+"$3" +repage -format '%[fx:int(255*luminance)]' info:; }
+          xdotool mousemove 250 300
+          sleep 1
+          import -window root -crop 900x560+0+0 +repage visual_output/table-before-sideways.png
+          for _ in $(seq 20); do xdotool click 7; sleep 0.05; done
+          sleep 1
+          import -window root -crop 900x560+0+0 +repage visual_output/table-sideways.png
+          rm -f visual_output/a.png visual_output/b.png
+          b=visual_output/table-before-sideways.png; a=visual_output/table-sideways.png
+          frozen=$(crop_ae $b $a 60x370+20+100); frozen_head=$(crop_ae $b $a 60x22+20+74)
+          head=$(crop_ae $b $a 380x22+90+74); body=$(crop_ae $b $a 380x370+90+100)
+          echo "changed: frozen column $frozen, its header $frozen_head, the other headers $head, the body $body"
+          [ "$frozen" -eq 0 ] && [ "$frozen_head" -eq 0 ]
+          [ "$head" -gt 300 ] && [ "$body" -gt 5000 ]
+          left_before=$(luma $b 60 483); left_after=$(luma $a 60 483)
+          right_before=$(luma $b 440 483); right_after=$(luma $a 440 483)
+          echo "sideways bar: left $left_before -> $left_after, right $right_before -> $right_after"
+          [ "$left_before" -lt "$left_after" ] && [ "$right_after" -lt "$right_before" ]
 
       - name: Stop the app and Xvfb
         if: always()

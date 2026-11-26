@@ -621,8 +621,11 @@ macOS's legacy `NSScroller` draw them (build-checked only). Each bar is a
 Android and the web (AT-SPI and the web's data unit-tested, the others
 build-checked). App-tested (dragging, paging, holding on the test clock,
 arrows, hover, two-way areas left to right and mirrored, the virtualized
-table's and tree's extents, skins); on X11, CI drags `tabledemo`'s thumb with
-`xdotool` and holds a press on `scrolldemo`'s track. The other backends
+table's and tree's extents, skins, a wide table scrolling sideways under its
+header with frozen columns, its cell cursor revealed, right to left);
+on X11, CI drags `tabledemo`'s thumb with
+`xdotool`, scrolls its table sideways (non-blocking) and holds a press on
+`scrolldemo`'s track. The other backends
 deliver the same pointer events, unchecked there. See
 [widgets.md](widgets.md#scroll-bars).
 ⁷⁵ Laid out by the shared CPU text path, so the same everywhere; unit- and

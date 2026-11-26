@@ -1,11 +1,15 @@
 //! A table / data grid on the virtualized list: column headers that sort on
 //! click (with a ▲/▼ indicator), columns resized by dragging a header's right
 //! edge, single or multiple row selection (Shift/Ctrl+click, Shift+arrows),
-//! and striped rows. Only the visible rows' cells are built.
+//! a cell cursor moved by Left/Right, and striped rows. Columns wider than
+//! the view scroll sideways under a header that follows them, with leading
+//! columns optionally frozen in place. Only the visible rows' cells, of the
+//! visible columns, are built.
 
+use std::ops::Range;
 use std::rc::Rc;
 
-use crate::core::{Align, Axis, BoxStyle, Cx, Element, KeyInput, Role, pointer};
+use crate::core::{Align, Axis, BoxStyle, Cx, Element, KeyInput, Role, ScrollId, pointer};
 use crate::geometry::Insets;
 
 use super::virtual_list::{
@@ -90,13 +94,15 @@ struct Resize {
     start_width: f64,
 }
 
-/// A table's state, kept in the app state: the row selection, the sort, and
-/// the column widths the user has set.
+/// A table's state, kept in the app state: the row selection, the cell
+/// cursor's column, the sort, and the column widths the user has set.
 #[derive(Clone, Debug, Default, PartialEq)]
 #[non_exhaustive]
 pub struct TableState {
     /// The row selection and keyboard cursor (rows by display index).
     pub rows: ListState,
+    /// The cell cursor's column (Left/Right move it; `None` until they do).
+    column: Option<usize>,
     sort: Option<(usize, SortOrder)>,
     /// Widths set by resizing, by column (`None` = the column's own width).
     widths: Vec<Option<f64>>,
@@ -121,6 +127,18 @@ impl TableState {
     /// the app orders its rows).
     pub fn set_sort(&mut self, sort: Option<(usize, SortOrder)>) {
         self.sort = sort;
+    }
+
+    /// The column of the cell cursor (the cell at the cursor row, which
+    /// Left/Right move between columns), if the keyboard has put it in one.
+    pub fn cursor_column(&self) -> Option<usize> {
+        self.column
+    }
+
+    /// Put the cell cursor in `column` (or take it out of the cells). The
+    /// table scrolls it into view sideways when its keys move it.
+    pub fn set_cursor_column(&mut self, column: Option<usize>) {
+        self.column = column;
     }
 
     /// The current width of `column`, defaulting to `default`.
@@ -161,6 +179,8 @@ pub struct TableSpec<'a, S> {
     pub striped: bool,
     /// Rows built beyond each edge of the viewport.
     pub overscan: usize,
+    /// How many leading columns stay put while the others scroll sideways.
+    pub frozen_columns: usize,
     on_sort: Option<SortFn<S>>,
     on_key: Option<KeyFn<S>>,
 }
@@ -184,6 +204,7 @@ impl<S> std::fmt::Debug for TableSpec<'_, S> {
             .field("height", &self.height)
             .field("striped", &self.striped)
             .field("overscan", &self.overscan)
+            .field("frozen_columns", &self.frozen_columns)
             .field("on_sort", &self.on_sort.is_some())
             .field("on_key", &self.on_key.is_some())
             .finish()
@@ -200,6 +221,7 @@ impl<'a, S> TableSpec<'a, S> {
             height: 320.0,
             striped: true,
             overscan: DEFAULT_OVERSCAN,
+            frozen_columns: 0,
             on_sort: None,
             on_key: None,
         }
@@ -229,6 +251,14 @@ impl<'a, S> TableSpec<'a, S> {
         self
     }
 
+    /// Keep the first `columns` columns in place (with their headers) while
+    /// the others scroll sideways under them: a name or id column that
+    /// stays in view. They're on the right, right to left.
+    pub fn frozen_columns(mut self, columns: usize) -> Self {
+        self.frozen_columns = columns;
+        self
+    }
+
     /// Call `f` with the column and direction when a click on a sortable
     /// header sorts the table, for the app to reorder the rows it shows.
     pub fn on_sort(mut self, f: impl Fn(&mut S, usize, SortOrder) + 'static) -> Self {
@@ -246,6 +276,125 @@ impl<'a, S> TableSpec<'a, S> {
     }
 }
 
+/// Where the columns are sideways this frame, and which are built: the
+/// frozen ones and those in (and one beside each edge of) the view.
+#[derive(Clone, Debug)]
+struct Columns {
+    /// Each column's start from the table's (leading) edge, then the total.
+    starts: Rc<[f64]>,
+    frozen: usize,
+    /// The scrolling columns built.
+    built: Range<usize>,
+    /// The sideways scrolling: its id, offset (clamped) and the width the
+    /// rows show in (the body's less the vertical bar's gutter).
+    id: ScrollId,
+    offset: f64,
+    room: f64,
+}
+
+impl Columns {
+    /// The frozen columns' width.
+    fn frozen_width(&self) -> f64 {
+        self.starts[self.frozen]
+    }
+
+    /// The offset that shows column `c` whole beside the frozen ones,
+    /// moving as little as possible (its start when it's wider than the
+    /// room), or `None` when it shows already (or is frozen).
+    fn reveal(&self, c: usize) -> Option<f64> {
+        if c < self.frozen || c + 1 >= self.starts.len() {
+            return None;
+        }
+        let (start, end) = (self.starts[c], self.starts[c + 1]);
+        let first = self.offset + self.frozen_width();
+        let to = if start < first - 0.5 {
+            start - self.frozen_width()
+        } else if end > self.offset + self.room + 0.5 {
+            (end - self.room).min(start - self.frozen_width())
+        } else {
+            return None;
+        };
+        Some(to.max(0.0))
+    }
+
+    /// The row (or header) of `cells`: the frozen ones, then a strip of the
+    /// built ones (clipped clear of the frozen ones) that follows the
+    /// sideways scrolling. (The body's rows are pinned back against it,
+    /// which their content would follow too.)
+    fn row(&self, frozen: Vec<Element>, cells: Vec<Element>) -> Element {
+        let gap = self.starts[self.built.start] - self.frozen_width();
+        let mut strip = Vec::with_capacity(cells.len() + 1);
+        strip.push(Element::boxed(BoxStyle::default()).width(gap.max(0.0)));
+        strip.extend(cells);
+        let strip = Element::stack(Axis::Horizontal, strip)
+            .width(0.0)
+            .grow(1.0)
+            .clip()
+            .scroll_follow(self.id, false);
+        let mut children = frozen;
+        children.push(strip);
+        Element::stack(Axis::Horizontal, children)
+    }
+}
+
+/// The columns' places and which to build: all of them until the body
+/// overflows sideways, else the frozen ones and those the view shows.
+fn place_columns<S>(
+    cx: &mut Cx<S>,
+    window: &Window,
+    widths: &[f64],
+    frozen: usize,
+    gutter: f64,
+) -> Columns {
+    let mut starts = Vec::with_capacity(widths.len() + 1);
+    let mut x = 0.0;
+    starts.push(x);
+    for w in widths {
+        x += w;
+        starts.push(x);
+    }
+    let total = x;
+    let id = cx.register_scroll();
+    // The body's width (the last frame's, or a guess the app builds again
+    // for when the layout gives it another), less the vertical bar's
+    // gutter while the rows overflow, which with the sideways bar's below
+    // them they may only then.
+    let view = cx.fit_scroll_width(window.id);
+    let rows = window.rows.total();
+    let room = |down: bool| (view - if down { gutter } else { 0.0 }).max(0.0);
+    let mut down = rows > window.height + 0.5;
+    let mut across = total > room(down) + 0.5;
+    if across && !down {
+        down = rows + gutter > window.height + 0.5;
+        across = total > room(down) + 0.5;
+    }
+    let room = room(down);
+    let max = if across { total - room } else { 0.0 };
+    let offset = cx.scroll_offset(id).clamp(0.0, max);
+    let n = widths.len();
+    let frozen = frozen.min(n);
+    let built = if across {
+        let from = offset + starts[frozen];
+        let to = offset + room;
+        let first = (frozen..n).find(|&c| starts[c + 1] > from).unwrap_or(n);
+        let last = (first..n)
+            .find(|&c| starts[c + 1] >= to)
+            .unwrap_or(n.max(1) - 1);
+        // One more each side, so a small scroll shows built cells.
+        first.saturating_sub(1).max(frozen)..(last + 2).min(n)
+    } else {
+        frozen..n
+    };
+    Columns {
+        starts: starts.into(),
+        frozen,
+        built,
+        id,
+        offset,
+        room,
+    }
+}
+
 /// A virtualized table of `spec.rows` rows: a header row, then a scrolling
 /// body that builds only the visible rows' cells with `cell(cx, row, column)`.
 ///
@@ -255,6 +404,12 @@ impl<'a, S> TableSpec<'a, S> {
 /// the app reorders the rows it shows (the row index passed to `cell` is the
 /// display position). Dragging a header's right edge resizes the
 /// column. Rows select per the [`TableState`]'s [`SelectionMode`].
+///
+/// Columns wider than the table's width scroll sideways (a horizontal wheel
+/// or trackpad swipe, Shift+wheel, the bar along the bottom, or the cell
+/// cursor), the header following them; only the columns in view are built
+/// (each row's [`frozen_columns`](TableSpec::frozen_columns) too, which stay
+/// put). Right to left, the columns start at the right.
 ///
 /// ```
 /// use stipple::prelude::*;
@@ -291,13 +446,79 @@ pub fn table<S: 'static>(
         .map(|(i, c)| state.column_width(i, c.width).max(c.min_width))
         .collect();
 
-    // The body's viewport: only its visible rows get built.
+    // The body's viewport: only its visible rows get built, and of them only
+    // the columns in view.
     let rows = Rows::new(spec.rows, RowHeight::Fixed(spec.row_height));
-    let window = Window::new(cx, rows, spec.height, spec.overscan);
+    let mut window = Window::new(cx, rows, spec.height, spec.overscan);
+    let gutter = theme.scroll_bar.gutter();
+    let cols = place_columns(cx, &window, &widths, spec.frozen_columns, gutter);
+    // While the columns overflow, the sideways bar covers the body's bottom
+    // (the layout scrolls the rows a gutter further for it).
+    if cols.starts[widths.len()] > cols.room + 0.5 {
+        window.cover_bottom(gutter);
+    }
+    let shown = |c: usize| c < cols.frozen || cols.built.contains(&c);
 
+    // The rows before the header: their handlers' ids don't move as the
+    // header's columns come and go sideways (what's under the pointer stays
+    // hovered).
+    let multi = state.rows.mode() != SelectionMode::Single;
+    let cursor_column = state.column.filter(|&c| c < widths.len());
+    let mut built = Vec::with_capacity(window.range.len());
+    for index in window.range.clone() {
+        let selected = state.rows.is_selected(index);
+        let cursor = state.rows.cursor() == Some(index);
+        let mut frozen = Vec::with_capacity(cols.frozen);
+        let mut cells = Vec::with_capacity(cols.built.len());
+        for (col, column) in spec.columns.iter().enumerate() {
+            if !shown(col) {
+                continue;
+            }
+            let content = cell(cx, index, col);
+            let mut el = Element::stack(Axis::Horizontal, vec![content])
+                .width(widths[col])
+                .height(spec.row_height)
+                .padding(Insets::symmetric(theme.spacing.md, 0.0))
+                .align(column.align, Align::Center)
+                .clip()
+                .role(Role::Cell)
+                .a11y_column(col);
+            if cursor && cursor_column == Some(col) {
+                el = el.border(p.focus_ring, 1.0);
+            }
+            if col < cols.frozen {
+                frozen.push(el);
+            } else {
+                cells.push(el);
+            }
+        }
+        // No wider than the view (however wide the columns): its fill, the
+        // hover and its bounds stay in it.
+        let mut el = cols
+            .row(frozen, cells)
+            .max_width(cols.room)
+            .height(spec.row_height);
+        if let Some(fill) = row_fill(theme, selected, spec.striped && index % 2 == 1) {
+            el = el.fill(fill);
+        }
+        if multi && cursor && cursor_column.is_none() {
+            el = el.border(p.focus_ring, 1.0);
+        }
+        let w = window.clone();
+        // Row 0 is the header row.
+        let el = el.role(Role::Row).a11y_row(index + 1);
+        built.push(el.selected(selected).on_tap(cx, move |s| {
+            field(s).rows.click(index, pointer().modifiers);
+            w.reveal(index);
+        }));
+    }
     // The header: a title (tap to sort) and a resize handle per column.
-    let mut headers = Vec::with_capacity(spec.columns.len());
+    let mut frozen_heads = Vec::with_capacity(cols.frozen);
+    let mut heads = Vec::with_capacity(cols.built.len());
     for (col, column) in spec.columns.iter().enumerate() {
+        if !shown(col) {
+            continue;
+        }
         let mut title = vec![
             Element::text(column.title.clone(), theme.typography.body, p.text),
             Element::stack(Axis::Horizontal, Vec::new()).grow(1.0),
@@ -317,7 +538,8 @@ pub fn table<S: 'static>(
             .padding(Insets::symmetric(theme.spacing.md, 0.0))
             .gap(theme.spacing.xs)
             .clip()
-            .role(Role::ColumnHeader);
+            .role(Role::ColumnHeader)
+            .a11y_column(col);
         if column.sortable {
             let on_sort = spec.on_sort.clone();
             let (requests, id) = (window.requests.clone(), window.id);
@@ -367,11 +589,21 @@ pub fn table<S: 'static>(
                 };
                 t.set_column_width(col, (start + at.position.x - origin.x).max(min));
             });
-        headers.push(Element::stack(Axis::Horizontal, vec![head, handle]));
+        let both = Element::stack(Axis::Horizontal, vec![head, handle]);
+        if col < cols.frozen {
+            frozen_heads.push(both);
+        } else {
+            heads.push(both);
+        }
     }
-    let header = Element::stack(Axis::Horizontal, headers)
-        .fill(p.background)
-        .role(Role::Row);
+    // Its columns end where the rows' do, short of the vertical bar.
+    let header = Element::stack(
+        Axis::Horizontal,
+        vec![cols.row(frozen_heads, heads).grow(1.0).max_width(cols.room)],
+    )
+    .height(spec.row_height)
+    .fill(p.background)
+    .role(Role::Row);
     let rule = Element::boxed(BoxStyle {
         fill: Some(p.border),
         radius: 0.0,
@@ -379,56 +611,56 @@ pub fn table<S: 'static>(
     })
     .height(1.0);
 
-    let multi = state.rows.mode() != SelectionMode::Single;
-    let mut built = Vec::with_capacity(window.range.len());
-    for index in window.range.clone() {
-        let selected = state.rows.is_selected(index);
-        let cursor = state.rows.cursor() == Some(index);
-        let mut cells = Vec::with_capacity(spec.columns.len());
-        for (col, column) in spec.columns.iter().enumerate() {
-            let content = cell(cx, index, col);
-            cells.push(
-                Element::stack(Axis::Horizontal, vec![content])
-                    .width(widths[col])
-                    .height(spec.row_height)
-                    .padding(Insets::symmetric(theme.spacing.md, 0.0))
-                    .align(column.align, Align::Center)
-                    .clip()
-                    .role(Role::Cell),
-            );
-        }
-        let mut el = Element::stack(Axis::Horizontal, cells).height(spec.row_height);
-        if let Some(fill) = row_fill(theme, selected, spec.striped && index % 2 == 1) {
-            el = el.fill(fill);
-        }
-        if multi && cursor {
-            el = el.border(p.focus_ring, 1.0);
-        }
-        let w = window.clone();
-        // Row 0 is the header row.
-        let el = el.role(Role::Row).a11y_row(index + 1);
-        built.push(el.selected(selected).on_tap(cx, move |s| {
-            field(s).rows.click(index, pointer().modifiers);
-            w.reveal(index);
-        }));
-    }
     let count = spec.rows;
-    let body = window.assemble(built);
+    let total = cols.starts[widths.len()];
+    // The content is as wide as the columns, which the body scrolls
+    // sideways; its rows stay put against that (each one's strip follows).
+    let content = window
+        .content(built)
+        .min_width(total)
+        .scroll_follow(cols.id, true);
+    let body = window.scroller(content).scrollable_both(cols.id);
     let on_key = spec.on_key.clone();
     let columns = spec.columns.len();
+    let rtl = theme.layout_direction.is_rtl();
+    let requests = window.requests.clone();
     frame(theme, vec![header, rule, body])
         .role(Role::Table)
-        .a11y_table(crate::core::AccessTable::new(count + 1, columns))
+        .a11y_table(crate::core::AccessTable::new(count + 1, columns).frozen_columns(cols.frozen))
         .on_key(cx, move |s, key| {
-            let before = field(s).rows.cursor();
-            let used = field(s).rows.handle_key(key, count);
-            if !used && let Some(f) = &on_key {
+            let t = field(s);
+            let before = (t.rows.cursor(), t.column);
+            // Left and Right move the cell cursor across the columns (the
+            // other way right to left), Ctrl/Cmd with them to the first or
+            // last.
+            let last = columns.saturating_sub(1);
+            let at = t.column.unwrap_or(0).min(last);
+            let column = match (key, rtl) {
+                (KeyInput::Left, false) | (KeyInput::Right, true) => Some(at.saturating_sub(1)),
+                (KeyInput::Right, false) | (KeyInput::Left, true) => Some((at + 1).min(last)),
+                (KeyInput::WordLeft, false) | (KeyInput::WordRight, true) => Some(0),
+                (KeyInput::WordRight, false) | (KeyInput::WordLeft, true) => Some(last),
+                _ => None,
+            };
+            if columns > 0
+                && let Some(c) = column
+            {
+                t.column = Some(c);
+            } else if !t.rows.handle_key(key, count)
+                && let Some(f) = &on_key
+            {
                 f(s, key);
             }
-            if let Some(c) = field(s).rows.cursor()
-                && Some(c) != before
-            {
-                window.reveal(c);
+            let t = field(s);
+            let after = (t.rows.cursor(), t.column);
+            if after != before {
+                if let Some(c) = after.0 {
+                    window.reveal(c);
+                }
+                // The cursor's cell in view sideways too.
+                if let Some(to) = after.1.and_then(|c| cols.reveal(c)) {
+                    requests.scroll_to(cols.id, to);
+                }
             }
         })
 }

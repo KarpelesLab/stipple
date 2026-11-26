@@ -2,7 +2,10 @@
 //!
 //! - **Table**: click a header to sort (again to reverse), drag a header's
 //!   right edge to resize its column, click / Shift+click / Ctrl+click rows,
-//!   or use the arrows (Shift extends), Home/End and Ctrl+A.
+//!   or use the arrows (Shift extends), Home/End and Ctrl+A. Its columns
+//!   are wider than it is: it scrolls sideways (a horizontal wheel,
+//!   Shift+wheel or the bar along its bottom; Left/Right move the cell
+//!   cursor into view), the header following and the `#` column frozen.
 //! - **Tree**: click a triangle to expand; Left/Right collapse/expand or move
 //!   to the parent / first child; Up/Down move. The `logs` folder holds 5,000
 //!   entries.
@@ -15,8 +18,13 @@ use stipple::prelude::*;
 const W: f64 = 900.0;
 const H: f64 = 560.0;
 const ROWS: usize = 10_000;
+/// The table's width: its first four columns, the frame and a classic
+/// vertical bar.
+const TABLE_W: f64 = 474.0;
 
 const KINDS: [&str; 5] = ["Text", "Image", "Audio", "Video", "Archive"];
+const OWNERS: [&str; 4] = ["alice", "bob", "carol", "root"];
+const MODES: [&str; 4] = ["rw-r--r--", "rw-------", "rwxr-xr-x", "r--r--r--"];
 const EXT: [&str; 5] = ["txt", "png", "ogg", "mkv", "zip"];
 
 /// One row of the table's data.
@@ -24,6 +32,11 @@ struct File {
     name: String,
     kind: usize,
     size: u64,
+    /// Days since 2020-01-01.
+    modified: u32,
+    owner: usize,
+    mode: usize,
+    checksum: u32,
 }
 
 /// A deterministic pseudo-random sequence (so the CI screenshot is stable).
@@ -40,13 +53,40 @@ fn files() -> Vec<File> {
             let kind = (x >> 33) as usize % KINDS.len();
             x = lcg(x);
             let size = ((x >> 20) % 50_000_000) >> ((x >> 8) % 24);
+            x = lcg(x);
             File {
                 name: format!("file-{:05}.{}", (i * 7919) % 100_000, EXT[kind]),
                 kind,
                 size,
+                modified: (x >> 40) as u32 % 2_000,
+                owner: (x >> 20) as usize % OWNERS.len(),
+                mode: (x >> 12) as usize % MODES.len(),
+                checksum: (x >> 7) as u32,
             }
         })
         .collect()
+}
+
+/// Day `days` after 2020-01-01, as `YYYY-MM-DD`.
+fn date(days: u32) -> String {
+    let mut days = days;
+    let mut year = 2020;
+    loop {
+        let len = if year % 4 == 0 { 366 } else { 365 };
+        if days < len {
+            break;
+        }
+        days -= len;
+        year += 1;
+    }
+    let feb = if year % 4 == 0 { 29 } else { 28 };
+    let months = [31, feb, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let mut month = 0;
+    while days >= months[month] {
+        days -= months[month];
+        month += 1;
+    }
+    format!("{year}-{:02}-{:02}", month + 1, days + 1)
 }
 
 fn human(size: u64) -> String {
@@ -153,7 +193,11 @@ impl Demo {
                 0 => a.cmp(&b),
                 1 => fa.name.cmp(&fb.name),
                 2 => fa.kind.cmp(&fb.kind).then(a.cmp(&b)),
-                _ => fa.size.cmp(&fb.size),
+                3 => fa.size.cmp(&fb.size),
+                4 => fa.modified.cmp(&fb.modified).then(a.cmp(&b)),
+                5 => fa.owner.cmp(&fb.owner).then(a.cmp(&b)),
+                6 => fa.mode.cmp(&fb.mode).then(a.cmp(&b)),
+                _ => fa.checksum.cmp(&fb.checksum),
             };
             match order {
                 SortOrder::Ascending => by,
@@ -169,6 +213,10 @@ fn columns() -> Vec<Column> {
         Column::new("Name", 180.0).sortable().min_width(80.0),
         Column::new("Kind", 100.0).sortable(),
         Column::new("Size", 110.0).sortable().align(Align::End),
+        Column::new("Modified", 120.0).sortable(),
+        Column::new("Owner", 90.0).sortable(),
+        Column::new("Mode", 110.0).sortable(),
+        Column::new("Checksum", 110.0).sortable(),
     ]
 }
 
@@ -184,6 +232,7 @@ fn view(state: &Demo, cx: &mut Cx<Demo>) -> Element {
         TableSpec::new(&cols, state.order.len())
             .row_height(26.0)
             .height(390.0)
+            .frozen_columns(1)
             .on_sort(|s: &mut Demo, column, order| s.sort(column, order)),
         |cx, row, column| {
             let i = state.order[row];
@@ -192,11 +241,18 @@ fn view(state: &Demo, cx: &mut Cx<Demo>) -> Element {
                 0 => (i + 1).to_string(),
                 1 => f.name.clone(),
                 2 => KINDS[f.kind].to_string(),
-                _ => human(f.size),
+                3 => human(f.size),
+                4 => date(f.modified),
+                5 => OWNERS[f.owner].to_string(),
+                6 => MODES[f.mode].to_string(),
+                _ => format!("{:08x}", f.checksum),
             };
             label(cx, text)
         },
-    );
+    )
+    // As wide as its first four columns (and the vertical bar): the rest
+    // scroll in sideways.
+    .width(TABLE_W);
 
     let folders = tree(
         cx,
@@ -282,12 +338,17 @@ mod tests {
             Theme::native(),
         ] {
             let mut app = demo_app(theme);
+            // The first frame guesses the table's width; the second is
+            // built for the width it has.
+            app.render_once();
             app.render_once();
             let a = app.accessibility_tree().unwrap();
             let count = |role| a.descendants().iter().filter(|n| n.role == role).count();
             assert_eq!(count(Role::Table), 1);
             assert_eq!(count(Role::Tree), 1);
-            assert_eq!(count(Role::ColumnHeader), 4);
+            // Eight columns, but only those in view (and one past it).
+            let headers = count(Role::ColumnHeader);
+            assert!((4..8).contains(&headers), "{headers} headers");
             // 10,000 rows, but only a screenful (plus overscan) are built.
             assert!(count(Role::Row) < 25, "{} rows", count(Role::Row));
             assert!(count(Role::TreeItem) < 25);
@@ -300,6 +361,34 @@ mod tests {
                 .collect();
             assert_eq!(selected, vec!["tree.rs"]);
         }
+    }
+
+    #[test]
+    fn the_table_scrolls_sideways_with_the_number_column_frozen() {
+        use stipple::platform::{Event, ScrollDelta};
+        let mut app = demo_app(Theme::light().scroll_bar(ScrollBarLook::CLASSIC));
+        app.render_once();
+        app.render_once();
+        let header = |app: &App<Demo>, title: &str| {
+            app.accessibility_tree()
+                .unwrap()
+                .descendants()
+                .into_iter()
+                .find(|n| n.role == Role::ColumnHeader && n.name == title)
+                .map(|n| n.bounds)
+        };
+        assert!(header(&app, "Checksum").is_none(), "out of view, not built");
+        let number = header(&app, "#").unwrap();
+        let name = header(&app, "Name").unwrap();
+        app.hover_at(Point::new(250.0, 300.0));
+        assert!(app.pointer_event(Event::Scroll {
+            delta: ScrollDelta::pixels(1_000.0, 0.0),
+        }));
+        app.render_once();
+        // To the end: the last columns show, "#" stays, "Name" moved.
+        assert!(header(&app, "Checksum").is_some());
+        assert_eq!(header(&app, "#"), Some(number));
+        assert!(header(&app, "Name").is_none_or(|b| b.min_x() < name.min_x()));
     }
 
     #[test]

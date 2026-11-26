@@ -455,6 +455,8 @@ pub(crate) fn same_measure(a: &Element, b: &Element) -> bool {
         scroll,
         scroll_x,
         scroll_gutters,
+        // Applied after the layout, as a scroll offset is.
+        scroll_follow: _,
         clip: _,
         native: _,
         cursor: _,

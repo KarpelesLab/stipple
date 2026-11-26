@@ -235,6 +235,9 @@ pub(crate) struct Window {
     pub(crate) height: f64,
     /// The room below the rows (see [`Viewport::tail`]).
     tail: f64,
+    /// How much of the viewport's bottom something covers, which the
+    /// layout scrolls the rows clear of itself (see [`cover_bottom`](Self::cover_bottom)).
+    covered: f64,
     /// Whether the height is fixed (else the container fills its parent).
     fixed: bool,
     pub(crate) rows: Rows,
@@ -253,6 +256,7 @@ impl Window {
             offset,
             height,
             tail: 0.0,
+            covered: 0.0,
             fixed: true,
             range,
             rows,
@@ -314,6 +318,7 @@ impl Window {
             offset,
             height: full,
             tail: view.tail,
+            covered: 0.0,
             fixed: view.height.is_some(),
             range,
             rows,
@@ -334,12 +339,20 @@ impl Window {
         }
     }
 
+    /// Say the bottom `by` of the viewport is covered (a sideways bar's
+    /// gutter, which a container scrolling both ways keeps below its rows
+    /// itself): [`reveal`](Self::reveal) shows rows above it.
+    pub(crate) fn cover_bottom(&mut self, by: f64) {
+        self.covered = by.max(0.0);
+    }
+
     /// Scroll so row `i` is fully visible (a no-op if it already is).
     pub(crate) fn reveal(&self, i: usize) {
         if i >= self.rows.count() {
             return;
         }
-        let to = self.rows.reveal(i, self.offset, self.height - self.tail);
+        let shown = self.height - self.tail - self.covered;
+        let to = self.rows.reveal(i, self.offset, shown);
         if (to - self.offset).abs() > f64::EPSILON {
             self.requests.scroll_to(self.id, to);
         }

@@ -15,7 +15,7 @@
 // Not every bridge (nor every target) uses every helper; the tests do.
 #![allow(dead_code)]
 
-use super::{A11yNode, A11yScroll};
+use super::{A11yNode, A11yRole, A11yScroll};
 use crate::geometry::Point;
 use crate::platform::event::{Event, ScrollDelta};
 
@@ -97,44 +97,120 @@ pub(crate) struct Reveal {
     pub(crate) at: Point,
 }
 
+/// The ways container `n` scrolls: its own scroll, and sideways too when
+/// it scrolls both ways (read from its horizontal bar, as a table's body,
+/// whose vertical scroll its table took, still has it).
+fn ways(n: &A11yNode) -> Vec<A11yScroll> {
+    let mut out: Vec<A11yScroll> = n.scroll.filter(A11yScroll::scrolls).into_iter().collect();
+    if !n.scroll.is_some_and(|s| s.horizontal) {
+        out.extend(
+            n.children
+                .iter()
+                .filter(|c| c.role == A11yRole::ScrollBar)
+                .filter_map(|c| c.scroll_bar)
+                .filter(|b| b.horizontal && b.scrolls())
+                .take(1),
+        );
+    }
+    out
+}
+
+/// Where the frozen columns of the table on the way to the cell at `path`
+/// are, sideways (`(left, right)`), when the cell is in another column: a
+/// sideways scroll brings it clear of them, not under them.
+fn frozen_span(root: &A11yNode, path: &[usize]) -> Option<(f64, f64)> {
+    fn spans(n: &A11yNode, frozen: usize, out: &mut Option<(f64, f64)>) {
+        for c in &n.children {
+            if matches!(c.role, A11yRole::Cell | A11yRole::ColumnHeader)
+                && c.cell.is_some_and(|at| at.column < frozen)
+            {
+                let (x0, x1) = (c.bounds.0, c.bounds.0 + c.bounds.2);
+                *out = Some(out.map_or((x0, x1), |(a, b)| (a.min(x0), b.max(x1))));
+            } else if c.role != A11yRole::Table {
+                spans(c, frozen, out);
+            }
+        }
+    }
+    let mut at = root;
+    let (mut frozen, mut row) = (0, None);
+    for &i in path {
+        at = at.children.get(i)?;
+        match at.role {
+            A11yRole::Table => (frozen, row) = (at.table.map_or(0, |t| t.frozen), None),
+            A11yRole::Row => row = Some(at),
+            _ => {}
+        }
+    }
+    let column = at.cell.filter(|_| at.role != A11yRole::Row)?.column;
+    if frozen == 0 || column < frozen {
+        return None;
+    }
+    let mut out = None;
+    spans(row?, frozen, &mut out);
+    out
+}
+
 impl A11yNode {
     /// Bring the node at `path` (under this root) into view in every scroll
     /// container around it (see the module docs). `None` when there is no
     /// node there.
     pub(crate) fn reveal(&self, path: &[usize]) -> Option<Reveal> {
         let target = self.at_path(path)?;
+        let frozen = frozen_span(self, path);
         let mut events = Vec::new();
         // How far everything inside the containers scrolled so far moved.
         let mut shift = (0.0, 0.0);
         let mut clip = self.bounds;
         let mut at = self;
         for &i in path {
-            if let Some(s) = at.scroll.filter(A11yScroll::scrolls) {
+            let ways = ways(at);
+            if !ways.is_empty() {
                 let cb = shifted(at.bounds, shift);
                 let view = intersect(cb, clip).unwrap_or(cb);
-                let raw = needed(&s, cb, shifted(target.bounds, shift));
-                // In offset terms (a right-to-left strip's grows leftwards),
-                // clamped to the range.
-                let ask = if s.horizontal && s.rtl { -raw } else { raw };
-                let by = s.to(s.offset + ask);
-                if by.abs() >= 0.5 {
-                    let moved = if s.horizontal && s.rtl { -by } else { by };
-                    let mut avoid = Vec::new();
-                    same_way(at, &s, shift, &mut avoid);
-                    let (dx, dy) = s.wheel(by);
-                    events.push(Event::PointerMoved {
-                        position: wheel_point(view, &avoid),
-                    });
-                    events.push(Event::Scroll {
-                        delta: ScrollDelta::pixels(dx, dy),
-                    });
-                    if s.horizontal {
-                        shift.0 -= moved;
-                    } else {
-                        shift.1 -= moved;
+                let mut shows = cb;
+                for s in ways {
+                    // Sideways, what the frozen columns cover doesn't show
+                    // the cell (they stay put: the shift doesn't move them).
+                    let mut cb = cb;
+                    if s.horizontal
+                        && let Some((x0, x1)) = frozen
+                    {
+                        let (x0, x1) = (x0 + shift.0, x1 + shift.0);
+                        let (l, r) = (cb.0, cb.0 + cb.2);
+                        let (l, r) = if s.rtl {
+                            (l, r.min(x0))
+                        } else {
+                            (l.max(x1), r)
+                        };
+                        if r > l {
+                            cb = (l, cb.1, r - l, cb.3);
+                            shows = intersect(shows, cb).unwrap_or(shows);
+                        }
+                    }
+                    let raw = needed(&s, cb, shifted(target.bounds, shift));
+                    // In offset terms (a right-to-left strip's grows
+                    // leftwards), clamped to the range.
+                    let ask = if s.horizontal && s.rtl { -raw } else { raw };
+                    let by = s.to(s.offset + ask);
+                    if by.abs() >= 0.5 {
+                        let moved = if s.horizontal && s.rtl { -by } else { by };
+                        let mut avoid = Vec::new();
+                        same_way(at, &s, shift, &mut avoid);
+                        let (dx, dy) = s.wheel(by);
+                        events.push(Event::PointerMoved {
+                            position: wheel_point(view, &avoid),
+                        });
+                        events.push(Event::Scroll {
+                            delta: ScrollDelta::pixels(dx, dy),
+                        });
+                        if s.horizontal {
+                            shift.0 -= moved;
+                        } else {
+                            shift.1 -= moved;
+                        }
                     }
                 }
-                clip = intersect(clip, cb).unwrap_or(clip);
+                clip = intersect(clip, shows).unwrap_or(clip);
             }
             at = at.children.get(i)?;
         }
@@ -186,7 +262,6 @@ fn click_at(position: Point) -> Vec<Event> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::platform::access::A11yRole;
 
     fn scroller(offset: f64, max: f64, bounds: Bounds, horizontal: bool) -> A11yNode {
         A11yNode {

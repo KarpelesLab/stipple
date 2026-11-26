@@ -1509,6 +1509,7 @@ impl<S: 'static> Pane<S> {
         cx.set_pointer_locked(self.pointer.locked);
         let mut element = (self.view)(state, &mut cx);
         let fits = cx.take_scroll_fits();
+        let width_fits = cx.take_scroll_width_fits();
         let follows_window = cx.window_size_read();
         self.info_read = cx.window_info_read();
         self.safe_area_read = cx.safe_area_read();
@@ -1801,6 +1802,9 @@ impl<S: 'static> Pane<S> {
         let refit = fits.iter().any(|&(id, guessed)| {
             crate::core::find_scroll(&tree, id)
                 .is_some_and(|n| (n.bounds.height() - guessed).abs() > 0.5)
+        }) || width_fits.iter().any(|&(id, guessed)| {
+            crate::core::find_scroll(&tree, id)
+                .is_some_and(|n| (n.bounds.width() - guessed).abs() > 0.5)
         });
         self.scroll_fits = fits.into_iter().map(|(id, _)| id).collect();
         self.reveal_caret(&mut tree, font);
@@ -5419,6 +5423,7 @@ pub(crate) fn to_platform_a11y(node: &crate::core::AccessNode) -> crate::platfor
         table: node.table.map(|t| crate::platform::access::A11yTable {
             rows: t.rows,
             columns: t.columns,
+            frozen: t.frozen,
         }),
         cell: node.cell.map(|c| crate::platform::access::A11yCell {
             row: c.row,

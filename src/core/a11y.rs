@@ -139,13 +139,28 @@ fn finite(v: f64) -> f64 {
 pub struct AccessTable {
     pub rows: usize,
     pub columns: usize,
+    /// How many leading columns stay put while the rest scroll sideways
+    /// (see [`TableSpec::frozen_columns`](crate::widgets::TableSpec::frozen_columns)):
+    /// bringing a cell of another column into view keeps it clear of them.
+    pub frozen: usize,
 }
 
 impl AccessTable {
     /// A table of `rows` rows (its header row included) and `columns`
     /// columns.
     pub fn new(rows: usize, columns: usize) -> Self {
-        AccessTable { rows, columns }
+        AccessTable {
+            rows,
+            columns,
+            frozen: 0,
+        }
+    }
+
+    /// Say its first `columns` columns stay put while the others scroll
+    /// sideways.
+    pub fn frozen_columns(mut self, columns: usize) -> Self {
+        self.frozen = columns;
+        self
     }
 }
 
@@ -344,6 +359,9 @@ pub(crate) struct Semantics {
     /// A table row's index among all its table's rows (see
     /// [`Element::a11y_row`](crate::core::Element::a11y_row)).
     pub row: Option<usize>,
+    /// A table cell's (or column header's) column among all its table's
+    /// columns (see [`Element::a11y_column`](crate::core::Element::a11y_column)).
+    pub column: Option<usize>,
 }
 
 /// A select's options as its live OS control shows them: their labels, the
@@ -576,10 +594,15 @@ fn build(node: &LayoutNode, cx: &Ctx<'_>, is_root: bool) -> AccessNode {
             .map(|r| AccessRange { rtl: node.rtl, ..r }),
         // What the table and its rows declare; `number_tables` completes it.
         table: sem.and_then(|s| s.table).filter(|_| role == Role::Table),
-        cell: sem
-            .and_then(|s| s.row)
-            .filter(|_| role == Role::Row)
-            .map(|row| AccessCell { row, column: 0 }),
+        cell: match role {
+            Role::Row => sem
+                .and_then(|s| s.row)
+                .map(|row| AccessCell { row, column: 0 }),
+            Role::Cell | Role::ColumnHeader => sem
+                .and_then(|s| s.column)
+                .map(|column| AccessCell { row: 0, column }),
+            _ => None,
+        },
         font: if role.is_container() {
             None
         } else {
@@ -592,12 +615,39 @@ fn build(node: &LayoutNode, cx: &Ctx<'_>, is_root: bool) -> AccessNode {
     if out.native_view.is_some() {
         out.children.clear();
     }
-    // Its scroll bars, after its content (so the content keeps its places).
-    if role.is_container() {
+    // A row's cells are its children, not those of the plain groups that
+    // lay them out (a table's strip of the columns scrolling sideways).
+    if role == Role::Row {
+        out.children = flatten_plain(std::mem::take(&mut out.children));
+    }
+    // Its scroll bars, after its content (so the content keeps its places):
+    // a container's, and a text view's (read as one text node, with its two).
+    if role.is_container() || role == Role::Text {
         out.children.extend(scroll_bars_of(node, cx.offsets));
     }
     hoist_scroll(&mut out);
     hand_down_label(&mut out);
+    out
+}
+
+/// `nodes`, with each plain group among them (unnamed, nothing about it
+/// but its children) replaced by its children, all the way down.
+fn flatten_plain(nodes: Vec<AccessNode>) -> Vec<AccessNode> {
+    let mut out = Vec::with_capacity(nodes.len());
+    for n in nodes {
+        let plain = n.role == Role::Group
+            && n.name.is_empty()
+            && n.scroll.is_none()
+            && n.id.is_none()
+            && n.labelled_by.is_none()
+            && n.controls.is_none()
+            && n.native_view.is_none();
+        if plain {
+            out.extend(flatten_plain(n.children));
+        } else {
+            out.push(n);
+        }
+    }
     out
 }
 
@@ -744,17 +794,21 @@ fn number_tables(node: &mut AccessNode) {
             });
             let mut cells = Vec::new();
             cells_of(row, &mut cells);
-            let column = cells.len();
-            for (i, c) in cells.into_iter().enumerate() {
+            // A cell that says its column (a table building only the
+            // columns in view) sets it; the cells after it follow on.
+            let mut column = 0;
+            for c in cells {
+                let at = c.cell.map_or(column, |c| c.column);
+                column = at + 1;
                 c.cell = Some(AccessCell {
                     row: index,
-                    column: i,
+                    column: at,
                 });
             }
             rows = rows.max(next);
             columns = columns.max(column);
         }
-        node.table.get_or_insert(AccessTable { rows, columns });
+        node.table.get_or_insert(AccessTable::new(rows, columns));
     }
     for c in &mut node.children {
         number_tables(c);

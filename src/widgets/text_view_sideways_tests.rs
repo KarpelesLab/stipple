@@ -120,6 +120,19 @@ fn long_lines_scroll_sideways_by_wheel_trackpad_shift_and_keys() {
     let node = view_node(&app);
     assert!(node.scroll_bar.is_some(), "a bar down the side");
     assert!(node.scroll_bar_x.is_some(), "and one along the bottom");
+    // Both are in its accessibility tree, under the text it reads as.
+    let a = app.accessibility_tree().unwrap();
+    let text = a
+        .descendants()
+        .into_iter()
+        .find(|n| n.role == crate::core::Role::Text && n.scroll.is_some())
+        .unwrap();
+    let ways: Vec<bool> = text
+        .children
+        .iter()
+        .filter_map(|c| c.scroll_bar.map(|b| b.horizontal))
+        .collect();
+    assert_eq!(ways, vec![false, true]);
     let view = node.bounds;
     assert!(view.width() <= 400.0, "the view isn't as wide as its lines");
     let max = max_x(&app);

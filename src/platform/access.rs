@@ -120,6 +120,8 @@ pub struct A11yRange {
 pub struct A11yTable {
     pub rows: usize,
     pub columns: usize,
+    /// How many leading columns stay put while the rest scroll sideways.
+    pub frozen: usize,
 }
 
 /// Where a table's row or cell is — mirrors `stipple::core::AccessCell`.
@@ -736,6 +738,7 @@ mod tests {
                     table: Some(A11yTable {
                         rows: 9,
                         columns: 2,
+                        frozen: 0,
                     }),
                     children: vec![A11yNode {
                         cell: Some(A11yCell { row: 3, column: 1 }),

@@ -61,7 +61,9 @@ A page is 80% of the viewport. Bringing a node into view
 (`platform::access::reveal`) scrolls every container on the way down to it,
 outermost first, by the least that shows it whole, each with a wheel over a
 part of that container that shows and isn't an inner container scrolling
-the same way. **An activation or a focus on a node scrolled out of view
+the same way; a container scrolling both ways (a wide table's body, read
+from its horizontal bar) scrolls down then sideways, and a cell of a table
+with frozen columns comes out beside them, not under them. **An activation or a focus on a node scrolled out of view
 brings it into view first**, then clicks it where it then is (its middle,
 within what the containers show): AT-SPI's "click" action and `GrabFocus`,
 UIA's Invoke, Toggle, SelectionItem and ExpandCollapse, macOS's `AXPress`
@@ -174,11 +176,15 @@ A moved value raises UIA's RangeValue.Value property change,
 (`AccessNode::table`), all of them: a virtualized `widgets::table` builds
 only the rows in view, so it declares its size (`Element::a11y_table`, its
 header row counted as row 0) and each built row its index
-(`Element::a11y_row`). Every row and cell (and column header) gets its place
+(`Element::a11y_row`); scrolled sideways it builds only the columns in view
+too, so each built cell and column header declares its column
+(`Element::a11y_column`). Every row and cell (and column header) gets its place
 (`AccessNode::cell`): a row's index is the one it declares, else the one after
-the row before; a cell's column is its place among its row's cells, through
-the groups that wrap them. A table built by hand from `Role::Table`,
-`Role::Row` and `Role::Cell` is counted as it is.
+the row before; a cell's column is the one it declares, else the one after
+the cell before, through the groups that wrap them (a row's plain groups are
+left out of the tree: its cells are its children). A table built by hand from `Role::Table`,
+`Role::Row` and `Role::Cell` is counted as it is. `AccessTable::frozen` says
+how many leading columns stay put while the others scroll sideways.
 
 | Platform | The table | A cell |
 | --- | --- | --- |
@@ -189,7 +195,7 @@ the groups that wrap them. A table built by hand from `Role::Table`,
 | Web | `aria-rowcount`, `aria-colcount` | `aria-rowindex`, `aria-colindex` |
 | iOS | not exposed | not exposed |
 
-A cell in a row the table hasn't built isn't there to give: UIA's `GetItem`
+A cell in a row (or a column) the table hasn't built isn't there to give: UIA's `GetItem`
 fails, AT-SPI's `GetAccessibleAt` returns a null reference.
 
 **Captions.** A control names its caption with `Element::labelled_by(id)`

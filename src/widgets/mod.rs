@@ -101,6 +101,8 @@ mod swipe;
 #[cfg(test)]
 mod swipe_tests;
 mod table;
+#[cfg(test)]
+mod table_sideways_tests;
 mod text_view;
 #[cfg(test)]
 mod text_view_sideways_tests;

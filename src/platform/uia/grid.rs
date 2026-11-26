@@ -165,6 +165,7 @@ pub(super) unsafe fn property(p: *mut Provider, id: i32, v: &mut Variant) -> boo
             let t = n.table.unwrap_or(A11yTable {
                 rows: 0,
                 columns: 0,
+                frozen: 0,
             });
             i4_var(
                 v,
@@ -663,6 +664,7 @@ pub(super) fn selftest_nodes() -> Vec<A11yNode> {
             table: Some(A11yTable {
                 rows: 11,
                 columns: 2,
+                frozen: 0,
             }),
             children: vec![
                 A11yNode {

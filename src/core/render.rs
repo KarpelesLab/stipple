@@ -869,6 +869,7 @@ fn layout_element(
         native_a11y: None,
         scroll: el.scroll,
         scroll_x: el.scroll_x.filter(|_| el.scroll.is_some()),
+        scroll_follow: el.scroll_follow,
         scroll_tail: (0.0, 0.0),
         scroll_horizontal: el.scroll.is_some()
             && matches!(
@@ -1814,6 +1815,17 @@ pub(crate) fn apply_scroll(
     node: &mut LayoutNode,
     offsets: &mut std::collections::HashMap<ScrollId, f64>,
 ) {
+    if scroll_containers(node, offsets) {
+        follow_scroll(node, offsets);
+    }
+}
+
+/// [`apply_scroll`]'s scroll containers; whether any node under `node`
+/// follows one (see [`follow_scroll`]).
+fn scroll_containers(
+    node: &mut LayoutNode,
+    offsets: &mut std::collections::HashMap<ScrollId, f64>,
+) -> bool {
     if let Some(id) = node.scroll {
         let max_off = scroll_range(node, 0.0);
         let off = offsets.entry(id).or_insert(0.0);
@@ -1836,8 +1848,30 @@ pub(crate) fn apply_scroll(
             }
         }
     }
+    let mut follows = node.scroll_follow.is_some();
     for child in &mut node.children {
-        apply_scroll(child, offsets);
+        follows |= scroll_containers(child, offsets);
+    }
+    follows
+}
+
+/// [`apply_scroll`]'s followers, once every offset is clamped: the nodes
+/// whose children move with a container's sideways scrolling, or back
+/// against it (see [`Element::scroll_follow`]). Moves add up in any order.
+fn follow_scroll(node: &mut LayoutNode, offsets: &std::collections::HashMap<ScrollId, f64>) {
+    if let Some(f) = node.scroll_follow {
+        let off = offsets.get(&f.id).copied().unwrap_or(0.0).max(0.0);
+        // As the container moves its content (left; right, right to left),
+        // or back.
+        let dx = if node.rtl == f.pin { -off } else { off };
+        if dx != 0.0 {
+            for child in &mut node.children {
+                translate(child, Vec2::new(dx, 0.0));
+            }
+        }
+    }
+    for child in &mut node.children {
+        follow_scroll(child, offsets);
     }
 }
 

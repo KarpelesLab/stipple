@@ -469,6 +469,7 @@ mod tests {
             table: Some(A11yTable {
                 rows: 5,
                 columns: 2,
+                frozen: 0,
             }),
             children: vec![A11yNode {
                 children: vec![A11yNode {

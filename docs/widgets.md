@@ -688,7 +688,10 @@ only the visible ones are built (spacers stand in for the others, so the
 content's length is known). There is nothing to add to a view: the bar is
 drawn by the toolkit from the laid-out tree, along the container's trailing
 edge (the right one, the left one in a right-to-left layout, the bottom one
-sideways). A table's bar belongs to its body, below the header.
+sideways). A table's bars belong to its body, below the header: a table
+whose columns are wider than it has two, the corner square and both gutters
+(see [lists-and-tables.md](lists-and-tables.md#tables)), its header
+following the sideways scrolling.
 
 The thumb is as long as the share of the content in view (24 pixels at
 least) and sits where the scroll offset puts it. With a mouse:
@@ -832,8 +835,10 @@ Setting the value (AT-SPI's `CurrentValue`, UIA's `SetValue`) scrolls the
 container there. iOS has no scroll bar elements (VoiceOver scrolls with
 three fingers), so they're left out there.
 
-Not done yet: a table that scrolls sideways (its columns wider than it, its
-header following), and the OS's own drawing of the corner and of a horizontal
+A `text_view`, which reads as one text node, has its bars as that node's
+children.
+
+Not done yet: the OS's own drawing of the corner and of a horizontal
 bar's arrows on macOS (it has none).
 
 ## Themes and the native theme

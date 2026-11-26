@@ -83,8 +83,16 @@ fn ten_thousand_lines_lay_out_a_screenful_and_read_as_text() {
         (scroll.max - (10_000.0 * LH - 198.0)).abs() < 2.0,
         "{scroll:?}"
     );
+    // Its one child is its scroll bar (the lines fit sideways): the lines
+    // are its text.
+    let bars: Vec<_> = node.children.iter().map(|c| c.role).collect();
+    assert_eq!(bars, vec![crate::core::Role::ScrollBar]);
+    let bar = node.children[0].scroll_bar.unwrap();
+    assert!(
+        !bar.horizontal && (bar.max - scroll.max).abs() < 0.5,
+        "{bar:?}"
+    );
     // Only the lines around the viewport were built.
-    assert!(node.children.is_empty());
     fn leaves(n: &crate::core::LayoutNode) -> usize {
         let own = matches!(n.content, crate::core::NodeContent::Text { .. }) as usize;
         own + n.children.iter().map(leaves).sum::<usize>()

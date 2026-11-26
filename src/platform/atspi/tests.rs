@@ -1022,6 +1022,7 @@ fn range_tree() -> A11yNode {
                 table: Some(A11yTable {
                     rows: 11,
                     columns: 2,
+                    frozen: 0,
                 }),
                 selected: false,
                 children: vec![
