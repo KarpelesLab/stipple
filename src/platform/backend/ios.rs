@@ -921,6 +921,19 @@ pub mod simulate {
         crate::platform::native::objc::with_pool(|| unsafe { a11y::read_elements(view) })
     }
 
+    /// The first data table the view vends, read through objc dispatch as
+    /// VoiceOver reads it (`accessibilityContainerType`,
+    /// `accessibilityRowCount` / `…ColumnCount`, the cell at row 1, column
+    /// 0 with its row and column ranges and container, column 0's header),
+    /// and the elements whose label a caption gave: one line.
+    pub fn accessibility_table_status() -> String {
+        let view = view();
+        if view.is_null() {
+            return "no view".into();
+        }
+        crate::platform::native::objc::with_pool(|| unsafe { a11y::table_status(view) })
+    }
+
     /// Activate the element at `index`, as VoiceOver's double tap does:
     /// `accessibilityActivate`, and where the element doesn't activate
     /// itself that way (a live OS control), a tap at its middle, to the view

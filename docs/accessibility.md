@@ -76,8 +76,11 @@ scroll a plain container a page, to its end and back to an item through the
 events the bridges make, check the tree's offsets follow, and activate an
 item laid out below its list in one delivery (the scroll, then the click):
 the item's handler runs (a bare click at its middle misses it) and it is in
-view after. Not covered: iOS's `accessibilityActivate` still taps the
-element's frame (VoiceOver only stops on what shows there).
+view after. iOS's `accessibilityActivate` (VoiceOver's double tap) goes
+through it too, and VoiceOver's cursor landing on an element
+(`accessibilityElementDidBecomeFocused`) scrolls it into view, as a
+`UIScrollView` does for its subviews; its three-finger swipe still scrolls a
+page (`accessibilityScroll:`).
 
 ## Relations
 
@@ -230,10 +233,11 @@ how many leading columns stay put while the others scroll sideways.
 | Android | `CollectionInfo` | `CollectionItemInfo` (a header is a heading) |
 | Linux | `Table` (size, `GetAccessibleAt`, index math, column headers, selected rows) | `TableCell` (position, spans, its table, its column's header) |
 | Web | `aria-rowcount`, `aria-colcount` | `aria-rowindex`, `aria-colindex` |
-| iOS | not exposed | not exposed |
+| iOS | a data table (`UIAccessibilityContainerDataTable`: `accessibilityRowCount`, `accessibilityColumnCount`, `accessibilityDataTableCellElementForRow:column:`, `accessibilityHeaderElementsForColumn:`) holding its cells' elements | `accessibilityRowRange`, `accessibilityColumnRange` (`UIAccessibilityContainerDataTableCell`); a header has the header trait |
 
 A cell in a row (or a column) the table hasn't built isn't there to give: UIA's `GetItem`
-fails, AT-SPI's `GetAccessibleAt` returns a null reference.
+fails, AT-SPI's `GetAccessibleAt` returns a null reference, iOS's cell
+lookup returns nil.
 
 **Captions.** A control names its caption with `Element::labelled_by(id)`
 and the caption `Element::a11y_id(id)`. A plain unnamed group labelled so
@@ -243,7 +247,9 @@ relation `platform::access::relations` works out (see
 [Relations](#relations)): Linux: `labelled-by` / `label-for`; Windows: the
 `LabeledBy` property (and a field whose name is its text is named by its
 caption); Android: `setLabeledBy`; web: `aria-labelledby` (by the caption's
-id); macOS: `AXTitleUIElement`; iOS: none.
+id); macOS: `AXTitleUIElement`; iOS: the control's label (a field's, or
+an unnamed control's, is the caption; a named one's starts with it unless
+its name already says it).
 
 **Text attributes.** A node with text says how it is drawn
 (`AccessNode::font`: family, size, weight, italic; the family is the app's
@@ -664,8 +670,34 @@ up and down call `accessibilityIncrement` / `…Decrement`, which step it; a
 slider's and a progress bar's value reads as words ("50%"). Unit-tested;
 build-checked only.
 
-Not covered: tables (`UIAccessibilityContainerDataTable`) and captions;
-VoiceOver's own gestures and speech aren't exercised.
+A table's element is a data table (`UIAccessibilityContainerDataTable`,
+its `accessibilityContainerType` `UIAccessibilityContainerTypeDataTable`):
+it, not the view, vends the elements of the nodes inside it, gives its size
+(all its rows, the header row and those a virtualized table hasn't built
+included), the cell at a row and column and a column's header; each cell
+(`UIAccessibilityContainerDataTableCell`) says its `accessibilityRowRange`
+and `accessibilityColumnRange`. A control labelled by a caption reads it in
+its label (a captioned number input reads "Level", its value "3").
+An activation (`accessibilityActivate`) of an element scrolled out of view
+scrolls it into view first and taps it where it then is; VoiceOver's cursor
+landing on one (`accessibilityElementDidBecomeFocused`) scrolls it into
+view. Unit-tested (the table's items, cell lookup, captions); CI
+(non-blocking until they have passed on master): *A data table and a
+caption (XCUITest)* finds the table ("Items") with its cells inside it and
+the "Level" text field from the runner's process (XCUITest types a data
+table container as an "other" element: its `tables` are `UITableView`s),
+and `touchdemo` logs the data table as VoiceOver reads it through objc
+dispatch (`TOUCHDEMO_RANGES`: 21 rows, 2 columns, "Item 0" at row 1,
+column 0, inside the table, the "Item" header); *Activating a row out of
+view* has the self-test activate a row below the list's view and checks
+that row is the one tapped. In a CI scratch run the activation out of view
+("Row 20" tapped), the objc read of the data table and the caption
+passed; the first XCUITest looked for a `.table` element, which XCUITest
+doesn't report, and now looks for the table by its label. Items have no place in their set on
+iOS (UIAccessibility has no such property; see
+[Positions in a set](#positions-in-a-set)).
+
+Not covered: VoiceOver's own gestures and speech aren't exercised.
 
 ## Android
 

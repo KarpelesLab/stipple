@@ -28,6 +28,19 @@
 //! when it is one) on the swipe's axis, a page at a time, through a wheel at
 //! the container's middle, and says which page it's on
 //! (`UIAccessibilityPageScrolledNotification`, "Page N of M").
+//!
+//! An activation of an element scrolled out of view, and VoiceOver's cursor
+//! landing on one (`accessibilityElementDidBecomeFocused`), bring it into
+//! view first (`access::reveal`: every scroll container on the way to it,
+//! by a wheel), so the tap lands on it where it then is.
+//!
+//! A table's element is a data table (`UIAccessibilityContainerDataTable`,
+//! `accessibilityContainerType` `UIAccessibilityContainerTypeDataTable`):
+//! it vends the elements inside it, says how many rows and columns it has
+//! (all of them, a virtualized table's not built too), gives the cell at a
+//! row and column and a column's header; its cells
+//! (`UIAccessibilityContainerDataTableCell`) say their row and column. A
+//! control labelled by a caption has it in its label.
 
 use std::cell::RefCell;
 use std::ffi::c_void;
@@ -79,6 +92,9 @@ struct Elements {
     elements: Vec<(Id, Option<Shown>)>,
     /// For each item, the scroll containers around it, innermost first.
     scrollers: Vec<Vec<a11y_tree::Scroller>>,
+    /// The tree the items came from, where an activation finds what to
+    /// scroll to bring its node into view.
+    root: Option<A11yNode>,
 }
 
 thread_local! {
@@ -146,6 +162,13 @@ fn element_class() -> Class {
             decrement as *const c_void,
             c"v@:".as_ptr(),
         );
+        class_addMethod(
+            cls,
+            sel("accessibilityElementDidBecomeFocused"),
+            became_focused as *const c_void,
+            c"v@:".as_ptr(),
+        );
+        add_table_methods(cls);
         objc_registerClassPair(cls);
         cls
     }
@@ -196,22 +219,54 @@ extern "C" fn traits(this: Id, cmd: Sel) -> u64 {
 }
 
 /// `accessibilityActivate`: tap the middle of the node, after this call
-/// returns (VoiceOver may ask from inside other work).
+/// returns (VoiceOver may ask from inside other work). A node scrolled out
+/// of view is brought into it first (the scroll containers' wheels), and
+/// tapped where it then is.
 extern "C" fn activate(this: Id, _cmd: Sel) -> bool {
-    let frame = STATE.with(|s| {
+    let found = STATE.with(|s| {
         let s = s.try_borrow().ok()?;
         let i = s.elements.iter().position(|(e, _)| *e == this)?;
-        s.items.get(i).map(|item| item.frame)
+        let item = s.items.get(i)?;
+        let revealed = s.root.as_ref().and_then(|root| root.reveal(&item.path));
+        Some(match revealed {
+            Some(r) => (r.events, r.at),
+            None => {
+                let (x, y, w, h) = item.frame;
+                (Vec::new(), Point::new(x + w / 2.0, y + h / 2.0))
+            }
+        })
     });
-    let Some((x, y, w, h)) = frame else {
+    let Some((events, at)) = found else {
         return false;
     };
-    let at = Point::new(x + w / 2.0, y + h / 2.0);
     super::later(move || {
+        for event in events {
+            super::call_handler(event, &super::current_window());
+        }
         super::touch_input(TouchPhase::Started, &[(ACTIVATE_TOUCH, at)]);
         super::touch_input(TouchPhase::Ended, &[(ACTIVATE_TOUCH, at)]);
     });
     true
+}
+
+/// `accessibilityElementDidBecomeFocused`: VoiceOver's cursor landed on the
+/// element (a swipe to the next one): bring its node into view when a
+/// scroll container hides it, as a `UIScrollView` does for its subviews.
+extern "C" fn became_focused(this: Id, _cmd: Sel) {
+    let events = STATE.with(|s| {
+        let s = s.try_borrow().ok()?;
+        let i = s.elements.iter().position(|(e, _)| *e == this)?;
+        let path = &s.items.get(i)?.path;
+        s.root.as_ref()?.scroll_into_view_events(path)
+    });
+    let Some(events) = events else {
+        return;
+    };
+    super::later(move || {
+        for event in events {
+            super::call_handler(event, &super::current_window());
+        }
+    });
 }
 
 /// `accessibilityScroll:` (VoiceOver's three-finger swipe): scroll the
@@ -299,10 +354,11 @@ fn sync(view: Id) {
         let r = to_screen(view, (0.0, 0.0, 0.0, 0.0));
         (r.origin.x, r.origin.y)
     };
-    let changed: Vec<(Id, Item)> = STATE.with(|s| {
+    let changed: Vec<(Id, Item, Id)> = STATE.with(|s| {
         let mut s = s.borrow_mut();
         let s = &mut *s;
         s.elements.extend(made.into_iter().map(|e| (e, None)));
+        let ids: Vec<Id> = s.elements.iter().map(|(e, _)| *e).collect();
         s.elements
             .iter_mut()
             .zip(&s.items)
@@ -313,12 +369,17 @@ fn sync(view: Id) {
             })
             .map(|((el, shown), item)| {
                 *shown = Some((item.clone(), origin));
-                (*el, item.clone())
+                // A table's element holds what is inside it; the view the rest.
+                let container = item.container.and_then(|t| ids.get(t).copied());
+                (*el, item.clone(), container.unwrap_or(view))
             })
             .collect()
     });
-    for (el, item) in changed {
-        unsafe { show(el, &item, to_screen(view, item.frame)) };
+    for (el, item, container) in changed {
+        unsafe {
+            msg_void_id(el, sel("setAccessibilityContainer:"), container);
+            show(el, &item, to_screen(view, item.frame));
+        }
     }
 }
 
@@ -383,6 +444,9 @@ pub(super) fn set_tree(root: &A11yNode) {
         let mut s = s.borrow_mut();
         // Offsets change without changing what an element shows.
         s.scrollers = scrollers;
+        if s.root.as_ref() != Some(root) {
+            s.root = Some(root.clone());
+        }
         if s.items == items {
             return None;
         }
@@ -423,23 +487,37 @@ extern "C" fn is_accessibility_element(_this: Id, _cmd: Sel) -> bool {
     false
 }
 
-/// What the container vends at each position: the live OS control that
-/// stands for the node there, if one is shown, else its element.
+/// What is vended for item `i`: the live OS control that stands for its
+/// node, if one is shown, else its element (null when there is none).
+fn vend_one(s: &Elements, i: usize) -> Id {
+    let Some((el, _)) = s.elements.get(i) else {
+        return std::ptr::null_mut();
+    };
+    s.items
+        .get(i)
+        .and_then(|item| item.native)
+        .and_then(crate::platform::native::os_views::handle_of)
+        .unwrap_or(*el)
+}
+
+/// What the view vends at each position (the items outside tables).
 fn vended(s: &Elements) -> Vec<Id> {
-    s.elements
-        .iter()
-        .zip(&s.items)
-        .map(|((el, _), item)| {
-            item.native
-                .and_then(crate::platform::native::os_views::handle_of)
-                .unwrap_or(*el)
-        })
+    vended_in(s, None)
+}
+
+/// What `container` (a table's item, `None` for the view) vends at each
+/// position.
+fn vended_in(s: &Elements, container: Option<usize>) -> Vec<Id> {
+    let n = s.items.len().min(s.elements.len());
+    a11y_tree::vended_by(&s.items[..n], container)
+        .into_iter()
+        .map(|i| vend_one(s, i))
         .collect()
 }
 
 extern "C" fn element_count(this: Id, _cmd: Sel) -> isize {
     sync(this);
-    STATE.with(|s| s.borrow().elements.len() as isize)
+    STATE.with(|s| vended(&s.borrow()).len() as isize)
 }
 
 extern "C" fn element_at(this: Id, _cmd: Sel, index: isize) -> Id {
@@ -465,6 +543,11 @@ extern "C" fn index_of(this: Id, _cmd: Sel, element: Id) -> isize {
 extern "C" fn elements(this: Id, _cmd: Sel) -> Id {
     sync(this);
     let ids: Vec<Id> = STATE.with(|s| vended(&s.borrow()));
+    ns_array(&ids)
+}
+
+/// An autoreleased `NSArray` of `ids`.
+fn ns_array(ids: &[Id]) -> Id {
     unsafe {
         let f: unsafe extern "C" fn(Id, Sel, *const Id, usize) -> Id =
             std::mem::transmute(objc_msgSend as *const c_void);
@@ -474,6 +557,238 @@ extern "C" fn elements(this: Id, _cmd: Sel) -> Id {
             ids.as_ptr(),
             ids.len(),
         )
+    }
+}
+
+/// The item element `this` shows, by index.
+fn item_of(s: &Elements, this: Id) -> Option<usize> {
+    s.elements.iter().position(|(e, _)| *e == this)
+}
+
+/// For a table's element, what it vends (else nothing: other elements hold
+/// no others).
+fn table_children(this: Id) -> Vec<Id> {
+    STATE.with(|s| {
+        let Ok(s) = s.try_borrow() else {
+            return Vec::new();
+        };
+        match item_of(&s, this) {
+            Some(i) if s.items.get(i).is_some_and(|it| it.table.is_some()) => {
+                vended_in(&s, Some(i))
+            }
+            _ => Vec::new(),
+        }
+    })
+}
+
+/// A table element's `accessibilityElements` (nil for any other element).
+extern "C" fn el_elements(this: Id, _cmd: Sel) -> Id {
+    let ids = table_children(this);
+    if ids.is_empty() {
+        return std::ptr::null_mut();
+    }
+    ns_array(&ids)
+}
+
+extern "C" fn el_count(this: Id, _cmd: Sel) -> isize {
+    table_children(this).len() as isize
+}
+
+extern "C" fn el_at(this: Id, _cmd: Sel, index: isize) -> Id {
+    usize::try_from(index)
+        .ok()
+        .and_then(|i| table_children(this).get(i).copied())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+extern "C" fn el_index_of(this: Id, _cmd: Sel, element: Id) -> isize {
+    table_children(this)
+        .iter()
+        .position(|e| *e == element)
+        .map_or(NOT_FOUND, |i| i as isize)
+}
+
+/// `UIAccessibilityContainerTypeDataTable`.
+const CONTAINER_DATA_TABLE: isize = 1;
+
+/// `accessibilityContainerType`: a table's element is a data table.
+extern "C" fn container_type(this: Id, _cmd: Sel) -> isize {
+    let table = STATE.with(|s| {
+        let s = s.try_borrow().ok()?;
+        let i = item_of(&s, this)?;
+        s.items.get(i)?.table
+    });
+    if table.is_some() {
+        CONTAINER_DATA_TABLE
+    } else {
+        0
+    }
+}
+
+/// The table (rows, columns) and its item's index, for a table's element.
+fn table_of(this: Id) -> Option<(usize, crate::platform::access::A11yTable)> {
+    STATE.with(|s| {
+        let s = s.try_borrow().ok()?;
+        let i = item_of(&s, this)?;
+        Some((i, s.items.get(i)?.table?))
+    })
+}
+
+extern "C" fn row_count(this: Id, _cmd: Sel) -> usize {
+    table_of(this).map_or(0, |(_, t)| t.rows)
+}
+
+extern "C" fn column_count(this: Id, _cmd: Sel) -> usize {
+    table_of(this).map_or(0, |(_, t)| t.columns)
+}
+
+/// `accessibilityDataTableCellElementForRow:column:`: nil for a row the
+/// table hasn't built.
+extern "C" fn cell_for(this: Id, _cmd: Sel, row: usize, column: usize) -> Id {
+    STATE.with(|s| {
+        let Ok(s) = s.try_borrow() else {
+            return std::ptr::null_mut();
+        };
+        let Some(t) = item_of(&s, this).filter(|&i| s.items[i].table.is_some()) else {
+            return std::ptr::null_mut();
+        };
+        a11y_tree::cell_at(&s.items, t, row, column)
+            .map_or(std::ptr::null_mut(), |c| vend_one(&s, c))
+    })
+}
+
+/// `accessibilityHeaderElementsForColumn:`: its column header.
+extern "C" fn column_headers(this: Id, _cmd: Sel, column: usize) -> Id {
+    let ids: Vec<Id> = STATE.with(|s| {
+        let Ok(s) = s.try_borrow() else {
+            return Vec::new();
+        };
+        match item_of(&s, this).filter(|&i| s.items[i].table.is_some()) {
+            Some(t) => a11y_tree::column_headers(&s.items, t, column)
+                .into_iter()
+                .map(|c| vend_one(&s, c))
+                .collect(),
+            None => Vec::new(),
+        }
+    });
+    ns_array(&ids)
+}
+
+/// `accessibilityHeaderElementsForRow:`: rows have no headers.
+extern "C" fn row_headers(_this: Id, _cmd: Sel, _row: usize) -> Id {
+    ns_array(&[])
+}
+
+/// A cell's row or column (`NSRange`), `{NSNotFound, 0}` for anything else.
+fn cell_range(this: Id, column: bool) -> super::text_input::NsRange {
+    let cell = STATE.with(|s| {
+        let s = s.try_borrow().ok()?;
+        let it = s.items.get(item_of(&s, this)?)?;
+        it.cell.filter(|_| {
+            matches!(
+                it.role,
+                crate::platform::access::A11yRole::Cell
+                    | crate::platform::access::A11yRole::ColumnHeader
+            )
+        })
+    });
+    match cell {
+        Some(c) => super::text_input::NsRange {
+            location: if column { c.column } else { c.row },
+            length: 1,
+        },
+        None => super::text_input::NsRange {
+            location: NOT_FOUND as usize,
+            length: 0,
+        },
+    }
+}
+
+extern "C" fn row_range(this: Id, _cmd: Sel) -> super::text_input::NsRange {
+    cell_range(this, false)
+}
+
+extern "C" fn column_range(this: Id, _cmd: Sel) -> super::text_input::NsRange {
+    cell_range(this, true)
+}
+
+/// The data table methods (on every element: each answers for its own
+/// node), and the protocols VoiceOver checks for them.
+///
+/// # Safety
+/// `cls` must be a class pair still being built.
+unsafe fn add_table_methods(cls: Class) {
+    let methods: [(&str, *const c_void, &std::ffi::CStr); 12] = [
+        (
+            "accessibilityElements",
+            el_elements as *const c_void,
+            c"@@:",
+        ),
+        (
+            "accessibilityElementCount",
+            el_count as *const c_void,
+            c"q@:",
+        ),
+        (
+            "accessibilityElementAtIndex:",
+            el_at as *const c_void,
+            c"@@:q",
+        ),
+        (
+            "indexOfAccessibilityElement:",
+            el_index_of as *const c_void,
+            c"q@:@",
+        ),
+        (
+            "accessibilityContainerType",
+            container_type as *const c_void,
+            c"q@:",
+        ),
+        ("accessibilityRowCount", row_count as *const c_void, c"Q@:"),
+        (
+            "accessibilityColumnCount",
+            column_count as *const c_void,
+            c"Q@:",
+        ),
+        (
+            "accessibilityDataTableCellElementForRow:column:",
+            cell_for as *const c_void,
+            c"@@:QQ",
+        ),
+        (
+            "accessibilityHeaderElementsForColumn:",
+            column_headers as *const c_void,
+            c"@@:Q",
+        ),
+        (
+            "accessibilityHeaderElementsForRow:",
+            row_headers as *const c_void,
+            c"@@:Q",
+        ),
+        (
+            "accessibilityRowRange",
+            row_range as *const c_void,
+            c"{_NSRange=QQ}@:",
+        ),
+        (
+            "accessibilityColumnRange",
+            column_range as *const c_void,
+            c"{_NSRange=QQ}@:",
+        ),
+    ];
+    for (name, imp, types) in methods {
+        unsafe { class_addMethod(cls, sel(name), imp, types.as_ptr()) };
+    }
+    for protocol in [
+        c"UIAccessibilityContainerDataTable",
+        c"UIAccessibilityContainerDataTableCell",
+    ] {
+        unsafe {
+            let p = super::objc_getProtocol(protocol.as_ptr());
+            if !p.is_null() {
+                super::class_addProtocol(cls, p);
+            }
+        }
     }
 }
 
@@ -616,6 +931,95 @@ pub(super) unsafe fn double_tap_at(view: Id, index: usize) -> Option<(Id, Point)
             std::mem::transmute(objc_msgSend as *const c_void);
         let hit = hit_test(view, sel("hitTest:withEvent:"), at, std::ptr::null_mut());
         Some((hit, Point::new(at.x, at.y)))
+    }
+}
+
+/// For self-tests: the first data table `view` vends, as VoiceOver reads
+/// it (see `simulate::accessibility_table_status`).
+///
+/// # Safety
+/// `view` must be the live `StippleUIView`.
+pub(super) unsafe fn table_status(view: Id) -> String {
+    unsafe {
+        let int: unsafe extern "C" fn(Id, Sel) -> usize =
+            std::mem::transmute(objc_msgSend as *const c_void);
+        let at: unsafe extern "C" fn(Id, Sel, usize, usize) -> Id =
+            std::mem::transmute(objc_msgSend as *const c_void);
+        let range: unsafe extern "C" fn(Id, Sel) -> super::text_input::NsRange =
+            std::mem::transmute(objc_msgSend as *const c_void);
+        let count = msg_usize(view, sel("accessibilityElementCount"));
+        let elements: Vec<Id> = (0..count)
+            .map(|i| msg_id_usize(view, sel("accessibilityElementAtIndex:"), i))
+            .filter(|e| !e.is_null())
+            .collect();
+        let responds = |e: Id, name: &str| {
+            let f: unsafe extern "C" fn(Id, Sel, Sel) -> bool =
+                std::mem::transmute(objc_msgSend as *const c_void);
+            f(e, sel("respondsToSelector:"), sel(name))
+        };
+        let label = |e: Id| {
+            if e.is_null() {
+                "nil".to_string()
+            } else {
+                format!("{:?}", string_of(msg_id(e, sel("accessibilityLabel"))))
+            }
+        };
+        let captioned: Vec<String> = elements
+            .iter()
+            .filter(|&&e| {
+                let value = string_of(msg_id(e, sel("accessibilityValue")));
+                !value.is_empty() && value.parse::<f64>().is_ok()
+            })
+            .map(|&e| {
+                format!(
+                    "{}={:?}",
+                    label(e),
+                    string_of(msg_id(e, sel("accessibilityValue")))
+                )
+            })
+            .collect();
+        let table = elements.iter().copied().find(|&e| {
+            responds(e, "accessibilityContainerType")
+                && int(e, sel("accessibilityContainerType")) == CONTAINER_DATA_TABLE as usize
+        });
+        let Some(table) = table else {
+            return format!("no data table; numbers {captioned:?}");
+        };
+        let rows = int(table, sel("accessibilityRowCount"));
+        let columns = int(table, sel("accessibilityColumnCount"));
+        let inside = msg_usize(table, sel("accessibilityElementCount"));
+        let cell = at(
+            table,
+            sel("accessibilityDataTableCellElementForRow:column:"),
+            1,
+            0,
+        );
+        let (row, column, held) = if cell.is_null() {
+            (None, None, false)
+        } else {
+            let r = range(cell, sel("accessibilityRowRange"));
+            let c = range(cell, sel("accessibilityColumnRange"));
+            (
+                Some((r.location, r.length)),
+                Some((c.location, c.length)),
+                msg_id(cell, sel("accessibilityContainer")) == table,
+            )
+        };
+        let headers = {
+            let f: unsafe extern "C" fn(Id, Sel, usize) -> Id =
+                std::mem::transmute(objc_msgSend as *const c_void);
+            f(table, sel("accessibilityHeaderElementsForColumn:"), 0)
+        };
+        let header = if headers.is_null() || msg_usize(headers, sel("count")) == 0 {
+            std::ptr::null_mut()
+        } else {
+            msg_id_usize(headers, sel("objectAtIndex:"), 0)
+        };
+        format!(
+            "rows={rows} columns={columns} elements={inside} cell(1,0)={} row={row:?} column={column:?} in_table={held} header(0)={}; numbers {captioned:?}",
+            label(cell),
+            label(header),
+        )
     }
 }
 

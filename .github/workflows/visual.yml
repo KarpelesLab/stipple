@@ -5915,6 +5915,19 @@ jobs:
       # copied into the app's tmp directory), and the trackpad's scroll
       # recognizer (on the view, continuous and discrete scrolling, no touches)
       # scrolling the list.
+      # The self-test above also activated a row scrolled out of the list's
+      # view through its accessibility element (accessibilityActivate): the
+      # list must scroll it into view and the tap land on it there
+      # (access::reveal). Non-blocking until it has passed on master.
+      - name: Activating a row out of view (touchdemo self-test)
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: |
+          DATA=$(xcrun simctl get_app_container "$DEV" com.karpeleslab.stipple data)
+          LOG="$DATA/tmp/touchdemo.log"
+          grep -E "touchdemo: (activating .* out of view|.*out of view: activating|note: no row out of view)" "$LOG" || true
+          grep -qE "touchdemo: revealed out of view: activating row [0-9]+ tapped \[[0-9]+\]" "$LOG"
+
       - name: Dead keys, drops and trackpad scrolling (touchdemo)
         if: ${{ !cancelled() }}
         run: |
@@ -6100,6 +6113,35 @@ jobs:
           grep -q 'stipple-ax: tapped "Row 0": the label now reads "Rows tapped: ' $L
           grep -qi 'stipple-ax: text field value ".*h.*i.*"' $L
           grep -q 'stipple-ax: passed' $L
+
+      # A table and a caption (StippleTableTests, touchdemo with
+      # TOUCHDEMO_RANGES): XCUITest finds the table's data table element
+      # ("Items", typed "other": XCUITest's tables are UITableViews) with the
+      # cells inside it, and the "Level" number input labelled by its
+      # caption; touchdemo itself logs the data table as VoiceOver reads it
+      # (row and column counts, the cell at row 1, its row and column
+      # ranges, column 0's header). Non-blocking until it has passed on master.
+      - name: A data table and a caption (XCUITest)
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 15
+        run: |
+          xcrun simctl terminate "$DEV" com.karpeleslab.stipple || true
+          DATA=$(xcrun simctl get_app_container "$DEV" com.karpeleslab.stipple data)
+          rm -f "$DATA/tmp/touchdemo.log"
+          [ -d .github/a11y/ios/StippleAX.xcodeproj ] || (cd .github/a11y/ios && xcodegen generate)
+          status=0
+          xcodebuild test -project .github/a11y/ios/StippleAX.xcodeproj -scheme StippleAXTests \
+            -destination "platform=iOS Simulator,id=$DEV" \
+            -only-testing:StippleAXTests/StippleTableTests \
+            -derivedDataPath "$RUNNER_TEMP/stipple-ax" > visual_output/xcuitest-table.log 2>&1 || status=$?
+          xcrun simctl io "$DEV" screenshot visual_output/stipple-ios-table.png || true
+          grep "stipple-ax-table:" visual_output/xcuitest-table.log || true
+          sed -n '/^Attributes: Application/,/^Path to element/p' visual_output/xcuitest-table.log | head -120 || true
+          echo "=== touchdemo.log ==="; cat "$DATA/tmp/touchdemo.log" || true
+          [ "$status" = 0 ] || { tail -40 visual_output/xcuitest-table.log; exit 1; }
+          grep -q 'stipple-ax-table: passed' visual_output/xcuitest-table.log
+          grep -qE 'touchdemo: a11y table rows=21 columns=2 elements=[1-9][0-9]* cell\(1,0\)="Item [0-9]+" row=Some\(\(1, 1\)\) column=Some\(\(0, 1\)\) in_table=true header\(0\)="Item"' "$DATA/tmp/touchdemo.log"
 
       # Real touches (the same XCUITest bundle, StippleRealTouchTests): the
       # runner's taps, swipes, long presses and XCUICoordinate drags reach

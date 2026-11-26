@@ -50,7 +50,7 @@ How to build, package and run on each platform, and what works there today.
 | System clipboard | ✅ ⁸ | ✅ ⁴ | ✅ ⁴ | ✅ ⁸¹ | ✅ ⁸² | ✅ ¹³ |
 | File dialogs | ✅ | ✅ ⁵ | ✅ ⁵ | ✅ ⁶² | ✅ ⁶² | ✅ ¹⁴ |
 | Accessibility | AT-SPI ⁶⁶ | UI Automation ⁶⁷ | NSAccessibility ⁶⁸ | UIAccessibility ⁴⁹ | node provider ⁵⁶ | ARIA ²² |
-| Screen readers: range values, tables, captions, text attributes | ✅ ¹⁰¹ | ✅ ¹⁰¹ | ✅ ¹⁰¹ | range values ¹⁰¹ | ✅ ¹⁰¹ | ✅ ¹⁰¹ |
+| Screen readers: range values, tables, captions, text attributes | ✅ ¹⁰¹ | ✅ ¹⁰¹ | ✅ ¹⁰¹ | range values, tables, captions ¹⁰¹ | ✅ ¹⁰¹ | ✅ ¹⁰¹ |
 | Screen readers: an item's position in its set ("3 of 12") | ✅ ¹⁰³ | ✅ ¹⁰³ | — ¹⁰³ | — ¹⁰³ | list items ¹⁰³ | ✅ ¹⁰³ |
 | Window size limits, maximize, fullscreen | ✅ ⁹ | ✅ ¹⁰ | ✅ ¹⁰ | — | fullscreen ¹⁰ | ❌ |
 | Window size limits from the content's layout | ✅ ⁹⁸ | ✅ ⁹⁸ | ✅ ⁹⁸ | — | — | — |
@@ -946,7 +946,9 @@ and the text-changed and text-selection-changed events. macOS: `AXValue` with
 `AXMinValue` / `AXMaxValue`, a slider's `AXIncrement` / `AXDecrement` and
 settable value, `AXRowCount`, `AXColumnCount`, `AXRows`, a cell's index
 ranges. iOS: a slider is adjustable (VoiceOver's swipe up and down) with its
-value as words; no table or caption relation. Android: `RangeInfo`,
+value as words, a table is a data table (`UIAccessibilityContainerDataTable`)
+whose cells say their row and column, and a caption is in its control's
+label (non-blocking XCUITest check). Android: `RangeInfo`,
 `ACTION_SET_PROGRESS` and scroll forward / backward on a slider,
 `CollectionInfo` / `CollectionItemInfo`, `setLabeledBy`. Web: `aria-valuenow`
 / `min` / `max` / `valuetext`, `aria-rowcount`, `aria-rowindex`,

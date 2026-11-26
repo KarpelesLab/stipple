@@ -2,8 +2,14 @@
 //! is unit-tested on every host: one item per node of the tree (the root, the
 //! view itself, aside), in reading order, each with what its
 //! `UIAccessibilityElement` says, and which notification an update needs.
+//!
+//! A table's element is a data table (`UIAccessibilityContainerDataTable`):
+//! it vends the elements of the nodes inside it (the view vends the rest),
+//! says its size and finds a cell by row and column; each cell says its row
+//! and column. A control labelled by a caption reads the caption in its
+//! label.
 
-use crate::platform::access::{A11yNode, A11yRole};
+use crate::platform::access::{A11yCell, A11yNode, A11yRole, A11yTable};
 
 /// `UIAccessibilityTraitButton`, `…StaticText`, `…Header` and `…Selected`,
 /// as bits the backend maps to UIKit's constants.
@@ -40,6 +46,16 @@ pub(crate) struct Item {
     /// For an adjustable item (a slider), its node without its children:
     /// what an increment or decrement steps (see `platform::access`).
     pub(crate) adjust: Option<A11yNode>,
+    /// The table item (by index) whose element vends this one; `None` for
+    /// the view's.
+    pub(crate) container: Option<usize>,
+    /// For a table, its size (all its rows, those not built too).
+    pub(crate) table: Option<A11yTable>,
+    /// For a table's row, cell or column header, where it is.
+    pub(crate) cell: Option<A11yCell>,
+    /// Its place in the tree (child indices from the root), where an
+    /// activation brings it into view (`access::reveal`).
+    pub(crate) path: Vec<usize>,
 }
 
 /// The roles whose children VoiceOver reads instead of them (as
@@ -123,21 +139,97 @@ fn item(node: &A11yNode) -> Item {
         frame: node.bounds,
         native: node.native_view,
         adjust,
+        container: None,
+        table: node.table.filter(|_| role == Table),
+        cell: node.cell,
+        path: Vec::new(),
+    }
+}
+
+/// The text of the caption `node` is labelled by, in its label: a field's
+/// (whose label is empty: its name is its text) or an unnamed control's is
+/// the caption; a named one's starts with it, unless its name says it.
+fn add_caption(root: &A11yNode, node: &A11yNode, it: &mut Item) {
+    let Some(caption) = node
+        .labelled_by
+        .as_deref()
+        .and_then(|id| root.path_of_id(id))
+        .and_then(|p| root.at_path(&p))
+        .map(|c| c.name.trim())
+        .filter(|c| !c.is_empty())
+    else {
+        return;
+    };
+    if it.label.is_empty() {
+        it.label = caption.to_string();
+    } else if !it.label.contains(caption) {
+        it.label = format!("{caption}, {}", it.label);
     }
 }
 
 /// Every node under `root` (not `root`, which the view stands for), depth
 /// first in reading order.
 pub(crate) fn flatten(root: &A11yNode) -> Vec<Item> {
-    fn walk(node: &A11yNode, out: &mut Vec<Item>) {
-        for child in &node.children {
-            out.push(item(child));
-            walk(child, out);
+    fn walk(
+        root: &A11yNode,
+        node: &A11yNode,
+        path: &mut Vec<usize>,
+        table: Option<usize>,
+        out: &mut Vec<Item>,
+    ) {
+        for (i, child) in node.children.iter().enumerate() {
+            path.push(i);
+            let index = out.len();
+            let mut it = item(child);
+            it.container = table;
+            it.path = path.clone();
+            add_caption(root, child, &mut it);
+            out.push(it);
+            let inner = if child.role == A11yRole::Table {
+                Some(index)
+            } else {
+                table
+            };
+            walk(root, child, path, inner, out);
+            path.pop();
         }
     }
     let mut out = Vec::new();
-    walk(root, &mut out);
+    walk(root, root, &mut Vec::new(), None, &mut out);
     out
+}
+
+/// The items `container`'s element vends (the view's for `None`), by index,
+/// in reading order.
+pub(crate) fn vended_by(items: &[Item], container: Option<usize>) -> Vec<usize> {
+    (0..items.len())
+        .filter(|&i| items[i].container == container)
+        .collect()
+}
+
+/// The cell (or column header) of table item `table` at `row` and
+/// `column`, by index: `accessibilityDataTableCellElementForRow:column:`.
+/// `None` for a row the table hasn't built.
+pub(crate) fn cell_at(items: &[Item], table: usize, row: usize, column: usize) -> Option<usize> {
+    (0..items.len()).find(|&i| {
+        let it = &items[i];
+        it.container == Some(table)
+            && matches!(it.role, A11yRole::Cell | A11yRole::ColumnHeader)
+            && it.cell.is_some_and(|c| c.row == row && c.column == column)
+    })
+}
+
+/// The column headers of table item `table` over `column`, by index:
+/// `accessibilityHeaderElementsForColumn:`.
+pub(crate) fn column_headers(items: &[Item], table: usize, column: usize) -> Vec<usize> {
+    (0..items.len())
+        .filter(|&i| {
+            let it = &items[i];
+            it.container == Some(table)
+                && it.role == A11yRole::ColumnHeader
+                && it.cell.is_some_and(|c| c.column == column)
+        })
+        .collect()
 }
 
 /// A scroll container an item sits in (or is), as VoiceOver's
@@ -425,6 +517,120 @@ mod tests {
         assert!(scroll_target(chip, SCROLL_RIGHT).is_none());
         assert_eq!(page_status(&around[1][0], true), "Page 3 of 4");
         assert_eq!(page_status(&around[1][0], false), "Page 1 of 4");
+    }
+
+    #[test]
+    fn a_table_vends_its_cells_and_finds_them_by_row_and_column() {
+        let cell = |role, name: &str, row, column| A11yNode {
+            cell: Some(A11yCell { row, column }),
+            ..node(role, name)
+        };
+        let row = |index, cells: Vec<A11yNode>| A11yNode {
+            cell: Some(A11yCell {
+                row: index,
+                column: 0,
+            }),
+            children: cells,
+            ..node(A11yRole::Row, "")
+        };
+        let tree = window(vec![
+            node(A11yRole::Text, "Title"),
+            A11yNode {
+                table: Some(A11yTable {
+                    rows: 21,
+                    columns: 2,
+                    frozen: 0,
+                }),
+                children: vec![
+                    row(
+                        0,
+                        vec![
+                            cell(A11yRole::ColumnHeader, "Name", 0, 0),
+                            cell(A11yRole::ColumnHeader, "Value", 0, 1),
+                        ],
+                    ),
+                    // A virtualized table's rows 5 and 6, in a group.
+                    A11yNode {
+                        children: vec![
+                            row(5, vec![cell(A11yRole::Cell, "Item 5", 5, 0)]),
+                            row(6, vec![cell(A11yRole::Cell, "Item 6", 6, 0)]),
+                        ],
+                        ..node(A11yRole::Group, "")
+                    },
+                ],
+                ..node(A11yRole::Table, "")
+            },
+            node(A11yRole::Button, "After"),
+        ]);
+        let items = flatten(&tree);
+        let named = |name: &str| items.iter().position(|i| i.label == name).unwrap();
+        let table = items
+            .iter()
+            .position(|i| i.role == A11yRole::Table)
+            .unwrap();
+        assert_eq!(
+            items[table].table,
+            Some(A11yTable {
+                rows: 21,
+                columns: 2,
+                frozen: 0,
+            })
+        );
+        // The view vends the title, the table and the button; the table the
+        // rest.
+        let view: Vec<_> = vended_by(&items, None);
+        assert_eq!(view, [named("Title"), table, named("After")]);
+        let inside = vended_by(&items, Some(table));
+        assert!(inside.contains(&named("Item 6")) && inside.contains(&named("Name")));
+        assert_eq!(inside.len(), items.len() - 3);
+        assert_eq!(cell_at(&items, table, 6, 0), Some(named("Item 6")));
+        assert_eq!(cell_at(&items, table, 0, 1), Some(named("Value")));
+        assert_eq!(cell_at(&items, table, 9, 0), None, "a row not built");
+        assert_eq!(column_headers(&items, table, 1), [named("Value")]);
+        assert_eq!(
+            items[named("Item 5")].cell,
+            Some(A11yCell { row: 5, column: 0 })
+        );
+        assert_eq!(items[named("Item 5")].path, [1, 1, 0, 0]);
+        assert_eq!(items[named("Name")].traits & HEADER, HEADER);
+    }
+
+    #[test]
+    fn a_caption_is_in_the_controls_label() {
+        let caption = |id: &str, name: &str| A11yNode {
+            id: Some(id.into()),
+            ..node(A11yRole::Text, name)
+        };
+        let by = |id: &str, n: A11yNode| A11yNode {
+            labelled_by: Some(id.into()),
+            ..n
+        };
+        let tree = window(vec![
+            caption("level", "Level"),
+            by("level", node(A11yRole::SpinButton, "3")),
+            caption("vol", "Volume"),
+            by("vol", node(A11yRole::Slider, "Volume")),
+            caption("fruit", "Fruit"),
+            by("fruit", node(A11yRole::ComboBox, "Apple")),
+            by("nowhere", node(A11yRole::Button, "OK")),
+        ]);
+        let items = flatten(&tree);
+        let labels: Vec<_> = items
+            .iter()
+            .map(|i| (i.label.as_str(), i.value.as_str()))
+            .collect();
+        assert_eq!(
+            labels,
+            [
+                ("Level", ""),
+                ("Level", "3"),
+                ("Volume", ""),
+                ("Volume", ""),
+                ("Fruit", ""),
+                ("Fruit, Apple", ""),
+                ("OK", ""),
+            ]
+        );
     }
 
     #[test]

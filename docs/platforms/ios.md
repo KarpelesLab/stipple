@@ -259,15 +259,19 @@ in screen coordinates (`accessibilityFrame`, converted through the window;
 runtime is loaded, so it isn't used). Containers (groups, lists,
 toolbars) are elements VoiceOver doesn't stop on; their children are. A
 double tap (`accessibilityActivate`) taps the middle of the node, so buttons
-click and fields take focus. Elements are updated in place as the tree
+click and fields take focus; a node scrolled out of view is scrolled into it
+first, and VoiceOver's cursor landing on one scrolls it into view too. A
+table's element is a data table (`UIAccessibilityContainerDataTable`)
+holding its cells, and a control labelled by a caption reads the caption in
+its label. Elements are updated in place as the tree
 changes, and an update VoiceOver should hear posts
 `UIAccessibilityLayoutChangedNotification` (or
 `UIAccessibilityScreenChangedNotification` when a dialog opens or closes).
 A text field's element adds the traits a `UITextField` reports (UIKit has
 no public text-entry trait), so VoiceOver says "text field" and XCUITest
 finds it among `textFields`. The values ("on", "checked", "expanded"…) are
-in the user's language (eighteen languages; English otherwise); no adjustable
-(swipe up/down) or scroll actions yet. CI drives the app from an XCUITest
+in the user's language (eighteen languages; English otherwise); a slider is
+adjustable (swipe up and down) and VoiceOver's three-finger swipe scrolls. CI drives the app from an XCUITest
 runner, outside its process; see [accessibility.md](../accessibility.md#ios).
 
 ## Appearance

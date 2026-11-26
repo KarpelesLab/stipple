@@ -652,6 +652,14 @@ fn main() {
         if std::env::var_os("TOUCHDEMO_SELFTEST").is_some() {
             selftest::schedule(&app.handle());
         }
+        // The table as VoiceOver reads it (a data table), and the captioned
+        // number input's label, for CI.
+        if ranges {
+            app.handle().after(Duration::from_millis(2000), |_| {
+                let table = simulate::accessibility_table_status();
+                log(&format!("touchdemo: a11y table {table}"));
+            });
+        }
         if std::env::var_os("TOUCHDEMO_CLOSE_SCENE").is_some() {
             selftest::close_scene(&app.handle());
         } else if let Ok(text) = std::env::var("TOUCHDEMO_TYPE") {
@@ -1790,6 +1798,48 @@ mod selftest {
                 ),
             );
             s.detail = false;
+        });
+
+        // Activating a row scrolled out of the list's view brings it into
+        // view and taps it there (not what is drawn where it was laid out).
+        // Noted, not yet required.
+        steps.run(300, |s| {
+            let screen = simulate::view_frame_on_screen();
+            // The list's visible part: about 105 to 505 points down.
+            let (top, bottom) = (screen.min_y() + 90.0, screen.min_y() + 520.0);
+            let elements = simulate::accessibility_elements();
+            let out = |e: &stipple::platform::backend::ios::AccessibilityElement| {
+                e.label.starts_with("Row ")
+                    && e.traits.contains("button")
+                    && (e.frame.min_y() > bottom || e.frame.max_y() < top)
+            };
+            let below = elements
+                .iter()
+                .position(|e| out(e) && e.frame.min_y() > bottom);
+            let found = below.or_else(|| elements.iter().position(out));
+            s.tapped.clear();
+            match found {
+                Some(i) => {
+                    let n = elements[i].label[4..].parse().unwrap_or(usize::MAX);
+                    log(&format!(
+                        "touchdemo: activating {:?} out of view at {:?}",
+                        elements[i].label, elements[i].frame
+                    ));
+                    ACTIVATED.store(n, Ordering::Relaxed);
+                    simulate::activate_accessibility_element(i);
+                }
+                None => log("touchdemo: note: no row out of view to activate"),
+            }
+        });
+        steps.until(|s| !s.tapped.is_empty());
+        steps.run(0, |s| {
+            let want = ACTIVATED.load(Ordering::Relaxed);
+            let ok = want != usize::MAX && s.tapped == [want];
+            log(&format!(
+                "touchdemo: {} out of view: activating row {want} tapped {:?}",
+                if ok { "revealed" } else { "note: not revealed" },
+                s.tapped
+            ));
         });
 
         // The document pickers: each must come up, and cancelling it (as its

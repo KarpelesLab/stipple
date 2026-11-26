@@ -2932,9 +2932,8 @@ Most input only works on X11 today.
   `uiademo --relations` passes in CI and is required. `axprobe --links`
   (non-blocking) failed on the runner because `touchdemo` gave its field the
   "Note" caption only on Linux; it now has it on macOS too (passed in a CI
-  scratch run). Left: iOS's
-  `accessibilityActivate` taps the element's frame without scrolling;
-  `AXScrollToVisible` still can't be added (see above).
+  scratch run). Left: `AXScrollToVisible` still can't be added (see
+  above). (iOS's activation out of view: done, see the iOS item below.)
 - ✅ Keyboard focus for buttons and the other controls a tap activates
   (`core::tab_focus`): an `on_tap` element whose role is a button, checkbox,
   switch, tab, select, list or tree item, row, cell or column header (not a
@@ -2978,10 +2977,26 @@ Most input only works on X11 today.
   CI, required: the AT-SPI walk with `ATSPI_WALK_RANGES=1`,
   `uia-ranges.ps1`, `axprobe --ranges` (macOS; iOS build-checked) and the
   Android probe's slider checks (all passing on the runners), on `touchdemo` with `TOUCHDEMO_RANGES` and
-  `androiddemo`'s new slider. Left: tables on iOS
-  (`UIAccessibilityContainerDataTable`), text attributes past the font and
+  `androiddemo`'s new slider. Left: text attributes past the font and
   runs inside a node's text, setting a value from the web's ARIA overlay.
+  (Tables and captions on iOS: done, see the iOS item below.)
   (Positions in a set: see the next item.)
+- ✅ iOS data tables, captions, and acting on what's scrolled out of view.
+  A table's element is a `UIAccessibilityContainerDataTable`
+  (`accessibilityContainerType` data table): it vends its cells' elements
+  (the view vends the rest), says its row and column counts (all its rows),
+  gives the cell at a row and column and a column's header; its cells
+  (`UIAccessibilityContainerDataTableCell`) give their row and column
+  ranges. A control labelled by a caption has the caption in its label (a
+  field's or an unnamed control's is the caption). `accessibilityActivate`
+  goes through `platform::access::reveal` (the containers scrolled by a
+  wheel, then the tap where the node then is), and
+  `accessibilityElementDidBecomeFocused` scrolls the element into view.
+  The UIKit-free logic is unit-tested (`ios/a11y_tree.rs`); CI
+  (non-blocking): an XCUITest (`StippleTableTests`) finds the table, its
+  cells and the "Level" field from outside the app, `touchdemo` logs the
+  data table as read through objc dispatch, and its self-test activates a
+  row out of the list's view. `accessibilityScroll:` still scrolls a page.
 - ✅ Items' positions in their set, the "3 of 12" a screen reader reads:
   `Element::a11y_position(index, count)` (`AccessNode::position`, an
   `AccessPosition`), which `virtual_list` declares on its rows (their
