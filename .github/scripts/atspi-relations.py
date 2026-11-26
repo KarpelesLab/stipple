@@ -10,6 +10,11 @@ usage: atspi-relations.py APP_NAME CHECK...
   tree=NAME the tree item NAME is node-child-of a tree item one level up
             (its "level" attribute), which is node-parent-of it back
             (mediabrowser's folder tree: tree=Music)
+  places    a radio button's "posinset" / "setsize" attributes are its
+            place in its member-of group (widgetsdemo's "Format" chips)
+  places=NAME
+            the tree item NAME's "posinset" / "setsize" are its place among
+            the node-parent-of items of its parent (mediabrowser: places=Music)
 
 Prints what it finds and `atspi-relations: ok`, or the failures; exits 1 on
 any failure.
@@ -70,12 +75,22 @@ def targets(acc, kind):
     return out
 
 
-def level(acc):
+def attribute(acc, name):
     for attr in acc.getAttributes():
         key, _, value = attr.partition(":")
-        if key == "level":
+        if key == name:
             return int(value)
     return None
+
+
+def level(acc):
+    return attribute(acc, "level")
+
+
+def place(acc):
+    """(posinset, setsize), or None where either is missing."""
+    at, size = attribute(acc, "posinset"), attribute(acc, "setsize")
+    return None if at is None or size is None else (at, size)
 
 
 app = find_app()
@@ -130,6 +145,28 @@ for want in checks:
                   "...one level below it (levels {} and {})".format(mine, theirs))
             kids = [k.name for k in targets(parent, pyatspi.RELATION_NODE_PARENT_OF)]
             check(name in kids, "...which is node-parent-of it back ({})".format(kids))
+    elif want == "places":
+        radio = find(app, pyatspi.ROLE_RADIO_BUTTON)
+        check(radio is not None, "a radio button")
+        if radio is None:
+            continue
+        group = [r.name for r in targets(radio, pyatspi.RELATION_MEMBER_OF)]
+        got = place(radio)
+        want_at = (group.index(radio.name) + 1, len(group)) if radio.name in group else None
+        check(got is not None and got == want_at,
+              "'{}' is {} of its group {} (posinset, setsize: {})".format(radio.name, want_at, group, got))
+    elif want.startswith("places="):
+        name = want[len("places="):]
+        item = find(app, pyatspi.ROLE_TREE_ITEM, name)
+        check(item is not None, "a tree item '{}'".format(name))
+        if item is None:
+            continue
+        got = place(item)
+        parents = targets(item, pyatspi.RELATION_NODE_CHILD_OF)
+        siblings = [k.name for k in targets(parents[0], pyatspi.RELATION_NODE_PARENT_OF)] if parents else []
+        want_at = (siblings.index(name) + 1, len(siblings)) if name in siblings else None
+        check(got is not None and got == want_at,
+              "...is {} of its parent's items {} (posinset, setsize: {})".format(want_at, siblings, got))
     else:
         check(False, "unknown check {}".format(want))
 

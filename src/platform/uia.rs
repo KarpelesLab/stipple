@@ -59,7 +59,7 @@ mod text;
 
 pub(crate) use events::{plan_events, raise_planned};
 pub use patterns::selftest_patterns;
-pub use relations::selftest_relations;
+pub use relations::{selftest_positions, selftest_relations};
 
 type Hresult = i32;
 const S_OK: Hresult = 0;

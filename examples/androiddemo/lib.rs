@@ -275,7 +275,7 @@ mod app {
         };
         // A list of rows at the bottom of the screen, which a finger drag
         // scrolls. Built as `scroll` builds it, to read its offset.
-        let rows = (0..30)
+        let mut rows: Vec<Element> = (0..30)
             .map(|i| {
                 button(cx, format!("Row {i}"))
                     .width(280.0)
@@ -290,6 +290,9 @@ mod app {
                     )
             })
             .collect();
+        // Three list items after the rows: the list gives them their place
+        // ("item 2 of 3": CollectionInfo, CollectionItemInfo).
+        rows.extend((1..=3).map(|i| label(cx, format!("Note {i}")).role(Role::ListItem)));
         let id = cx.register_scroll();
         let offset = cx.scroll_offset(id);
         if OFFSET.swap(offset.to_bits(), Ordering::Relaxed) != offset.to_bits() {
@@ -300,6 +303,7 @@ mod app {
         let list = Element::stack(Axis::Vertical, vec![column(rows).gap(theme.spacing.sm)])
             .height(196.0)
             .scrollable(id)
+            .role(Role::List)
             .align(Align::Start, Align::Center);
         // A strip of chips a sideways swipe scrolls. The last three, out of
         // view until the strip is scrolled, are the system's services: the

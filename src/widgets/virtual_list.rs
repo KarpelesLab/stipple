@@ -850,6 +850,8 @@ pub fn virtual_list<S: 'static>(
     let multi = state.mode() != SelectionMode::Single;
     let mut rows = Vec::with_capacity(window.range.len());
     let mut cursor_entries = None;
+    // Every row's place among all of them, for the rows not built.
+    let total = window.rows.count();
     for index in window.range.clone() {
         let info = RowInfo {
             index,
@@ -873,7 +875,7 @@ pub fn virtual_list<S: 'static>(
         let mut el =
             Element::stack(Axis::Horizontal, vec![content]).height(window.rows.height(index));
         if plain {
-            rows.push(el.role(Role::ListItem));
+            rows.push(el.role(Role::ListItem).a11y_position(index, total));
             continue;
         }
         if !swipes {
@@ -889,6 +891,7 @@ pub fn virtual_list<S: 'static>(
         let w = window.clone();
         rows.push(
             el.role(Role::ListItem)
+                .a11y_position(index, total)
                 .selected(info.selected)
                 .on_tap(cx, move |s| {
                     field(s).click(index, pointer().modifiers);

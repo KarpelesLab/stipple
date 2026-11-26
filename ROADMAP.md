@@ -2979,9 +2979,27 @@ Most input only works on X11 today.
   `uia-ranges.ps1`, `axprobe --ranges` (macOS; iOS build-checked) and the
   Android probe's slider checks (all passing on the runners), on `touchdemo` with `TOUCHDEMO_RANGES` and
   `androiddemo`'s new slider. Left: tables on iOS
-  (`UIAccessibilityContainerDataTable`), tree items' levels and list
-  positions, text attributes past the font and runs inside a node's text,
-  setting a value from the web's ARIA overlay.
+  (`UIAccessibilityContainerDataTable`), text attributes past the font and
+  runs inside a node's text, setting a value from the web's ARIA overlay.
+  (Positions in a set: see the next item.)
+- ✅ Items' positions in their set, the "3 of 12" a screen reader reads:
+  `Element::a11y_position(index, count)` (`AccessNode::position`, an
+  `AccessPosition`), which `virtual_list` declares on its rows (their
+  place among all of them, not just the built ones) and `tree` on its rows
+  (among their parent's children); `platform::access::position` works out
+  every item's place once for all the bridges (`A11yNode::set_position`):
+  the declared one, else a radio button's in its group, a flat tree item's
+  among its level's items under its parent, any other list item's, tab's,
+  menu item's or tree item's among its container's. **Linux:** the
+  `posinset` / `setsize` attributes (with a tree item's `level`).
+  **Windows:** `PositionInSet` / `SizeOfSet`. **Android:** a list's
+  `CollectionInfo` and its items' `CollectionItemInfo`. **Web:**
+  `aria-posinset` / `aria-setsize`. macOS and iOS have no such attribute
+  (a tree item's level is macOS's `AXDisclosureLevel`). Unit and App tests;
+  CI (non-blocking): the AT-SPI relations walk's `places` checks on
+  `widgetsdemo` and `mediabrowser` (passing locally under Xvfb),
+  `uiademo --positions`, the web selftest's note of a menu item's
+  `aria-posinset`, the Android probe's note of `androiddemo`'s list.
 - ⬜ Try the real screen readers: VoiceOver (macOS and iOS), TalkBack,
   Narrator / NVDA, Orca, by a person, on each platform.
 - ✅ Images on the GPU path, so OS-drawn controls render under `App::render_with`;

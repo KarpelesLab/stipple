@@ -123,6 +123,31 @@ fn a_handler_scrolls_to_a_row_and_aligns_it() {
 }
 
 #[test]
+fn built_rows_say_their_place_among_all_the_rows() {
+    let mut app = app(Feed::new(10_000), |s| {
+        VirtualList::fixed(s.rows, ROW).height(240.0)
+    });
+    update(&mut app, |s| {
+        s.list.scroll_to_row(5_000, ScrollAlign::Start)
+    });
+    let tree = crate::to_platform_a11y(&app.accessibility_tree().unwrap());
+    let paths = tree.find_paths(&|n| n.name == "Row 5000");
+    let path = paths.last().expect("Row 5000 is built");
+    // The row's text is inside the item.
+    let item = (0..path.len())
+        .rev()
+        .map(|k| &path[..k])
+        .find(|p| tree.at_path(p).unwrap().role == crate::platform::A11yRole::ListItem)
+        .or_else(|| {
+            (tree.at_path(path).unwrap().role == crate::platform::A11yRole::ListItem)
+                .then_some(&path[..])
+        })
+        .expect("a list item");
+    let at = tree.set_position(item).unwrap();
+    assert_eq!((at.position, at.size), (5_001, 10_000));
+}
+
+#[test]
 fn sticking_to_the_end_follows_appends_until_scrolled_up() {
     let mut app = app(Feed::new(100), |s| {
         VirtualList::fixed(s.rows, ROW)

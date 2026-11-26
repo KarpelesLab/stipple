@@ -104,6 +104,9 @@
         const probe = (i) => e.webdemo_probe(i);
         const checks = {};
         const check = (name, ok, detail) => { checks[name] = { ok: !!ok, detail }; };
+        // What is reported without being required yet (non-blocking CI steps
+        // grep these lines).
+        const notes = [];
 
         // HiDPI: the backing store is the CSS size times the pixel ratio.
         // (On a GPU, `renderer: "auto"` with a hardware one, the canvas is
@@ -310,6 +313,7 @@
           await sleep(100);
           const heldClicks = probe(0);
           if (item) {
+            notes.push(`aria-posinset: "${item.textContent}" ${item.getAttribute("aria-posinset")} of ${item.getAttribute("aria-setsize")}`);
             const ir = item.getBoundingClientRect(), r = canvas.getBoundingClientRect();
             await tapAt(9, ir.left + ir.width / 2 - r.left, ir.top + ir.height / 2 - r.top);
           }
@@ -333,7 +337,8 @@
 
         const ok = Object.values(checks).every((c) => c.ok);
         const report = `SELFTEST: ${ok ? "ok" : "FAILED"}\n` + Object.entries(checks)
-          .map(([k, c]) => `${c.ok ? "ok    " : "FAILED"} ${k}: ${c.detail}`).join("\n");
+          .map(([k, c]) => `${c.ok ? "ok    " : "FAILED"} ${k}: ${c.detail}`)
+          .concat(notes.map((n) => `note   ${n}`)).join("\n");
         console.log(report);
         document.getElementById("report").textContent = report;
         send(report);

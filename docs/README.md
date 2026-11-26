@@ -51,6 +51,7 @@ How to build, package and run on each platform, and what works there today.
 | File dialogs | ✅ | ✅ ⁵ | ✅ ⁵ | ✅ ⁶² | ✅ ⁶² | ✅ ¹⁴ |
 | Accessibility | AT-SPI ⁶⁶ | UI Automation ⁶⁷ | NSAccessibility ⁶⁸ | UIAccessibility ⁴⁹ | node provider ⁵⁶ | ARIA ²² |
 | Screen readers: range values, tables, captions, text attributes | ✅ ¹⁰¹ | ✅ ¹⁰¹ | ✅ ¹⁰¹ | range values ¹⁰¹ | ✅ ¹⁰¹ | ✅ ¹⁰¹ |
+| Screen readers: an item's position in its set ("3 of 12") | ✅ ¹⁰³ | ✅ ¹⁰³ | — ¹⁰³ | — ¹⁰³ | list items ¹⁰³ | ✅ ¹⁰³ |
 | Window size limits, maximize, fullscreen | ✅ ⁹ | ✅ ¹⁰ | ✅ ¹⁰ | — | fullscreen ¹⁰ | ❌ |
 | Window size limits from the content's layout | ✅ ⁹⁸ | ✅ ⁹⁸ | ✅ ⁹⁸ | — | — | — |
 | Windows reopen where they were left (`App::remember_window`) | X11, Wayland: size and state ¹⁰⁰ | ✅ ¹⁰⁰ | ✅ ¹⁰⁰ | — | — | — |
@@ -963,6 +964,18 @@ reads an uncompressed PNG back through the descriptor and sees a compressed
 file refused; the desktop path is unit-tested; iOS logs it in the simulator
 self-test (not blocking). See
 [os-integration.md](os-integration.md#packaged-assets).
+
+¹⁰³ A list item, tree item, tab, radio button or menu item says its place in
+its set, worked out once for every bridge (`platform::access::position`):
+what its widget declares (`Element::a11y_position`; `virtual_list` and
+`tree` declare their rows', the rows not built counted), else counted from
+its siblings. Linux: the `posinset` / `setsize` attributes; Windows: UIA's
+`PositionInSet` / `SizeOfSet`; Android: a list's `CollectionInfo` and its
+items' `CollectionItemInfo`; web: `aria-posinset` / `aria-setsize`. macOS
+and iOS have no such attribute (VoiceOver counts the rows itself; a macOS
+tree item's level is its `AXDisclosureLevel`). App- and unit-tested; the
+AT-SPI check passes locally under Xvfb; the CI checks are non-blocking. See
+[accessibility.md](accessibility.md#positions-in-a-set).
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled;

@@ -11,8 +11,10 @@
 //! scroll forward and backward, as a `SeekBar` is), and a moved one sends
 //! `TYPE_VIEW_SELECTED`, as a `SeekBar` does; a table has its
 //! `CollectionInfo` (all its rows and columns) and its cells and column
-//! headers their `CollectionItemInfo`; a control a caption labels names it
-//! with `setLabeledBy`.
+//! headers their `CollectionItemInfo`, as a list has its `CollectionInfo`
+//! (all its items, a virtualized list's not built too) and its items
+//! theirs (their place, from `access::position`); a control a caption
+//! labels names it with `setLabeledBy`.
 //! Hover events from touch exploration (TalkBack's explore by touch) reach
 //! the host view, which says which node is under the finger.
 //!
@@ -105,6 +107,10 @@ struct Node {
     /// For a table, its size; for its cells, where they are.
     table: Option<A11yTable>,
     cell: Option<A11yCell>,
+    /// For a list, how many items it has; for a list item, its index (from
+    /// 0) among them.
+    items: Option<usize>,
+    place: Option<usize>,
     /// The node that labels this one (its caption), or `HOST_VIEW_ID`.
     label: i32,
 }
@@ -246,6 +252,8 @@ pub(super) fn update(root: &A11yNode, content: ARect, scale: f64) -> Changes {
             range: n.range,
             table: n.table,
             cell: n.cell,
+            items: None,
+            place: None,
             label: HOST_VIEW_ID,
         });
         let was = at.in_scroller;
@@ -283,6 +291,25 @@ pub(super) fn update(root: &A11yNode, content: ARect, scale: f64) -> Changes {
             && j > 0
         {
             nodes[i].label = j as i32;
+        }
+    }
+    // Each list item's place in its list, and the list's size from it.
+    for i in 1..nodes.len() {
+        if nodes[i].role != A11yRole::ListItem {
+            continue;
+        }
+        let Some(at) = root.set_position(&nodes[i].path) else {
+            continue;
+        };
+        nodes[i].place = Some(at.position - 1);
+        let mut up = nodes[i].parent;
+        while up > 0 {
+            let list = &mut nodes[up as usize];
+            if list.role == A11yRole::List {
+                list.items = Some(list.items.unwrap_or(0).max(at.size));
+                break;
+            }
+            up = list.parent;
         }
     }
     let mut t = tree();
@@ -794,16 +821,19 @@ fn collection_info(jni: &Jni, info: JObject, node: &Node) -> Option<()> {
             &[JValue { l: range }],
         )?;
     }
-    if let Some(t) = node.table {
+    // A list: one column of all its items.
+    let size = node
+        .table
+        .map(|t| (t.rows, t.columns))
+        .or(node.items.map(|n| (n, 1)));
+    if let Some((rows, columns)) = size {
         let collection = jni.call_static_object(
             c"android/view/accessibility/AccessibilityNodeInfo$CollectionInfo",
             c"obtain",
             c"(IIZ)Landroid/view/accessibility/AccessibilityNodeInfo$CollectionInfo;",
             &[
-                JValue { i: t.rows as i32 },
-                JValue {
-                    i: t.columns as i32,
-                },
+                JValue { i: rows as i32 },
+                JValue { i: columns as i32 },
                 JValue { z: 0 },
             ],
         )?;
@@ -814,9 +844,13 @@ fn collection_info(jni: &Jni, info: JObject, node: &Node) -> Option<()> {
             &[JValue { l: collection }],
         )?;
     }
-    if let Some(c) = node.cell
-        && matches!(node.role, A11yRole::Cell | A11yRole::ColumnHeader)
-    {
+    let cell = match (node.cell, node.place) {
+        (Some(c), _) if matches!(node.role, A11yRole::Cell | A11yRole::ColumnHeader) => Some(c),
+        // A list item: its row, in the list's one column.
+        (_, Some(row)) => Some(A11yCell { row, column: 0 }),
+        _ => None,
+    };
+    if let Some(c) = cell {
         let item = jni.call_static_object(
             c"android/view/accessibility/AccessibilityNodeInfo$CollectionItemInfo",
             c"obtain",

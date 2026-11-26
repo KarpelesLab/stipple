@@ -174,6 +174,25 @@ pub struct AccessCell {
     pub column: usize,
 }
 
+/// Where an item is in its set (a list's items, a tree item and its
+/// siblings), for the "3 of 12" a screen reader reads (AT-SPI's `posinset` /
+/// `setsize`, UIA's `PositionInSet` / `SizeOfSet`, Android's
+/// `CollectionItemInfo`, `aria-posinset` / `aria-setsize`): its index from 0
+/// and the set's size, the items a virtualized list hasn't built included.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct AccessPosition {
+    pub index: usize,
+    pub count: usize,
+}
+
+impl AccessPosition {
+    /// Item `index` (from 0) of `count`.
+    pub fn new(index: usize, count: usize) -> Self {
+        AccessPosition { index, count }
+    }
+}
+
 /// How a node's text is drawn, for the text attributes a screen reader
 /// reports (UIA's `FontName`, `FontSize`, `FontWeight`, `IsItalic`).
 #[derive(Clone, Debug, PartialEq)]
@@ -362,6 +381,9 @@ pub(crate) struct Semantics {
     /// A table cell's (or column header's) column among all its table's
     /// columns (see [`Element::a11y_column`](crate::core::Element::a11y_column)).
     pub column: Option<usize>,
+    /// An item's place in its set (see
+    /// [`Element::a11y_position`](crate::core::Element::a11y_position)).
+    pub position: Option<AccessPosition>,
 }
 
 /// A select's options as its live OS control shows them: their labels, the
@@ -415,6 +437,11 @@ pub struct AccessNode {
     /// [`tree`](crate::widgets::tree) builds), the item before it one level
     /// up is its parent.
     pub level: Option<usize>,
+    /// An item's place in its set, as its widget declares it
+    /// ([`Element::a11y_position`](crate::core::Element::a11y_position)):
+    /// a virtualized list's or tree's rows. Without it, the bridges count
+    /// the item's siblings.
+    pub position: Option<AccessPosition>,
     /// A text field's hint
     /// ([`Element::placeholder`](crate::core::Element::placeholder)), which
     /// screen readers read while it's empty.
@@ -586,6 +613,7 @@ fn build(node: &LayoutNode, cx: &Ctx<'_>, is_root: bool) -> AccessNode {
         labelled_by: sem.and_then(|s| s.labelled_by.clone()),
         controls: sem.and_then(|s| s.controls.clone()),
         level: sem.and_then(|s| s.level),
+        position: sem.and_then(|s| s.position),
         placeholder: sem.and_then(|s| s.placeholder.clone()),
         scroll: scroll_of(node, cx.offsets),
         scroll_bar: None,
@@ -681,6 +709,7 @@ fn scroll_bars_of(node: &LayoutNode, offsets: &HashMap<ScrollId, f64>) -> Vec<Ac
                 labelled_by: None,
                 controls: None,
                 level: None,
+                position: None,
                 placeholder: None,
                 scroll: None,
                 range: None,

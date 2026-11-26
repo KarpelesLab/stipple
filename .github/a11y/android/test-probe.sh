@@ -112,4 +112,13 @@ else
   fail "a scroll forward didn't step the slider"
 fi
 grep -E "probe (range|set progress)" "$log" | sed 's/.*a11yprobe: //' || true
+# A list's items and their place (CollectionInfo, CollectionItemInfo):
+# androiddemo's list ends with three list items, "Note 1" to "Note 3".
+# Noted, not yet required.
+if grep -qE 'probe node .*class=android.widget.ListView .*collection=3x1' "$log" \
+  && grep -qE 'probe node .*text="Note 2" .*item=1,0' "$log"; then
+  echo "a11y probe: the list is a 3x1 collection, \"Note 2\" its item 1"
+else
+  echo "a11y probe: note: no list collection (3x1) with \"Note 2\" at item 1,0"
+fi
 echo "a11y probe: all checks passed"

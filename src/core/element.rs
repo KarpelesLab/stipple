@@ -1529,6 +1529,25 @@ impl Element {
         self
     }
 
+    /// Say this item (a list item, a tree item) is item `index` (from 0) of
+    /// `count` in its set, though only some of them are built (a
+    /// virtualized list's rows, a tree's children of one parent), for the
+    /// "3 of 12" a screen reader reads: AT-SPI's `posinset` / `setsize`,
+    /// UIA's `PositionInSet` / `SizeOfSet`, Android's `CollectionItemInfo`,
+    /// `aria-posinset` / `aria-setsize`.
+    /// [`virtual_list`](crate::widgets::virtual_list) and
+    /// [`tree`](crate::widgets::tree) declare theirs; without it an item's
+    /// place is counted from its siblings.
+    pub fn a11y_position(mut self, index: usize, count: usize) -> Self {
+        self.semantics
+            .get_or_insert_with(Semantics::default)
+            .position = Some(crate::core::AccessPosition::new(
+            index,
+            count.max(index + 1),
+        ));
+        self
+    }
+
     /// Say this element shows a value along a range (a slider's position, a
     /// progress bar's fraction, a number input's number), which screen
     /// readers read and, for a slider or a spin button, set: UIA's

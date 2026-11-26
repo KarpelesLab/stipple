@@ -541,6 +541,9 @@ export async function start(canvas, wasmUrl, options = {}) {
     attr(el, "aria-checked", node.c === undefined ? null : node.c ? "true" : "false");
     attr(el, "aria-placeholder", node.p ?? null);
     attr(el, "aria-level", node.lv ?? null);
+    // An item's place in its set (a virtualized list's, among all its rows).
+    attr(el, "aria-posinset", node.ps ? node.ps[0] : null);
+    attr(el, "aria-setsize", node.ps ? node.ps[1] : null);
     // A slider's, a progress bar's or a spin button's value (a scroll
     // bar's is below).
     attr(el, "aria-valuetext", node.rt ?? null);

@@ -292,7 +292,8 @@ a checkbox or switch; the built-in ones do).
 - **Relations.** A control that controls another (`Element::controls`: a
   select's open list, a tab's panel) has `aria-controls` naming that node's
   element (`ct` and `i` in the JSON); a tree item has its `aria-level`
-  (`lv`).
+  (`lv`), and an item its `aria-posinset` / `aria-setsize` (`ps`, see
+  [positions in a set](../accessibility.md#positions-in-a-set)).
 - **Focus, app to page.** When the app's focus moves to a text field, the
   textarea takes keyboard focus and is labelled by the field's element
   (`aria-labelledby`); for any other focused node, its own element takes it.

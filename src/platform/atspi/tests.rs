@@ -989,6 +989,43 @@ fn relations_name_controls_groups_and_tree_parents() {
     );
     let text = String::from_utf8_lossy(&attrs);
     assert!(text.contains("level") && text.contains('2'), "{text:?}");
+    // Its place among its level's items: 1 of 1.
+    let pairs = str_dict(&attrs);
+    assert!(
+        pairs.contains(&("posinset".into(), "1".into()))
+            && pairs.contains(&("setsize".into(), "1".into())),
+        "{pairs:?}"
+    );
+    // A radio button's in its group: 2 of 2, and no level.
+    let attrs = ok(
+        call(
+            &mut b,
+            &node_path(9, &[2, 1]),
+            "org.a11y.atspi.Accessible",
+            "GetAttributes",
+            Body::new(),
+        ),
+        "a{ss}",
+    );
+    let pairs = str_dict(&attrs);
+    let has = |k: &str, v: &str| pairs.iter().any(|(a, b)| a == k && b == v);
+    assert!(has("posinset", "2") && has("setsize", "2"), "{pairs:?}");
+    assert!(!pairs.iter().any(|(k, _)| k == "level"), "{pairs:?}");
+}
+
+/// An `a{ss}`, as pairs.
+fn str_dict(body: &[u8]) -> Vec<(String, String)> {
+    let mut off = 0;
+    let len = read_u32(body, &mut off).unwrap() as usize;
+    crate::platform::a11y::align_to(&mut off, 8);
+    let end = off + len;
+    let mut out = Vec::new();
+    while off < end {
+        crate::platform::a11y::align_to(&mut off, 8);
+        let k = read_string(body, &mut off).unwrap();
+        out.push((k, read_string(body, &mut off).unwrap()));
+    }
+    out
 }
 
 /// Window > [Slider "Volume" (0.5 of 0..1), ProgressBar "Loading",

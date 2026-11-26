@@ -100,12 +100,49 @@ works the relations out once for every bridge):
 | Platform | Labels | Controls | Groups and tree items |
 | --- | --- | --- | --- |
 | Linux (AT-SPI) | `labelled-by` / `label-for` | `controller-for` / `controlled-by` | `member-of`; `node-child-of` / `node-parent-of`, and a tree item's `level` attribute |
-| Windows (UIA) | (the field's name is its caption) | `ControllerFor` | a tree item's `Level`; UIA fills in `PositionInSet` / `SizeOfSet` from the siblings |
+| Windows (UIA) | (the field's name is its caption) | `ControllerFor` | a tree item's `Level` |
 | macOS | `AXTitleUIElement` / `AXServesAsTitleForUIElements` | `AXLinkedUIElements` | an outline row's `AXDisclosureLevel`, `AXDisclosedByRow`, `AXDisclosedRows` |
 | Web | (the field's name is its caption) | `aria-controls` | a tree item's `aria-level` |
 
 Ids are matched within a window's tree. Nothing is inferred beyond the
 above: a label beside a field without them isn't related to it.
+
+### Positions in a set
+
+An item (a list item, tree item, tab, radio button or menu item) says where
+it is in its set, the "3 of 12" a screen reader reads.
+`platform::access::position` works it out once for every bridge
+(`A11yNode::set_position`): what its widget declares
+(`Element::a11y_position(index, count)`, `AccessNode::position`), else
+counted from the tree: a radio button in its group (as member-of), a flat
+tree's item among the items of its level between its parent item and the
+next item a level up, any other item among the items of its role under the
+nearest list, tree (or tree item), tab list or menu, through the groups
+between. A virtualized list builds only the rows in view, so
+`virtual_list` declares each row's place among all of them, and `tree`
+each row's among its parent's children (the rows not built counted too).
+
+| Platform | An item's place |
+| --- | --- |
+| Linux (AT-SPI) | the `posinset` and `setsize` object attributes (as GTK and Chromium give them), beside a tree item's `level` |
+| Windows (UIA) | `PositionInSet` and `SizeOfSet` (Windows 10 1703 properties; UIA's own count of same-typed siblings would miss the rows not built) |
+| Android | a list's `CollectionInfo` (its items, one column) and each list item's `CollectionItemInfo` (its row) |
+| Web | `aria-posinset` and `aria-setsize` |
+| macOS | not exposed: AppKit has no such attribute outside WebKit (VoiceOver counts an `AXList`'s or `AXOutline`'s rows itself); a tree item's level is its `AXDisclosureLevel` |
+| iOS | not exposed: UIAccessibility has no such property (VoiceOver reads a data table's row and column, not a list item's place) |
+
+App tests (`src/a11y_relations_tests.rs`, `src/widgets/virtual_list_tests.rs`)
+check a tree's items, a radio group, a tab bar and a virtualized list's row
+5000 of 10000; unit tests cover the counting and the AT-SPI, UIA and ARIA
+encodings. CI (non-blocking until they have passed on master): *Positions
+in a set through AT-SPI (X11)* reads widgetsdemo's "Format" chips and the
+media browser's "Music" folder from outside (passing locally under Xvfb),
+`uiademo --positions` reads `PositionInSet` / `SizeOfSet` through the
+providers' COM interfaces (the managed UIA client can't name them), the web
+selftest notes an open menu's item's `aria-posinset`, and the Android probe
+notes `androiddemo`'s list (three "Note" items after its rows) as a 3x1
+collection. Each passed in a CI scratch run (the web's open menu reads
+"Add ten" 1 of 1; the Android list 3x1 with "Note 2" at row 1).
 
 ### Scroll bars
 
@@ -335,8 +372,9 @@ the scroll math and the events a swap plans are worked out without COM in
 - **ExpandCollapse** on what expands and on selects (a tree item opens with
   a click and the arrow key its tree takes).
 - **Relations** (`uia/relations.rs`): `ControllerFor` names the elements a
-  node controls (a select's open list, a tab's panel) and a tree item has its
-  `Level` (see [Relations](#relations)). Invoke, Toggle, SelectionItem and
+  node controls (a select's open list, a tab's panel), a tree item has its
+  `Level` (see [Relations](#relations)) and an item its `PositionInSet` /
+  `SizeOfSet` (see [Positions in a set](#positions-in-a-set)). Invoke, Toggle, SelectionItem and
   ExpandCollapse on a node scrolled out of view scroll it into view before
   their click (`uiademo --relations` checks the properties and a scrolled
   Invoke in-process, in a required step).
@@ -642,7 +680,8 @@ and later, `ACTION_SHOW_ON_SCREEN` on a node inside a container that
 scrolls, which scrolls it into view), a slider's, progress bar's or number
 input's `RangeInfo` (a slider set with `ACTION_SET_PROGRESS` or stepped by
 scroll forward and backward, and `TYPE_VIEW_SELECTED` when it moved), a
-table's `CollectionInfo` and its cells' `CollectionItemInfo`, and the caption
+table's `CollectionInfo` and its cells' `CollectionItemInfo` (and a list's,
+with each item's row: [positions in a set](#positions-in-a-set)), and the caption
 a control is labelled by (`setLabeledBy`). A click, focus or select on a node
 scrolled out of view brings it into view first, then taps it there. See
 [the Android page](platforms/android.md#accessibility).
@@ -719,8 +758,9 @@ focus to a control in it that is scrolled out of view, the page scrolls the
 app's container to show it (a wheel at the container's middle), and a click
 (a screen reader's activation) on one does so before clicking it where it
 then is. ARIA has no scroll role or action, so nothing else is exposed. A
-control that controls another has `aria-controls` naming its element, and a
-tree item its `aria-level`. A range's element has `aria-valuenow`,
+control that controls another has `aria-controls` naming its element, a
+tree item its `aria-level`, and an item its `aria-posinset` and
+`aria-setsize`. A range's element has `aria-valuenow`,
 `aria-valuemin`, `aria-valuemax` and `aria-valuetext` (not settable from a
 screen reader: ARIA has no way to), a table's `aria-rowcount` and
 `aria-colcount`, a row's and a cell's `aria-rowindex` and `aria-colindex`,
@@ -818,7 +858,8 @@ or `zbus`).
   its open list, a tab and its panel), `member-of` (a radio group, the
   whole group as GTK reports it) and `node-child-of` / `node-parent-of`
   (a tree item's parent), with a tree item's depth as its `level`
-  attribute. An action or `GrabFocus` on a node scrolled out of view brings
+  attribute and an item's place in its set as its `posinset` and `setsize`
+  ones. An action or `GrabFocus` on a node scrolled out of view brings
   it into view first.
 - **Events.** Swapping a tree raises what changed, node by node at the same
   place: `object:property-change:accessible-name` (and `…-role`),

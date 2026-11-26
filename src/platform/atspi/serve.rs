@@ -719,17 +719,26 @@ fn node(b: &Bridge, n: &Node, m: &Message) -> (Reply, Option<Vec<Event>>) {
                         ("container-live", "polite"),
                         ("atomic", "true"),
                     ]);
-                } else if let Some(level) = n
-                    .win
-                    .root
-                    .as_deref()
-                    .and_then(|root| root.tree_level(&n.chain))
-                {
-                    // A tree item's depth, 1 at the top (as `aria-level`).
-                    let level = level.to_string();
-                    r.str_dict(&[("toolkit", "Stipple"), ("level", &level)]);
                 } else {
-                    r.str_dict(&[("toolkit", "Stipple")]);
+                    // A tree item's depth, 1 at the top (as `aria-level`),
+                    // and an item's place in its set (`aria-posinset`,
+                    // `aria-setsize`), as GTK and Chromium name them.
+                    let root = n.win.root.as_deref();
+                    let level = root.and_then(|root| root.tree_level(&n.chain));
+                    let place = root.and_then(|root| root.set_position(&n.chain));
+                    let owned: Vec<(&str, String)> = level
+                        .map(|l| ("level", l.to_string()))
+                        .into_iter()
+                        .chain(place.into_iter().flat_map(|p| {
+                            [
+                                ("posinset", p.position.to_string()),
+                                ("setsize", p.size.to_string()),
+                            ]
+                        }))
+                        .collect();
+                    let mut items = vec![("toolkit", "Stipple")];
+                    items.extend(owned.iter().map(|(k, v)| (*k, v.as_str())));
+                    r.str_dict(&items);
                 }
             }),
             "GetApplication" => ret("(so)", |r| {

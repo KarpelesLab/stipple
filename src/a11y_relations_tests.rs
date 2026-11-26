@@ -1,7 +1,8 @@
 //! Relations between nodes, and acting on a node scrolled out of view, as
 //! assistive technologies see them through an [`App`]: an open select
 //! controls its list, a tab bar's selected tab its panel, choice chips are
-//! one radio group, a tree's items know their parents; and a screen
+//! one radio group, a tree's items know their parents (and every item its
+//! place in its set); and a screen
 //! reader's activation of an item scrolled out of its list brings it into
 //! view and presses that item (not what is drawn where it would be).
 
@@ -177,6 +178,27 @@ fn tree_items_know_their_level_and_parent() {
     );
     assert_eq!(tree.relations(&file).node_child_of, Some(a.clone()));
     assert_eq!(tree.relations(&b).node_child_of, Some(root));
+}
+
+#[test]
+fn items_know_their_place_in_their_set() {
+    use crate::platform::A11yRole;
+    let mut app = form_app();
+    let tree = platform_tree(&mut app);
+    let place = |role, name: &str| {
+        let at = tree.set_position(&named(&tree, role, name)).unwrap();
+        (at.position, at.size)
+    };
+    // The tree's items among their parent's children, as `tree` declares.
+    assert_eq!(place(A11yRole::TreeItem, "Node 1"), (1, 1));
+    assert_eq!(place(A11yRole::TreeItem, "Node 2"), (1, 2));
+    assert_eq!(place(A11yRole::TreeItem, "Node 3"), (2, 2));
+    assert_eq!(place(A11yRole::TreeItem, "Node 4"), (1, 1));
+    // Counted from the siblings: a radio group, a tab bar.
+    assert_eq!(place(A11yRole::RadioButton, "JPEG"), (2, 3));
+    assert_eq!(place(A11yRole::Tab, "Two"), (2, 2));
+    let combo = path_to(&tree, &|n| n.role == A11yRole::ComboBox).unwrap();
+    assert_eq!(tree.set_position(&combo), None);
 }
 
 #[derive(Default)]

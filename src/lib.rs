@@ -5410,6 +5410,12 @@ pub(crate) fn to_platform_a11y(node: &crate::core::AccessNode) -> crate::platfor
         labelled_by: node.labelled_by.clone(),
         controls: node.controls.clone(),
         level: node.level,
+        position: node
+            .position
+            .map(|p| crate::platform::access::A11yPosition {
+                index: p.index,
+                count: p.count,
+            }),
         placeholder: node.placeholder.clone(),
         scroll: node.scroll.map(scroll),
         scroll_bar: node.scroll_bar.map(scroll),

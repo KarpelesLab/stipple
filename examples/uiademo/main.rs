@@ -10,11 +10,19 @@
 //! Toggle, Selection, SelectionItem, ExpandCollapse, Scroll, ScrollItem and
 //! Text with its ranges), each through the interface `GetPatternProvider`
 //! hands out. With `--relations`, the relation properties (`ControllerFor`,
-//! a tree item's `Level`) and an Invoke on an item scrolled out of view.
+//! a tree item's `Level`) and an Invoke on an item scrolled out of view;
+//! with `--positions`, those and items' `PositionInSet` / `SizeOfSet`.
 
 fn main() {
     #[cfg(target_os = "windows")]
     {
+        if std::env::args().any(|a| a == "--positions") {
+            if let Err(e) = stipple::platform::uia::selftest_positions() {
+                eprintln!("UIA positions selftest failed: {e}");
+                std::process::exit(1);
+            }
+            return;
+        }
         if std::env::args().any(|a| a == "--relations") {
             if let Err(e) = stipple::platform::uia::selftest_relations() {
                 eprintln!("UIA relations selftest failed: {e}");

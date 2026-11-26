@@ -3381,6 +3381,19 @@ jobs:
           .\target\release\examples\uiademo.exe --relations
           if ($LASTEXITCODE -ne 0) { throw "uiademo --relations failed" }
 
+      # Items' place in their set in-process (uiademo --positions): a list
+      # item's PositionInSet / SizeOfSet, a flat tree item's among its
+      # level's items (the managed System.Windows.Automation client has no
+      # property for them, so it can't read them from outside). Non-blocking
+      # until it has passed on master.
+      - name: UI Automation positions in a set
+        continue-on-error: true
+        shell: powershell
+        run: |
+          cargo build --release --example uiademo
+          .\target\release\examples\uiademo.exe --positions
+          if ($LASTEXITCODE -ne 0) { throw "uiademo --positions failed" }
+
       # Range values, a table, a caption and text attributes from outside the
       # app (.github/scripts/uia-ranges.ps1, touchdemo with TOUCHDEMO_RANGES):
       # the slider's RangeValue (set, with its property-changed event), the
@@ -3981,6 +3994,15 @@ jobs:
           chrome --force-dark-mode --timeout=8000 --window-size=900,420 \
             --screenshot="$PWD/visual_output/stipple-web-multi.png" "http://localhost:8000/multi.html" || true
           shot visual_output/stipple-web-multi.png || echo "::warning::the two-app screenshot caught the page before it drew"
+
+      # An open menu's items carry their place in it (aria-posinset /
+      # aria-setsize), noted by the selftest where the long press opened the
+      # menu. Non-blocking until it has passed on master.
+      - name: ARIA positions in a set
+        continue-on-error: true
+        shell: bash
+        run: |
+          grep -E 'aria-posinset: "Add ten" [0-9]+ of [0-9]+' visual_output/web-selftest*.txt
 
       - name: Stop server
         if: always()
@@ -5140,6 +5162,18 @@ jobs:
             visual_output "controls radios" -- target/release/examples/widgetsdemo
           DISPLAY=:99 dbus-run-session -- bash .github/scripts/atspi-relations.sh \
             visual_output "tree=Music" -- target/release/examples/mediabrowser --sample --select Music/chime.wav
+
+      # Items' place in their set (the "posinset" and "setsize" attributes,
+      # as GTK and Chromium give them): widgetsdemo's "Format" chips in their
+      # radio group, and the media browser's "Music" folder among its
+      # parent's items. Non-blocking until it has passed on master.
+      - name: Positions in a set through AT-SPI (X11)
+        continue-on-error: true
+        run: |
+          DISPLAY=:99 dbus-run-session -- bash .github/scripts/atspi-relations.sh \
+            visual_output "places" -- target/release/examples/widgetsdemo
+          DISPLAY=:99 dbus-run-session -- bash .github/scripts/atspi-relations.sh \
+            visual_output "places=Music" -- target/release/examples/mediabrowser --sample --select Music/chime.wav
 
       # The accessibility bus found from the X root window's AT_SPI_BUS
       # property alone, with no session bus for the app to ask (as libatspi

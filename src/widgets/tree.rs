@@ -134,6 +134,26 @@ fn flatten(model: &dyn TreeModel, state: &TreeState) -> Vec<Flat> {
     out
 }
 
+/// Each visible node's place among its parent's children: its index and
+/// how many there are (the rows not built counted too).
+fn sibling_places(flat: &[Flat]) -> Vec<(usize, usize)> {
+    // Keyed by the parent's index + 1 (0 for the roots).
+    let key = |f: &Flat| f.parent.map_or(0, |p| p + 1);
+    let mut counts = vec![0usize; flat.len() + 1];
+    let places: Vec<usize> = flat
+        .iter()
+        .map(|f| {
+            let c = &mut counts[key(f)];
+            *c += 1;
+            *c - 1
+        })
+        .collect();
+    flat.iter()
+        .zip(places)
+        .map(|(f, i)| (i, counts[key(f)]))
+        .collect()
+}
+
 /// Collapse the node at `pos`, moving the selection to it if it was on one of
 /// its descendants (which are about to disappear).
 fn collapse(state: &mut TreeState, flat: &[Flat], pos: usize) {
@@ -350,6 +370,7 @@ pub fn tree<S: 'static>(
     state
         .turns
         .with(|turns| turns.retain(|(id, _, _)| window.range.clone().any(|i| flat[i].id == *id)));
+    let places = sibling_places(&flat);
     let mut built = Vec::with_capacity(window.range.len());
     for index in window.range.clone() {
         let node = flat[index];
@@ -417,6 +438,7 @@ pub fn tree<S: 'static>(
             .gap(theme.spacing.xs)
             .role(Role::TreeItem)
             .a11y_level(node.depth + 1)
+            .a11y_position(places[index].0, places[index].1)
             .selected(row.selected);
         if node.has_children {
             el = el.expanded(node.expanded);

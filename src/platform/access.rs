@@ -132,6 +132,15 @@ pub struct A11yCell {
     pub column: usize,
 }
 
+/// An item's place in its set, as declared — mirrors
+/// `stipple::core::AccessPosition` (`index` from 0). What the bridges
+/// report is [`A11yNode::set_position`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct A11yPosition {
+    pub index: usize,
+    pub count: usize,
+}
+
 /// How a node's text is drawn — mirrors `stipple::core::AccessFont`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct A11yFont {
@@ -175,6 +184,9 @@ pub struct A11yNode {
     pub controls: Option<String>,
     /// A tree item's depth, 1 for the top level.
     pub level: Option<usize>,
+    /// An item's place in its set, when its widget declares it (a
+    /// virtualized list's rows); see [`set_position`](Self::set_position).
+    pub position: Option<A11yPosition>,
     /// A text field's hint, read while it's empty.
     pub placeholder: Option<String>,
     /// For a scroll container, where it is scrolled.
@@ -218,6 +230,7 @@ impl A11yNode {
             labelled_by: None,
             controls: None,
             level: None,
+            position: None,
             placeholder: None,
             scroll: None,
             scroll_bar: None,
@@ -435,12 +448,15 @@ impl A11yNode {
 
 mod actions;
 mod changes;
+mod position;
 mod relations;
 mod reveal;
 #[allow(unused_imports)]
 pub(crate) use actions::{editable, number_text};
 #[allow(unused_imports)]
 pub(crate) use changes::{A11yChange, changes};
+#[allow(unused_imports)]
+pub(crate) use position::SetPosition;
 #[allow(unused_imports)]
 pub(crate) use relations::Relations;
 
@@ -510,7 +526,7 @@ pub(crate) fn aria_json(node: &A11yNode) -> String {
         }
         out.push('"');
     }
-    fn node_json(out: &mut String, n: &A11yNode) {
+    fn node_json(out: &mut String, root: &A11yNode, path: &mut Vec<usize>, n: &A11yNode) {
         let role = match aria_role(n.role) {
             "group" if n.name.is_empty() => "",
             role => role,
@@ -558,6 +574,10 @@ pub(crate) fn aria_json(node: &A11yNode) -> String {
         if let (A11yRole::TreeItem, Some(level)) = (n.role, n.level) {
             let _ = write!(out, ",\"lv\":{level}");
         }
+        // An item's place in its set (`aria-posinset`, `aria-setsize`).
+        if let Some(p) = root.set_position(path) {
+            let _ = write!(out, ",\"ps\":[{},{}]", p.position, p.size);
+        }
         if let Some(s) = n.scroll {
             let _ = write!(
                 out,
@@ -597,14 +617,16 @@ pub(crate) fn aria_json(node: &A11yNode) -> String {
                 if i > 0 {
                     out.push(',');
                 }
-                node_json(out, c);
+                path.push(i);
+                node_json(out, root, path, c);
+                path.pop();
             }
             out.push(']');
         }
         out.push('}');
     }
     let mut out = String::new();
-    node_json(&mut out, node);
+    node_json(&mut out, node, &mut Vec::new(), node);
     out
 }
 
@@ -809,7 +831,7 @@ mod tests {
                 r#"{"r":"","n":"Say \"hi\"\\\u000a","b":[0,0,0,0],"f":0},"#,
                 r#"{"r":"textbox","n":"abc","b":[1,3,30,10],"f":1,"p":"Name"},"#,
                 r#"{"r":"checkbox","n":"Bold","b":[0,0,0,0],"f":0,"c":1},"#,
-                r#"{"r":"treeitem","n":"src","b":[0,0,0,0],"f":0,"s":1,"e":0,"lv":2},"#,
+                r#"{"r":"treeitem","n":"src","b":[0,0,0,0],"f":0,"s":1,"e":0,"lv":2,"ps":[1,1]},"#,
                 r#"{"r":"combobox","n":"Pick","b":[0,0,0,0],"f":0,"ct":"menu"},"#,
                 r#"{"r":"listbox","n":"","b":[0,0,0,0],"f":0,"i":"menu"},"#,
                 r#"{"r":"","n":"","b":[0,0,0,0],"f":0,"sc":[12,300,0,0]}]}"#,
