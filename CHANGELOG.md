@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.11](https://github.com/KarpelesLab/stipple/compare/stipple-v0.0.10...stipple-v0.0.11) - 2026-11-27
+
+### Added
+
+- *(linux)* static, libc-free builds (fullrust), and static musl
+- *(a11y)* text attribute runs in rich text, on every bridge
+- *(ios)* data tables, captions, and acting on what's scrolled out of view
+- *(a11y)* items' positions in their set on every bridge that has them
+- *(table)* scroll wide tables sideways, header following, frozen columns
+- *(package)* Android libraries (AARs, jars) and the app's own resources, no Gradle
+- *(dialog)* folder picker on iOS and Android, a Folder read and written by name
+- *(assets)* Assets::open_fd hands an asset out as a file range
+- *(a11y)* range values, tables, captions and text attributes on every bridge
+- *(a11y)* relations, the X root window's AT_SPI_BUS, and acting on what's scrolled out of view
+- *(scroll-bar)* hold-to-page, arrow buttons, two-way areas, accessibility roles, skins
+- *(window)* windows reopen where they were left (App::remember_window)
+- *(window)* app badge and progress on the Windows taskbar and the Linux launcher
+- *(window)* window size limits follow the content's layout
+- *(text)* emoji sequences as one glyph: morx for Apple Color Emoji, GSUB fixes for Segoe and Noto ([#76](https://github.com/KarpelesLab/stipple/pull/76))
+- *(video)* H.264 and HEVC through Media Foundation (Windows) and MediaCodec (Android)
+- *(widgets)* long lines scroll sideways in text_view ([#90](https://github.com/KarpelesLab/stipple/pull/90))
+- *(widgets)* regex find in text_view ([#90](https://github.com/KarpelesLab/stipple/pull/90))
+- *(widgets)* inline completion in the combo box ([#85](https://github.com/KarpelesLab/stipple/pull/85))
+- *(platform)* D-Bus activation of a single instance, and cargo stipple linux ([#88](https://github.com/KarpelesLab/stipple/pull/88))
+- *(wayland)* owned windows are xdg-dialog-v1 dialogs, modal ones set_modal ([#81](https://github.com/KarpelesLab/stipple/pull/81))
+
+### Fixed
+
+- *(ios)* link a simulator build's entitlements into its executable, so the Keychain works; require the round trip
+- *(touchdemo)* the field's "Note" caption on macOS too
+- *(secure-store)* an unsigned macOS process reads the login keychain from its first call
+- *(api)* WindowPlacement is #[non_exhaustive] with a builder; AccessRange::between(min, max).value(v) replaces new(value, min, max)
+- *(camera)* Android's reader is deleted only once no frame callback runs
+- *(gpu)* NVIDIA samples its own tiled dma-bufs and udmabufs on Vulkan and GLES (6g)
+
+### Other
+
+- load system libraries through dlsym
+- update screenshots from CI
+- drop a committed __pycache__ file and ignore them
+- update screenshots from CI
+- *(android)* click the floating edit menu's Copy through an accessibility service, and require it
+- the CI checks that became required, and the fixed macOS/iOS ones
+- make the non-blocking checks that passed in every recent run required
+- *(ios)* open the URLs through XCUITest; print nativegallery's text trace
+- update screenshots from CI
+- *(text, window)* plain text skips the emoji-sequence scan; cheap shape-cache hits; size limits kept while the view measures alike
+- update screenshots from CI
+- update screenshots from CI
+- *(a11y)* hold a keyboard in sway's seat for the AT-SPI walk; the depth walk scrolls to the end before "Row 20"
+- quote the macOS Dock progress step's run line (invalid YAML broke every Visual run)
+- update screenshots from CI
+- update screenshots from CI
+
 ## [0.0.10](https://github.com/KarpelesLab/stipple/compare/stipple-v0.0.9...stipple-v0.0.10) - 2026-11-20
 
 ### Added
