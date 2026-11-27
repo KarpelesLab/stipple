@@ -381,7 +381,7 @@ pub(crate) enum Op {
     Folder,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "fullrust"))]
 mod backend {
     use super::{Op, PathBuf};
 
@@ -408,7 +408,12 @@ mod backend;
 #[path = "macos.rs"]
 mod backend;
 
-#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
+#[cfg(not(any(
+    target_os = "linux",
+    target_os = "fullrust",
+    target_os = "windows",
+    target_os = "macos"
+)))]
 mod backend {
     use super::{Op, PathBuf};
 

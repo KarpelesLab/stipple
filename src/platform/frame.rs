@@ -488,6 +488,7 @@ fn log_summary(now: Instant, stats: FrameStats) {
 #[cfg_attr(
     not(any(
         target_os = "linux",
+        target_os = "fullrust",
         target_os = "macos",
         target_os = "ios",
         all(target_os = "android", feature = "vk")
@@ -526,7 +527,10 @@ pub(crate) fn note_display(took: Duration) {
 }
 
 /// Whether a frame has been asked for and not yet delivered.
-#[cfg_attr(not(any(test, target_os = "linux")), allow(dead_code))]
+#[cfg_attr(
+    not(any(test, target_os = "linux", target_os = "fullrust")),
+    allow(dead_code)
+)]
 pub(crate) fn wanted() -> bool {
     clock(|c| c.wanted.is_some())
 }
@@ -559,7 +563,10 @@ pub(crate) fn idle() {
 
 /// For a source that only ticks when asked as it presents (Wayland's frame
 /// callback): it has been asked for the outstanding frame.
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "fullrust")),
+    allow(dead_code)
+)]
 pub(crate) fn claim() {
     clock(|c| {
         if c.wanted.is_some() {
@@ -592,7 +599,10 @@ pub(crate) fn install(
 
 /// Take the display source away (it can no longer tick: the window it
 /// watched is gone): the timer paces frames from now on.
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "fullrust")),
+    allow(dead_code)
+)]
 pub(crate) fn uninstall() {
     if let Ok(mut s) = SOURCE.lock() {
         *s = None;
@@ -604,7 +614,12 @@ pub(crate) fn uninstall() {
 /// Set the display's refresh interval, which paces the fallback timer.
 /// Values outside 2–100 ms (500 Hz to 10 Hz) are ignored as implausible.
 #[cfg_attr(
-    not(any(target_os = "linux", target_os = "macos", target_os = "ios")),
+    not(any(
+        target_os = "linux",
+        target_os = "fullrust",
+        target_os = "macos",
+        target_os = "ios"
+    )),
     allow(dead_code)
 )]
 pub(crate) fn set_interval(interval: Duration) {

@@ -28,7 +28,7 @@ mod apple;
 #[allow(unsafe_code)]
 mod windows;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "fullrust"))]
 mod linux;
 
 /// The Android backend's file format (the store itself is in the Android
@@ -221,7 +221,10 @@ fn credential_name(service: &str, key: &str) -> String {
 
 /// A line to stderr under `STIPPLE_DEBUG_SECURE_STORE=1`: which store a
 /// backend chose, and why.
-#[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "macos", target_os = "linux", target_os = "fullrust")),
+    allow(dead_code)
+)]
 fn debug(msg: &str) {
     if std::env::var_os("STIPPLE_DEBUG_SECURE_STORE").is_some_and(|v| v == "1") {
         eprintln!("stipple: secure store: {msg}");
@@ -236,7 +239,7 @@ use apple as os;
 #[cfg(target_os = "windows")]
 use windows as os;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "fullrust"))]
 use linux as os;
 
 #[cfg(target_os = "android")]
@@ -249,6 +252,7 @@ mod os {
     target_os = "ios",
     target_os = "windows",
     target_os = "linux",
+    target_os = "fullrust",
     target_os = "android"
 )))]
 mod os {

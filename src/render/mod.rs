@@ -69,9 +69,9 @@ pub use scene::{DrawCmd, Scene};
 /// shared handle, an `AHardwareBuffer`), drawn without a copy: see
 /// [`ExternalImage`] and `docs/gpu.md`.
 pub mod external {
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(any(target_os = "linux", target_os = "fullrust", target_os = "android"))]
     pub use crate::platform::external::DmaBufPlane;
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "fullrust"))]
     pub use crate::platform::external::udmabuf;
     pub use crate::platform::external::{
         DRM_FORMAT_MOD_INVALID, DRM_FORMAT_MOD_LINEAR, ExternalError, ExternalFormat,

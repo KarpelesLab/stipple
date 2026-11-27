@@ -178,6 +178,7 @@ pub(crate) fn utc_offset(unix_secs: i64) -> i32 {
         not(test),
         any(
             target_os = "linux",
+            target_os = "fullrust",
             target_os = "macos",
             target_os = "ios",
             target_os = "android"
@@ -199,6 +200,7 @@ pub(crate) fn utc_offset(unix_secs: i64) -> i32 {
         not(test),
         not(any(
             target_os = "linux",
+            target_os = "fullrust",
             target_os = "macos",
             target_os = "ios",
             target_os = "android",
@@ -216,6 +218,7 @@ pub(crate) fn utc_offset(unix_secs: i64) -> i32 {
     not(test),
     any(
         target_os = "linux",
+        target_os = "fullrust",
         target_os = "macos",
         target_os = "ios",
         target_os = "android"
@@ -276,7 +279,7 @@ fn query() -> OsLocale {
     {
         crate::platform::backend::android::locale().unwrap_or_else(|| from_env(env))
     }
-    #[cfg(all(not(test), target_os = "linux"))]
+    #[cfg(all(not(test), any(target_os = "linux", target_os = "fullrust")))]
     {
         let mut os = from_env(env);
         os.formats.hour_cycle = linux_clock();
@@ -294,6 +297,7 @@ fn query() -> OsLocale {
             target_os = "windows",
             target_os = "android",
             target_os = "linux",
+            target_os = "fullrust",
             target_arch = "wasm32"
         ))
     ))]
@@ -349,7 +353,7 @@ fn from_env(var: impl Fn(&str) -> Option<String>) -> OsLocale {
 
 /// GNOME's clock setting (`org.gnome.desktop.interface clock-format`), read
 /// through the desktop portal.
-#[cfg(all(not(test), target_os = "linux"))]
+#[cfg(all(not(test), any(target_os = "linux", target_os = "fullrust")))]
 fn linux_clock() -> Option<HourCycle> {
     let mut bus = crate::platform::a11y::DBus::connect_session().ok()?;
     match bus

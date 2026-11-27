@@ -69,7 +69,10 @@ impl Payload {
     }
 
     /// Whether there is nothing to offer.
-    #[cfg_attr(not(any(target_os = "linux", target_os = "freebsd")), allow(dead_code))]
+    #[cfg_attr(
+        not(any(target_os = "linux", target_os = "fullrust", target_os = "freebsd")),
+        allow(dead_code)
+    )]
     pub(crate) fn is_empty(&self) -> bool {
         self.content.text.is_none() && self.content.html.is_none() && self.png.is_none()
     }

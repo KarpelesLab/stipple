@@ -113,7 +113,7 @@ mod os;
 #[allow(unsafe_code)]
 #[path = "ios.rs"]
 mod os;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "fullrust"))]
 #[path = "linux.rs"]
 mod os;
 #[cfg(target_os = "android")]
@@ -124,6 +124,7 @@ mod os;
     target_os = "macos",
     target_os = "ios",
     target_os = "linux",
+    target_os = "fullrust",
     target_os = "android"
 )))]
 #[path = "fallback.rs"]
@@ -212,7 +213,7 @@ pub(crate) fn motion_scale() -> f64 {
 /// signal (the color scheme, the accent, and the animation setting). Elsewhere the backends hear about changes themselves, so this does
 /// nothing. Safe to call more than once.
 pub(crate) fn watch() {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "fullrust"))]
     os::watch();
 }
 
@@ -241,6 +242,7 @@ static CHANGED: AtomicBool = AtomicBool::new(false);
         target_os = "macos",
         target_os = "ios",
         target_os = "linux",
+        target_os = "fullrust",
         target_os = "android"
     )),
     allow(dead_code)

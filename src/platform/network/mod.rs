@@ -19,8 +19,11 @@ pub(crate) mod android_caps;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 #[cfg_attr(test, allow(dead_code))]
 mod apple;
-#[cfg(any(target_os = "linux", test))]
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg(any(target_os = "linux", target_os = "fullrust", test))]
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "fullrust")),
+    allow(dead_code)
+)]
 pub(crate) mod linux;
 #[cfg(any(target_os = "windows", test))]
 #[cfg_attr(any(test, not(target_os = "windows")), allow(dead_code))]
@@ -233,7 +236,7 @@ fn platform_start() -> bool {
     {
         true
     }
-    #[cfg(all(not(test), target_os = "linux"))]
+    #[cfg(all(not(test), any(target_os = "linux", target_os = "fullrust")))]
     {
         linux::start();
         true
@@ -258,6 +261,7 @@ fn platform_start() -> bool {
         not(test),
         not(any(
             target_os = "linux",
+            target_os = "fullrust",
             target_os = "macos",
             target_os = "ios",
             target_os = "windows",

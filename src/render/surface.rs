@@ -113,7 +113,13 @@ impl Pixmap {
 /// as `(x, y, width, height)`, rounded outwards and clipped to it; the whole
 /// pixmap when `damage` is empty.
 #[cfg_attr(
-    not(any(target_os = "macos", target_os = "windows", target_os = "linux", test)),
+    not(any(
+        target_os = "macos",
+        target_os = "windows",
+        target_os = "linux",
+        target_os = "fullrust",
+        test
+    )),
     allow(dead_code)
 )]
 pub(crate) fn damage_rects(size: PhysicalSize, damage: &[Rect]) -> Vec<(u32, u32, u32, u32)> {
@@ -144,7 +150,13 @@ pub(crate) fn damage_rects(size: PhysicalSize, damage: &[Rect]) -> Vec<(u32, u32
 /// the colors premultiplied by it, as compositors take them; without, every
 /// pixel is opaque (alpha 255, the colors as they are).
 #[cfg_attr(
-    not(any(target_os = "macos", target_os = "windows", target_os = "linux", test)),
+    not(any(
+        target_os = "macos",
+        target_os = "windows",
+        target_os = "linux",
+        target_os = "fullrust",
+        test
+    )),
     allow(dead_code)
 )]
 pub(crate) fn copy_as_bgra(
@@ -182,7 +194,13 @@ pub(crate) fn copy_as_bgra(
 /// A straight-alpha `[r, g, b, a]` pixel as premultiplied `[b, g, r, a]`, the
 /// form a compositor blends a translucent window's pixels in.
 #[cfg_attr(
-    not(any(target_os = "macos", target_os = "windows", target_os = "linux", test)),
+    not(any(
+        target_os = "macos",
+        target_os = "windows",
+        target_os = "linux",
+        target_os = "fullrust",
+        test
+    )),
     allow(dead_code)
 )]
 #[inline]

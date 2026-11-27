@@ -80,7 +80,30 @@ struct Alsa {
     thread: Option<std::thread::JoinHandle<()>>,
 }
 
+/// Whether the sound server is PulseAudio itself (its socket, without
+/// PipeWire's next to it), so ALSA's `default` is likely its plugin.
+///
+/// In a static fullrust build every thread calls into the loaded libraries
+/// under one borrowed thread identity, and libpulse's priority-inheriting
+/// mutexes, which the kernel checks against the real thread, abort the
+/// process there; the null output plays instead.
+#[cfg(target_os = "fullrust")]
+fn pulseaudio_server() -> bool {
+    if std::env::var_os("PULSE_SERVER").is_some() {
+        return true;
+    }
+    let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR") else {
+        return false;
+    };
+    let dir = std::path::Path::new(&dir);
+    dir.join("pulse/native").exists() && !dir.join("pipewire-0").exists()
+}
+
 pub(super) fn open(make: &mut dyn FnMut(u32) -> Render) -> Option<Box<dyn Device>> {
+    #[cfg(target_os = "fullrust")]
+    if pulseaudio_server() {
+        return None;
+    }
     let lib = lib()?;
     let mut pcm: Pcm = std::ptr::null_mut();
     unsafe {

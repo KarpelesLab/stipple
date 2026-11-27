@@ -394,14 +394,14 @@ pub(crate) fn collect(buf: &[u8], routes: &mut Vec<Route>, links: &mut Vec<Link>
     done
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "fullrust"))]
 #[cfg_attr(test, allow(unused_imports))]
 pub(crate) use os::start;
 
-#[cfg(all(target_os = "linux", test))]
+#[cfg(all(any(target_os = "linux", target_os = "fullrust"), test))]
 use os::read;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "fullrust"))]
 #[allow(unsafe_code)]
 #[cfg_attr(test, allow(dead_code))]
 mod os {

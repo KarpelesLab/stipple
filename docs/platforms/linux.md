@@ -88,6 +88,74 @@ surface around it. A compositor without `zwp_linux_dmabuf_v1`, or a driver
 that can't export what the compositor takes, gets the GPU's frames read back
 and presented through `wl_shm`. See [gpu.md](../gpu.md#wayland).
 
+## System libraries
+
+Nothing is linked but the C library: the libraries a feature needs are
+loaded at run time, through the [`dlsym`](https://crates.io/crates/dlsym)
+crate (whose symbols can't outlive their library), and a program without
+them still starts and falls back:
+
+| Library | For | Without it |
+|---|---|---|
+| `libasound.so.2` | audio output (ALSA's `default` device, so PulseAudio or PipeWire) | the null output |
+| `libvulkan.so.1` | the Vulkan renderer (`vk`) | GLES, or the CPU |
+| `libxcb.so.1` | GPU frames presented to an X11 window | frames read back and presented as CPU ones |
+| `libva` | H.264 decode (`video`, through oxideav-vaapi) | software decode where there is one |
+
+(The `gl` feature, EGL and GLES, links `libEGL` and `libGLESv2`.)
+
+## Static builds
+
+A program built for `x86_64-unknown-linux-musl` with a static C library
+runs anywhere, but a static musl can't load libraries: it plays through the
+null output and renders on the CPU, on X11 or Wayland as usual.
+
+[fullrust](https://github.com/KarpelesLab/fullrust)'s
+`x86_64-unknown-linux-fullrust` target builds a static binary with no C
+library at all, and Stipple works there as on Linux: the X11 and Wayland
+backends, the clipboard, drag and drop, AT-SPI and the portals speak their
+protocols over sockets, and the few C functions they call (`poll`, `mmap`,
+`sendmsg`, System V shared memory...) are system calls
+(`src/platform/fullrust.rs`). Libraries load through the system's own
+`ld.so`, which `dlsym` boots on first use (through
+[dldota](https://crates.io/crates/dldota)): **ALSA plays through the system's
+libasound** (and its PulseAudio or PipeWire plugin), as in a normal build.
+Calls into a loaded library are serialized (one thread at a time runs its
+code), so the audio thread's blocking writes hold the others off briefly.
+
+```sh
+# With the toolchain image (or its GitHub action, KarpelesLab/fullrust):
+docker run --rm -v "$PWD":/src ghcr.io/karpeleslab/fullrust:latest \
+    build --release --example audiodemo --features audio
+```
+
+What isn't there in a fullrust build:
+
+- **The GPU renderers.** `gl` links EGL, which a static binary can't, and
+  Vulkan hands back function pointers (`vkGetInstanceProcAddr`) that must
+  each be wrapped to switch the C library's thread pointer, which dlsym 0.1
+  can't do for pointers it didn't look up. Builds with `gpu`, `vk` or `gl`
+  compile, and render on the CPU (`GPU render unavailable ... using
+  software`).
+- **VA-API video decode**: oxideav-vaapi loads libva with the C library's
+  `dlopen`. Video decodes in software where it can.
+- **PulseAudio's ALSA plugin.** Every thread of ours calls into the loaded
+  libraries under one borrowed thread identity (dldota 0.1), and libpulse's
+  mutexes are priority-inheriting, which the kernel checks against the real
+  thread: libpulse aborts (`pa_mutex_unlock`). So where PulseAudio itself
+  is the sound server (its socket, and no PipeWire one), a fullrust build
+  plays through the null output rather than opening ALSA. PipeWire's ALSA
+  plugin (the default on current desktops) and hardware devices play. (A
+  `default` pointed at the pulse plugin on a PipeWire system still aborts:
+  set `STIPPLE_AUDIO=null` there.)
+- The UTC offset comes from the system libc's `localtime_r` (loaded like the
+  rest); with no system loader at all, times are UTC.
+
+CI builds the examples for fullrust and runs `audiodemo --selftest`
+(through ALSA's dummy driver), the todo selftest and the X11 window
+checks under Xvfb, and a static musl build of the same (see
+[ci.md](../ci.md)).
+
 ## Debugging
 
 - `STIPPLE_WAYLAND_DEBUG=1` logs Wayland events, sizes and buffer scales

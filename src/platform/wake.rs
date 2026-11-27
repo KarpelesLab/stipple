@@ -153,7 +153,7 @@ pub(crate) fn install(
 
 /// A self-pipe for Unix backends: [`wake`] writes a byte, and [`wait_readable_until`]
 /// polls it alongside the display connection.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "fullrust"))]
 #[allow(unsafe_code)]
 mod unix {
     use std::sync::OnceLock;
@@ -259,7 +259,7 @@ mod unix {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "fullrust"))]
 pub(crate) use unix::{install as install_unix, wait_readable_until};
 
 #[cfg(test)]

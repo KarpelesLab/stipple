@@ -1004,7 +1004,7 @@ mod tests {
         note_native(&[]);
     }
 
-    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    #[cfg(any(target_os = "linux", target_os = "fullrust", target_os = "windows"))]
     #[test]
     fn desktops_have_no_camera_yet() {
         assert!(Camera::lenses().is_empty());

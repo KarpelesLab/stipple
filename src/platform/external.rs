@@ -54,7 +54,7 @@ pub(crate) mod web;
 mod yuv;
 pub use yuv::YuvColorSpace;
 
-#[cfg(any(target_os = "linux", target_os = "android"))]
+#[cfg(any(target_os = "linux", target_os = "fullrust", target_os = "android"))]
 use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 
 /// How an [`ExternalImage`]'s pixels are laid out. Colors are straight
@@ -198,7 +198,7 @@ pub struct PlaneLayout {
 /// One plane of a `dma-buf` handed to [`ExternalImage::dma_buf`]: the file
 /// descriptor (several planes may share one buffer; each comes with its own
 /// descriptor, a `dup` of it then), and where the plane is in it.
-#[cfg(any(target_os = "linux", target_os = "android"))]
+#[cfg(any(target_os = "linux", target_os = "fullrust", target_os = "android"))]
 #[non_exhaustive]
 #[derive(Debug)]
 pub struct DmaBufPlane {
@@ -207,7 +207,7 @@ pub struct DmaBufPlane {
     pub stride: u32,
 }
 
-#[cfg(any(target_os = "linux", target_os = "android"))]
+#[cfg(any(target_os = "linux", target_os = "fullrust", target_os = "android"))]
 impl DmaBufPlane {
     /// The plane at byte `offset` of the buffer `fd`, rows `stride` bytes
     /// apart.
@@ -249,7 +249,7 @@ pub(crate) enum Handle {
     #[cfg_attr(not(test), allow(dead_code))]
     Pixels,
     /// One descriptor per plane.
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(any(target_os = "linux", target_os = "fullrust", target_os = "android"))]
     DmaBuf(Vec<OwnedFd>),
     /// An `IOSurfaceRef`, retained.
     #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -297,7 +297,7 @@ pub struct ExternalImage {
     planes: Vec<PlaneLayout>,
     modifier: u64,
     color: YuvColorSpace,
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(any(target_os = "linux", target_os = "fullrust", target_os = "android"))]
     acquire: Mutex<Option<OwnedFd>>,
     pixmap: OnceLock<Option<Arc<Pixmap>>>,
     release: Mutex<Option<ReleaseFn>>,
@@ -312,7 +312,7 @@ impl std::fmt::Debug for ExternalImage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let kind = match &self.handle {
             Handle::Pixels => "pixels",
-            #[cfg(any(target_os = "linux", target_os = "android"))]
+            #[cfg(any(target_os = "linux", target_os = "fullrust", target_os = "android"))]
             Handle::DmaBuf(_) => "dma-buf",
             #[cfg(any(target_os = "macos", target_os = "ios"))]
             Handle::IoSurface(_) => "IOSurface",
@@ -350,7 +350,7 @@ impl ExternalImage {
             planes,
             modifier,
             color: YuvColorSpace::default(),
-            #[cfg(any(target_os = "linux", target_os = "android"))]
+            #[cfg(any(target_os = "linux", target_os = "fullrust", target_os = "android"))]
             acquire: Mutex::new(None),
             pixmap: OnceLock::new(),
             release: Mutex::new(None),
@@ -384,7 +384,7 @@ impl ExternalImage {
     /// of the format) and the DRM format `modifier` its producer reported
     /// ([`DRM_FORMAT_MOD_LINEAR`], [`DRM_FORMAT_MOD_INVALID`] or a tiled one).
     /// The descriptors are the image's from now on.
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(any(target_os = "linux", target_os = "fullrust", target_os = "android"))]
     pub fn dma_buf(
         size: PhysicalSize,
         format: ExternalFormat,
@@ -602,7 +602,7 @@ impl ExternalImage {
 
     /// A `sync_file` that signals when the producer's GPU is done writing
     /// the buffer: waited on before it is imported or read.
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(any(target_os = "linux", target_os = "fullrust", target_os = "android"))]
     pub fn acquire_fence(self, fence: OwnedFd) -> Self {
         *self.acquire.lock().unwrap_or_else(|e| e.into_inner()) = Some(fence);
         self
@@ -646,7 +646,7 @@ impl ExternalImage {
     /// Wait (a little) for the producer's fence, if it gave one, and drop
     /// it: once signaled it says nothing more.
     pub(crate) fn wait_acquire(&self) {
-        #[cfg(any(target_os = "linux", target_os = "android"))]
+        #[cfg(any(target_os = "linux", target_os = "fullrust", target_os = "android"))]
         if let Some(fence) = self
             .acquire
             .lock()
@@ -663,7 +663,7 @@ impl ExternalImage {
     }
 
     /// Each plane's descriptor, offset and stride, for a `dma-buf`.
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(any(target_os = "linux", target_os = "fullrust", target_os = "android"))]
     #[allow(dead_code)] // for the GPU executors built in
     pub(crate) fn dma_buf_planes(&self) -> Option<Vec<(RawFd, u64, u32)>> {
         match &self.handle {
@@ -681,7 +681,7 @@ impl ExternalImage {
     fn read(&self) -> Option<Pixmap> {
         match &self.handle {
             Handle::Pixels => None,
-            #[cfg(any(target_os = "linux", target_os = "android"))]
+            #[cfg(any(target_os = "linux", target_os = "fullrust", target_os = "android"))]
             Handle::DmaBuf(fds) => {
                 if !modifier_is_linear(self.modifier) {
                     return None;
@@ -712,7 +712,7 @@ impl Drop for ExternalImage {
         }
         match &self.handle {
             Handle::Pixels => {}
-            #[cfg(any(target_os = "linux", target_os = "android"))]
+            #[cfg(any(target_os = "linux", target_os = "fullrust", target_os = "android"))]
             Handle::DmaBuf(_) => {} // the `OwnedFd`s close themselves
             #[cfg(any(target_os = "macos", target_os = "ios"))]
             Handle::IoSurface(s) => unsafe { apple::CFRelease(*s) },
@@ -741,7 +741,7 @@ impl Drop for ExternalImage {
 /// How long a producer's fence is waited on before the buffer is read
 /// anyway (a frame or two at 60 Hz: a fence later than that is a producer
 /// that stalled, and a torn frame beats a frozen window).
-#[cfg(any(target_os = "linux", target_os = "android"))]
+#[cfg(any(target_os = "linux", target_os = "fullrust", target_os = "android"))]
 const FENCE_TIMEOUT_MS: i32 = 32;
 
 /// Whether `modifier` means rows in order, so the CPU can read it.
@@ -1002,7 +1002,7 @@ pub(crate) fn plane_imports(image: &ExternalImage) -> Vec<(u32, u32, u32, u64, u
 
 // ---- Linux and Android: reading a dma-buf, sync_files, udmabuf ---------------
 
-#[cfg(any(target_os = "linux", target_os = "android"))]
+#[cfg(any(target_os = "linux", target_os = "fullrust", target_os = "android"))]
 mod unix {
     use super::*;
     use std::ffi::{c_int, c_ulong, c_void};
@@ -1112,7 +1112,7 @@ mod unix {
 /// producer (a content process drawing in software, a test) can hand to
 /// anything that imports a `dma-buf`, with a linear layout. `bytes` is
 /// padded to whole pages.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "fullrust"))]
 pub fn udmabuf(bytes: &[u8]) -> std::io::Result<OwnedFd> {
     use std::ffi::{c_char, c_int, c_ulong};
     use std::io::{Error, ErrorKind};
@@ -1595,7 +1595,7 @@ mod tests {
     }
 
     /// A real `dma-buf` (from `udmabuf`), mapped and read back.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "fullrust"))]
     #[test]
     fn a_linear_dma_buf_is_read_on_the_cpu() {
         // NV12, 4×2: luma, then chroma at offset 8.

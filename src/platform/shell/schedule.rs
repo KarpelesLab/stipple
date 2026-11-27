@@ -371,7 +371,12 @@ mod os {
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+#[cfg(any(
+    target_os = "linux",
+    target_os = "fullrust",
+    target_os = "macos",
+    target_os = "windows"
+))]
 mod os {
     //! A thread that sleeps until the next one is due, then shows it with
     //! [`notify`](crate::platform::notify).
@@ -470,6 +475,7 @@ mod os {
     target_os = "android",
     target_arch = "wasm32",
     target_os = "linux",
+    target_os = "fullrust",
     target_os = "macos",
     target_os = "windows"
 )))]

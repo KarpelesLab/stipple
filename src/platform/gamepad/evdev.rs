@@ -267,10 +267,10 @@ pub(crate) const fn eviocsff(size: usize) -> u64 {
     ioc(IOC_WRITE, 0x80, size as u64)
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "fullrust"))]
 pub(super) use os::{refresh, set_rumble, start};
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "fullrust"))]
 mod os {
     use super::*;
     use crate::platform::gamepad::{GamepadId, GamepadInfo, update};

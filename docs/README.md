@@ -113,6 +113,7 @@ How to build, package and run on each platform, and what works there today.
 | Network status and changes (`platform::network`, `App::on_network`) | netlink, NetworkManager ⁹¹ | IP Helper ⁹¹ | Network.framework ⁹¹ | Network.framework ⁹¹ | `ConnectivityManager` ⁹¹ | `navigator.onLine` ⁹¹ |
 | Secure storage for secrets (`platform::secure_store`) | Secret Service ⁹² | Credential Manager ⁹² | Keychain ⁹² | Keychain ⁹² | Keystore ⁹² | ❌ |
 | Reference app (`examples/mediabrowser`): browse, sort, preview, play, accessible, four languages | ✅ ⁸⁵ | ✅ ⁸⁵ | ✅ ⁸⁵ | — | — | sample folder ⁸⁵ |
+| Static binaries with no C library (fullrust), or a static C library (musl) | ✅ ¹⁰⁵ | — | — | — | — | — |
 
 ¹ Implemented, but CI only has 1x displays, so it hasn't been seen on a real high-DPI one.
 ² Linux has no native UI framework; controls stay self-drawn in the system's colors.
@@ -1004,6 +1005,19 @@ under Xvfb. The CI checks (AT-SPI walk, UIA in-process and from outside,
 iOS is build-checked. Not covered: AT-SPI's `Hypertext`, UIA's `Link`, and
 spelling errors (there is no spell checker). See
 [accessibility.md](accessibility.md#range-values-tables-and-captions).
+
+¹⁰⁵ System libraries are loaded at run time everywhere, through the `dlsym`
+crate. A program built for fullrust (`x86_64-unknown-linux-fullrust`: static,
+no C library) runs the X11 and Wayland backends, whose few C library calls
+are system calls there, and plays sound through the system's libasound,
+loaded through its own `ld.so` (through PipeWire or a device; on a
+PulseAudio system, whose libpulse can't run there, the null output plays).
+The GPU renderers and VA-API aren't available in that build (frames render
+on the CPU). A static musl build
+plays through the null output. Verified under Xvfb and with ALSA locally;
+CI's `static-linux` job (non-blocking) builds with the fullrust action and
+runs the same checks, plus headless sway. See
+[platforms/linux.md](platforms/linux.md#static-builds).
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled;

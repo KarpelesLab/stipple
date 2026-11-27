@@ -141,6 +141,146 @@ jobs:
       - name: cargo check (library and examples)
         run: cargo check --examples --features gpu
 
+  # Static Linux binaries (docs/platforms/linux.md#static-builds). fullrust
+  # (x86_64-unknown-linux-fullrust, no C library at all): the backends' libc
+  # calls are raw syscalls and libraries load through the system's ld.so, so
+  # audio plays through the runner's libasound (ALSA's dummy driver) and the
+  # X11 and Wayland backends run under Xvfb and headless sway. A static musl
+  # build can't load libraries: null audio, still a window. Not blocking yet.
+  static-linux:
+    name: Static Linux (fullrust, static musl)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Xvfb, sway, xdotool, libasound and a font
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb x11-utils xdotool sway seatd fonts-dejavu-core
+          sudo apt-get install -y -qq libasound2t64 || sudo apt-get install -y -qq libasound2
+      - name: Build for fullrust (the library with every feature, and examples)
+        uses: KarpelesLab/fullrust@master
+        with:
+          args: >-
+            --release --features gpu,vk,gl,audio,video
+            --example audiodemo --example todo --example window --example touchdemo
+            --example asyncdemo --example canvasdemo
+      - name: The binaries are static, with no C library
+        run: |
+          # The action's container wrote Cargo.lock (and more) as root.
+          sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE"
+          for e in audiodemo window; do
+            f=target/x86_64-unknown-linux-fullrust/release/examples/$e
+            file "$f"
+            if readelf -d "$f" 2>/dev/null | grep -q NEEDED; then echo "$f is dynamic"; exit 1; fi
+          done
+      # A sound device: ALSA's dummy driver where the runner's kernel has it,
+      # else PipeWire (a null sink, driven in real time) as ALSA's `default`
+      # through its ALSA plugin, which libasound loads in turn. (Not
+      # PulseAudio: libpulse's priority-inheriting mutexes abort when every
+      # thread calls in under one foreign thread identity, see
+      # docs/platforms/linux.md#static-builds.)
+      - name: fullrust audiodemo selftest (ALSA through the system's libasound)
+        continue-on-error: true
+        run: |
+          B="$PWD/target/x86_64-unknown-linux-fullrust/release/examples"
+          STIPPLE_AUDIO=null $B/audiodemo --selftest --expect-backend null
+          if sudo modprobe snd-dummy 2>/dev/null; then
+            sudo chmod a+rw /dev/snd/* || true
+            cat /proc/asound/cards
+            $B/audiodemo --selftest --expect-backend alsa
+          else
+            sudo apt-get install -y -qq pipewire pipewire-alsa wireplumber dbus
+            export XDG_RUNTIME_DIR="$RUNNER_TEMP/pwrt"
+            mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
+            dbus-run-session -- bash -ec '
+              pipewire > pipewire.log 2>&1 &
+              sleep 1
+              wireplumber > wireplumber.log 2>&1 &
+              sleep 2
+              pw-cli create-node adapter "{ factory.name=support.null-audio-sink node.name=ci-null media.class=Audio/Sink object.linger=true audio.position=[ FL FR ] }"
+              sleep 2
+              wpctl status | head -40 || true
+              "$0"/audiodemo --selftest --expect-backend alsa
+            ' "$B"
+          fi
+      - name: fullrust under PulseAudio (the null output, not libpulse's abort)
+        continue-on-error: true
+        run: |
+          sudo apt-get install -y -qq pulseaudio libasound2-plugins
+          pulseaudio -D --exit-idle-time=-1
+          printf 'pcm.!default { type pulse }\nctl.!default { type pulse }\n' > ~/.asoundrc
+          sleep 1
+          pactl info | grep -E 'Server Name|Default Sink'
+          target/x86_64-unknown-linux-fullrust/release/examples/audiodemo --selftest --expect-backend null
+          rm ~/.asoundrc
+      - name: fullrust todo selftest (off-screen)
+        run: target/x86_64-unknown-linux-fullrust/release/examples/todo --selftest target/todo-fullrust.png
+      - name: fullrust under Xvfb (window hints, icon, cursor, keyboard, timers)
+        run: |
+          B=target/x86_64-unknown-linux-fullrust/release/examples
+          Xvfb :99 -screen 0 1024x768x24 &
+          sleep 2
+          export DISPLAY=:99
+          STIPPLE_X11_DEBUG=1 $B/window > window.log 2>&1 &
+          WIN=$!
+          sleep 4
+          xwininfo -root -tree | grep Stipple
+          xprop -name Stipple WM_NORMAL_HINTS | grep -q 'minimum size: 400 by 320'
+          xprop -name Stipple _NET_WM_ICON > icon.txt; grep -qE 'Icon \(64 x 64\)|= 64, 64' icon.txt
+          xdotool mousemove 320 366; sleep 0.5; xdotool mousemove 600 20; sleep 0.5
+          kill $WIN
+          grep -q 'cursor Pointer' window.log
+          $B/touchdemo > touch.log 2>&1 &
+          TOUCH=$!
+          sleep 4
+          xdotool key Tab; sleep 0.5; xdotool key Tab; sleep 0.5
+          xdotool key space; sleep 0.5; xdotool key Return; sleep 0.5
+          xdotool key shift+Tab; sleep 0.5; xdotool type --delay 100 ok; sleep 1
+          kill $TOUCH
+          cat touch.log
+          [ "$(grep -c '^touchdemo: row 0 tapped' touch.log)" -eq 2 ]
+          grep -q '^touchdemo: text "ok"' touch.log
+          timeout 30 $B/asyncdemo --selftest | tee async.log
+          grep -q 'asyncdemo: ticks=10 result="10! = 3628800"' async.log
+          timeout 30 $B/canvasdemo --selftest > canvas.log; grep -q 'canvasdemo: selftest ok' canvas.log
+      - name: fullrust under headless sway (Wayland)
+        run: |
+          B=target/x86_64-unknown-linux-fullrust/release/examples
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/xdgrt"
+          mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
+          export WLR_BACKENDS=headless WLR_RENDERER=pixman WLR_LIBINPUT_NO_DEVICES=1
+          sudo seatd -g "$(id -gn)" > seatd.log 2>&1 &
+          sleep 1
+          export LIBSEAT_BACKEND=seatd
+          printf 'output HEADLESS-1 resolution 1024x768\nexec sleep 600\n' > sway.cfg
+          sway -c sway.cfg > sway.log 2>&1 &
+          sleep 6
+          export WAYLAND_DISPLAY=$(ls "$XDG_RUNTIME_DIR" | grep -m1 '^wayland-[0-9]*$')
+          unset DISPLAY
+          STIPPLE_WAYLAND_DEBUG=1 timeout 30 $B/asyncdemo --selftest > wl-async.log 2>&1 || true
+          tail -20 wl-async.log
+          grep -q 'asyncdemo: ticks=10 result="10! = 3628800"' wl-async.log
+          grep -q 'stipple wayland:' wl-async.log
+          timeout 30 $B/canvasdemo --selftest > wl-canvas.log; grep -q 'canvasdemo: selftest ok' wl-canvas.log
+      - name: Static musl build (null audio, a window under Xvfb)
+        run: |
+          cargo build --release --target x86_64-unknown-linux-musl --features audio \
+            --example audiodemo --example todo --example window
+          B=target/x86_64-unknown-linux-musl/release/examples
+          file $B/audiodemo
+          $B/audiodemo --selftest --expect-backend null
+          $B/todo --selftest target/todo-musl.png
+          DISPLAY=:99 $B/window > musl-window.log 2>&1 &
+          WIN=$!
+          sleep 4
+          DISPLAY=:99 xwininfo -root -tree | grep Stipple
+          kill $WIN
+
   # Verify the stack is mobile-portable: it cross-compiles for Android and iOS
   # with their native backends (NativeActivity, UIKit). Building the library
   # needs no NDK: nothing links until an app's cdylib does. The emulator and

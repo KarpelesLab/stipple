@@ -740,9 +740,12 @@ new layout. Targets are `R8G8B8A8_UNORM` (the frame, layers) and `R8_UNORM`
 (the path scratch), each with the first stencil format the device can attach
 (`S8_UINT`, else a depth-stencil one). One frame is in flight.
 
-`libvulkan` is loaded at run time (`dlopen`, then `vkGetInstanceProcAddr`),
-so a build with `vk` still starts where there's no Vulkan, and falls back to
-GLES or the CPU. The device picked is a discrete GPU, else an integrated
+`libvulkan` is loaded at run time (through the `dlsym` crate, then
+everything else through `vkGetInstanceProcAddr`), so a build with `vk` still
+starts where there's no Vulkan, and falls back to GLES or the CPU. (Not in a
+static fullrust build, where the pointers `vkGetInstanceProcAddr` returns
+would each need wrapping to switch the C library's thread pointer: see
+[Static builds](platforms/linux.md#static-builds).) The device picked is a discrete GPU, else an integrated
 one, else whatever there is (lavapipe).
 
 ### The shaders
@@ -780,7 +783,7 @@ With `VK_GOOGLE_display_timing`, a new swapchain's refresh
 - **X11** (`VK_KHR_xcb_surface`). The backend speaks X11 over its own
   socket and has no `xcb_connection_t`, but a window's id is the same on
   every connection to the server: the GPU opens one of its own with libxcb
-  (`libxcb.so.1`, loaded with `dlopen` when a window is first presented to;
+  (`libxcb.so.1`, loaded at run time when a window is first presented to;
   every X11 desktop has it) and makes the surface on the backend's window.
   The driver's presentation (DRI3 and Present, or `PutImage` under a software
   driver) goes over that connection, everything else over the backend's.

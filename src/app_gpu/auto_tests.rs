@@ -218,13 +218,13 @@ fn auto_never_reads_back() {
 /// A Wayland window's layer: frames go to the compositor as `dma-buf`s,
 /// under a title bar Stipple draws or not (the backend hands out the layer
 /// either way; the sink is the backend's, never touched by the stand-in).
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "fullrust"))]
 const WAYLAND: Option<GpuLayer> = Some(GpuLayer::Wayland {
     surface: 3,
     sink: std::ptr::null(),
 });
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "fullrust"))]
 #[test]
 fn auto_presents_to_a_wayland_window_on_a_hardware_gpu() {
     let (seen, mut send) = rig(Renderer::Auto, "NVIDIA GeForce RTX 5080", WAYLAND);
@@ -249,7 +249,7 @@ fn auto_draws_on_the_cpu_where_the_gpu_cant_present() {
     assert_eq!(send(Event::Wake), (0, 1));
     assert_eq!(seen.read.get(), 0, "nothing read back");
     done();
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "fullrust"))]
     {
         let (seen, mut send) = rig(Renderer::Auto, "NVIDIA GeForce RTX 5080", WAYLAND);
         seen.refuse.set(true);

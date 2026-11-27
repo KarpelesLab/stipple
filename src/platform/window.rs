@@ -589,7 +589,12 @@ impl WindowAttributes {
     /// or for blur, which implies it. (The phones and the web have no
     /// transparent windows.)
     #[cfg_attr(
-        not(any(target_os = "macos", target_os = "windows", target_os = "linux")),
+        not(any(
+            target_os = "macos",
+            target_os = "windows",
+            target_os = "linux",
+            target_os = "fullrust"
+        )),
         allow(dead_code)
     )]
     pub(crate) fn is_transparent(&self) -> bool {
@@ -616,14 +621,17 @@ pub(crate) enum GpuLayer {
     /// own socket, so a GPU renderer presents to the window over a libxcb
     /// connection of its own (`gpu::xcb`): a window id is the same on every
     /// connection to the server.
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    #[cfg_attr(
+        not(any(target_os = "linux", target_os = "fullrust")),
+        allow(dead_code)
+    )]
     X11 { window: u32 },
     /// A Wayland window, by its `wl_surface` id, and where the renderer
     /// hands its frames as `dma-buf`s (see [`crate::platform::dmabuf`]): the
     /// backend speaks the protocol itself, so there is no libwayland surface
     /// for Vulkan or EGL to present to. The sink lives as long as the window;
     /// the backend releases the layer through the renderer before it goes.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "fullrust"))]
     Wayland {
         surface: u32,
         sink: *const crate::platform::dmabuf::Sink,
@@ -1060,7 +1068,10 @@ pub(crate) fn debug_window(args: std::fmt::Arguments<'_>) {
 /// Scale `icon` down (by area averaging) so neither side exceeds `max` pixels,
 /// keeping its aspect ratio. Returns a copy when it already fits. Backends
 /// whose icon property has a size limit (X11's request length) use this.
-#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "fullrust", target_os = "windows")),
+    allow(dead_code)
+)]
 pub(crate) fn fit_icon(icon: &Pixmap, max: u32) -> Pixmap {
     let src = icon.size();
     if src.width <= max && src.height <= max {

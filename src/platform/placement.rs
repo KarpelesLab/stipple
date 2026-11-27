@@ -9,7 +9,12 @@
 
 // Only desktop backends place windows on monitors.
 #![cfg_attr(
-    not(any(target_os = "linux", target_os = "windows", target_os = "macos")),
+    not(any(
+        target_os = "linux",
+        target_os = "fullrust",
+        target_os = "windows",
+        target_os = "macos"
+    )),
     allow(dead_code)
 )]
 

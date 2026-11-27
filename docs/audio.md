@@ -147,8 +147,12 @@ in a release build, so prefer Vorbis for long music.
 
 On Linux, PulseAudio and PipeWire both provide ALSA's `default` device, so
 the ALSA output reaches them. The Linux and Android libraries are loaded when
-audio is first opened: a program without them still starts, and plays
-through the null output.
+audio is first opened (through the `dlsym` crate): a program without them
+still starts, and plays through the null output. A static, libc-free
+[fullrust](platforms/linux.md#static-builds) build plays through ALSA too,
+loading the system's libasound through its `ld.so` (except through
+PulseAudio, see [there](platforms/linux.md#static-builds)); a static musl build
+can't load it, and plays through the null output.
 
 **No device.** When no output opens (no sound card, no `libasound`, Android
 before 8, a browser without Web Audio), or `STIPPLE_AUDIO=null` is set in the

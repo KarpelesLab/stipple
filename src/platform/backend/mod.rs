@@ -23,18 +23,21 @@ use crate::platform::window::{Window, WindowAttributes};
 
 pub(crate) mod headless;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "fullrust"))]
 pub(crate) mod wayland;
 
 /// The launcher's startup id and activation token, and `WM_CLASS` (Linux;
 /// its pure parts tested everywhere).
-#[cfg(any(target_os = "linux", test))]
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg(any(target_os = "linux", target_os = "fullrust", test))]
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "fullrust")),
+    allow(dead_code)
+)]
 pub(crate) mod startup;
 
 // Public only for the repository's `dri3probe` and `dmabuftest` harness
 // examples, which drive the DRI3/Present probes directly.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "fullrust"))]
 #[doc(hidden)]
 pub mod x11;
 
@@ -164,6 +167,7 @@ where
 #[cfg_attr(
     not(any(
         target_os = "linux",
+        target_os = "fullrust",
         target_os = "windows",
         target_os = "macos",
         target_os = "android"
@@ -176,10 +180,10 @@ where
 {
     let handler = with_theme_changes(handler);
     // A URL the desktop's protocol handler started the app with.
-    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    #[cfg(any(target_os = "linux", target_os = "fullrust", target_os = "windows"))]
     crate::platform::incoming_url::post_launch_args();
     // Window activation and screen-reader actions for the AT-SPI bridge.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "fullrust"))]
     let handler = crate::platform::atspi::wrap(handler);
     let mut handler = handler;
     // The page drives the web's loop, so the handler outlives this call.
@@ -195,7 +199,7 @@ where
     }
     #[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
     {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "fullrust"))]
         {
             // Wayland is preferred; fall back to X11, then headless.
             if wayland::available() {

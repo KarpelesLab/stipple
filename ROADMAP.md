@@ -613,6 +613,25 @@ the buffer onto the screen, and the declarative UI toolkit itself.
   `docs/screenshots/` after a green push to `master`.
 - ✅ **Docs**: `docs/` holds a guide per platform, plus the native theme,
   high-DPI and CI.
+- ✅ **One run-time loader, and static builds**: every library loaded at run
+  time (libasound, libvulkan, libxcb, AAudio, the camera and media NDK
+  libraries, `AChoreographer`, libnativewindow, Apple's frameworks) goes
+  through the `dlsym` crate, as `library!` structs whose symbols can't
+  outlive their library. Static Linux binaries work: a static musl build
+  falls back to the null output and the CPU renderer, and a libc-free
+  [fullrust](https://github.com/KarpelesLab/fullrust) build
+  (`x86_64-unknown-linux-fullrust`) runs the X11 and Wayland backends (the
+  libc functions they declare are raw syscalls, `src/platform/fullrust.rs`)
+  and plays through the system's libasound, loaded through its own `ld.so`.
+  _Verified locally: `audiodemo --selftest --expect-backend alsa`, the
+  window example's hints, icon, cursor and keyboard under Xvfb; CI builds
+  and runs them non-blocking. Not yet: the GPU renderers in fullrust builds
+  (Vulkan's `vkGetInstanceProcAddr` pointers would need dldota's
+  thread-pointer trampolines, which dlsym 0.1 doesn't expose for pointers
+  it didn't look up; `gl` links EGL), VA-API there, PulseAudio's ALSA
+  plugin (libpulse's priority-inheriting mutexes abort under dldota's one
+  borrowed thread identity, so a PulseAudio system gets the null output),
+  Wayland under fullrust run only in CI. See `docs/platforms/linux.md#static-builds`._
 
 ---
 
@@ -649,6 +668,7 @@ the buffer onto the screen, and the declarative UI toolkit itself.
 | Image decode | `oxideav-image` over `oxideav-png`, `-mjpeg`, `-gif`, `-webp`, `-bmp` |
 | SVG (icons) | `oxideav-svg` |
 | Pixel conversion / blit prep | `oxideav-pixfmt` |
+| Loading system libraries at run time | `dlsym` (first-party; dldota underneath on fullrust) |
 | Windowing, input, IME, clipboard | **Stipple, hand-written per OS** |
 | Layout, reactivity, widgets, theming, animation | **Stipple** |
 
@@ -1108,7 +1128,7 @@ CPU elsewhere, and the CPU is always the fallback.
   *`src/gpu/vk/`, feature `vk`, `libvulkan` loaded at run time: the whole
   operation list, recorded host-side (`record.rs`, unit-tested everywhere)
   then encoded into one command buffer; presents through `VK_KHR_xcb_surface`
-  on a libxcb connection of its own (`dlopen`ed: the backend speaks the
+  on a libxcb connection of its own (loaded at run time: the backend speaks the
   protocol itself) and `VK_KHR_android_surface`, copying the frame into the
   swapchain image. Run on macOS through MoltenVK (corpus, present, validation
   layers with sync checks clean); X11 and Android compile-checked and in CI.
@@ -3450,7 +3470,7 @@ game needs on top:
   *`stipple::audio::Audio`: stereo `f32` at the device's rate through a render
   callback; default output unit / RemoteIO, WASAPI shared event-driven (COM
   vtables by hand, reopens on device loss), ALSA `default` via
-  `dlopen("libasound.so.2")`, AAudio via `dlopen("libaaudio.so")` (reopens on
+  `libasound.so.2` and AAudio `libaaudio.so` loaded through `dlsym` (reopens on
   disconnect), a `ScriptProcessorNode` in `stipple.js` pulling an exported
   `stipple_audio_render` (resumed on the first gesture); a null output that
   keeps time where none opens (`STIPPLE_AUDIO=null`). Run on macOS

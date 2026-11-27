@@ -35,14 +35,20 @@ mod attention;
 mod backdrop;
 mod clipboard;
 /// GPU frames in a subsurface under decorations Stipple draws.
-#[cfg_attr(not(any(feature = "gl", feature = "vk")), allow(dead_code))]
+#[cfg_attr(
+    any(target_os = "fullrust", not(any(feature = "gl", feature = "vk"))),
+    allow(dead_code)
+)]
 mod content;
 /// Server-side decorations, or a title bar and borders drawn by Stipple.
 mod decor;
 /// Dialog and modal windows (`xdg-dialog-v1`).
 mod dialog;
 /// GPU frames as `dma-buf`s (`zwp_linux_dmabuf_v1`).
-#[cfg_attr(not(any(feature = "gl", feature = "vk")), allow(dead_code))]
+#[cfg_attr(
+    any(target_os = "fullrust", not(any(feature = "gl", feature = "vk"))),
+    allow(dead_code)
+)]
 mod dmabuf;
 /// Fractional scales (`wp_fractional_scale_v1` and `wp_viewporter`).
 mod fractional;
@@ -51,7 +57,10 @@ mod keys;
 mod owned;
 mod pointer;
 /// Explicit sync for GPU frames (`wp_linux_drm_syncobj_v1`).
-#[cfg_attr(not(any(feature = "gl", feature = "vk")), allow(dead_code))]
+#[cfg_attr(
+    any(target_os = "fullrust", not(any(feature = "gl", feature = "vk"))),
+    allow(dead_code)
+)]
 mod syncobj;
 mod text_input;
 /// Several windows: creating, destroying and configuring toplevels.

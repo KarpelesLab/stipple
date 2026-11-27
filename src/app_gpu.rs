@@ -125,7 +125,10 @@ fn auto_tries_gpu() -> bool {
     }
     cfg!(any(
         all(target_os = "macos", feature = "mtl"),
-        all(target_os = "linux", feature = "vk")
+        all(
+            any(target_os = "linux", target_os = "fullrust"),
+            feature = "vk"
+        )
     ))
 }
 
@@ -134,7 +137,7 @@ fn auto_tries_gpu() -> bool {
 /// for), the platform's own elsewhere.
 #[cfg_attr(not(feature = "gpu"), allow(dead_code))]
 fn auto_api() -> Which {
-    if cfg!(target_os = "linux") {
+    if cfg!(any(target_os = "linux", target_os = "fullrust")) {
         Which::Vulkan
     } else {
         Which::Native
@@ -401,7 +404,10 @@ pub(crate) use shared::{current, given_up, reset};
 /// A backend's window (and its GPU layer) is going away: the renderer lets
 /// go of the swapchain or EGL surface it made for it, now, while the native
 /// window is still valid.
-#[cfg_attr(not(any(target_os = "linux", target_os = "android")), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "fullrust", target_os = "android")),
+    allow(dead_code)
+)]
 pub(crate) fn release_gpu_layer(layer: crate::platform::GpuLayer) {
     #[cfg(feature = "gpu")]
     shared::release(&layer);

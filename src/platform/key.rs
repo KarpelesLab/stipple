@@ -761,7 +761,10 @@ const HID_NAMES: &[(u16, &str)] = &[
 /// give at the Shift level held): named keys, keypad keys as their characters
 /// (or as the navigation keys they are without Num Lock), and printable
 /// keysyms as [`KeyCode::Char`].
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "fullrust")),
+    allow(dead_code)
+)]
 pub(crate) fn keysym_logical(ks: u32) -> KeyCode {
     const F_KEYS: [KeyCode; 12] = [
         KeyCode::F1,
@@ -824,7 +827,10 @@ pub(crate) fn keysym_logical(ks: u32) -> KeyCode {
 /// keypad and modifier keys), which the character keysym table doesn't
 /// have: what an xkb keymap's symbols name them (`F5`, `Left`, `Shift_L`,
 /// `KP_End`).
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "fullrust")),
+    allow(dead_code)
+)]
 pub(crate) fn keysym_named(name: &str) -> Option<u32> {
     if let Some(n) = name.strip_prefix('F').and_then(|n| n.parse::<u32>().ok())
         && (1..=35).contains(&n)
@@ -895,7 +901,10 @@ pub(crate) fn keysym_named(name: &str) -> Option<u32> {
 
 /// The text an X11 keysym types (for [`KeyEvent::text`]): a printable
 /// character's, including the keypad's.
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "fullrust")),
+    allow(dead_code)
+)]
 pub(crate) fn keysym_text(ks: u32) -> Option<String> {
     match keysym_logical(ks) {
         KeyCode::Char(c) => Some(c.to_string()),
@@ -912,7 +921,10 @@ pub(crate) fn keysym_text(ks: u32) -> Option<String> {
 /// held. The event loop waits until [`deadline`](Self::deadline) and then
 /// takes [`due`](Self::due) keys.
 #[derive(Clone, Debug)]
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "fullrust")),
+    allow(dead_code)
+)]
 pub(crate) struct KeyRepeat {
     /// Repeats per second; 0 turns repeating off.
     rate: u32,
@@ -933,7 +945,10 @@ impl Default for KeyRepeat {
     }
 }
 
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "fullrust")),
+    allow(dead_code)
+)]
 impl KeyRepeat {
     /// `wl_keyboard.repeat_info`: `rate` keys per second (0 disables
     /// repeat), after `delay` milliseconds.

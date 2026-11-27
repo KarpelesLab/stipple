@@ -32,7 +32,7 @@ pub(super) struct Owner {
 
 /// The directory the lock and the socket go in.
 fn dir() -> io::Result<PathBuf> {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "fullrust"))]
     if let Some(run) = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from)
         && run.is_absolute()
         && private(&run)
@@ -105,7 +105,7 @@ fn own_in(dir: &Path, id: &str) -> io::Result<Option<Owner>> {
     let _ = std::fs::remove_file(&sock);
     let listener = UnixListener::bind(&sock)?;
     // The sticky bit keeps `$XDG_RUNTIME_DIR`'s periodic clean-up off them.
-    let mode = if cfg!(target_os = "linux") {
+    let mode = if cfg!(any(target_os = "linux", target_os = "fullrust")) {
         0o1600
     } else {
         0o600

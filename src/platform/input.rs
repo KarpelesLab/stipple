@@ -24,7 +24,10 @@ pub(crate) use crate::platform::event::SCROLL_LINE_PX as LINE_PX;
 /// move back to the center (which comes after any moves already queued)
 /// counts for nothing.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "fullrust")),
+    allow(dead_code)
+)]
 pub(crate) struct WarpLock {
     /// Where the pointer is held (window pixels).
     center: (i32, i32),
@@ -34,7 +37,10 @@ pub(crate) struct WarpLock {
     warping: bool,
 }
 
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "fullrust")),
+    allow(dead_code)
+)]
 impl WarpLock {
     /// Hold the pointer at `center`, where it was just warped to. (That warp
     /// sends no move if the pointer was there already, so it isn't waited

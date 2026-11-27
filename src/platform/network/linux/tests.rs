@@ -323,7 +323,7 @@ fn network_manager_values() {
 
 /// The real system answers a dump without the parser choking (what it
 /// answers depends on the machine).
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "fullrust"))]
 #[test]
 fn the_kernel_answers() {
     let r = read();

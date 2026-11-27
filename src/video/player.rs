@@ -126,6 +126,9 @@ fn make_decoder(
     frame_time: Duration,
 ) -> Result<Box<dyn FrameDecoder>, VideoError> {
     let codec = params.codec_id.as_str();
+    // No hardware decoder in static fullrust builds (VA-API is loaded by
+    // oxideav-vaapi, through the C library).
+    #[cfg_attr(target_os = "fullrust", allow(unused_mut))]
     let mut why = None;
     if hardware {
         #[cfg(any(target_os = "macos", target_os = "ios"))]

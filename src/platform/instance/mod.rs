@@ -20,15 +20,15 @@ use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::time::Duration;
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "fullrust", target_os = "macos"))]
 #[allow(unsafe_code)]
 mod unix;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "fullrust", target_os = "macos"))]
 use unix as os;
 
 /// The session bus's `org.freedesktop.Application`, for an app that is
 /// [D-Bus activatable](crate::App::dbus_activatable).
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "fullrust"))]
 mod dbus;
 
 #[cfg(target_os = "windows")]
@@ -90,7 +90,7 @@ impl Launch {
         // The backend takes the launcher's startup id and activation token
         // out of the environment as it starts (so the app's children don't
         // inherit them); the launch had them.
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "fullrust"))]
         if let Some(startup) = crate::platform::backend::startup::taken() {
             for (name, value) in [
                 ("XDG_ACTIVATION_TOKEN", startup.activation_token),
@@ -113,7 +113,7 @@ impl Launch {
         #[allow(unused_mut)]
         let mut args: Vec<String> = std::env::args_os().skip(1).map(lossy).collect();
         // The switch a D-Bus `.service` file starts the app with.
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "fullrust"))]
         args.retain(|a| a != dbus::SERVICE_SWITCH);
         Self {
             args,
@@ -153,7 +153,12 @@ pub fn forward_launch(id: &str) -> bool {
 /// What became of claiming the app's id.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(
-    not(any(target_os = "linux", target_os = "macos", target_os = "windows")),
+    not(any(
+        target_os = "linux",
+        target_os = "fullrust",
+        target_os = "macos",
+        target_os = "windows"
+    )),
     allow(dead_code)
 )]
 pub(crate) enum Claim {
@@ -168,7 +173,12 @@ pub(crate) enum Claim {
 /// How long a second launch keeps trying to reach the owner, which may be
 /// between taking the id and listening.
 #[cfg_attr(
-    not(any(target_os = "linux", target_os = "macos", target_os = "windows")),
+    not(any(
+        target_os = "linux",
+        target_os = "fullrust",
+        target_os = "macos",
+        target_os = "windows"
+    )),
     allow(dead_code)
 )]
 const PATIENCE: Duration = Duration::from_secs(3);
@@ -179,10 +189,15 @@ const PATIENCE: Duration = Duration::from_secs(3);
 /// still listens beside it, and takes over without a bus.
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub(crate) fn claim(id: &str, dbus: bool) -> Claim {
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "fullrust",
+        target_os = "macos",
+        target_os = "windows"
+    ))]
     {
         let launch = Launch::current();
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "fullrust"))]
         if dbus {
             match dbus::claim(id, &launch) {
                 Claim::Primary => {
@@ -197,7 +212,7 @@ pub(crate) fn claim(id: &str, dbus: bool) -> Claim {
                 Claim::Unavailable => {}
             }
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "fullrust")))]
         let _ = dbus;
         let deadline = std::time::Instant::now() + PATIENCE;
         loop {
@@ -223,7 +238,12 @@ pub(crate) fn claim(id: &str, dbus: bool) -> Claim {
             std::thread::sleep(Duration::from_millis(50));
         }
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    #[cfg(not(any(
+        target_os = "linux",
+        target_os = "fullrust",
+        target_os = "macos",
+        target_os = "windows"
+    )))]
     {
         let _ = (id, dbus);
         Claim::Unavailable
@@ -233,14 +253,24 @@ pub(crate) fn claim(id: &str, dbus: bool) -> Claim {
 /// Send `launch` to the owner of `id` and wait (a few seconds at most) for
 /// its `ok`.
 fn forward(id: &str, launch: &Launch) -> bool {
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "fullrust",
+        target_os = "macos",
+        target_os = "windows"
+    ))]
     {
         let Ok(stream) = os::connect(id) else {
             return false;
         };
         exchange(stream, launch)
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    #[cfg(not(any(
+        target_os = "linux",
+        target_os = "fullrust",
+        target_os = "macos",
+        target_os = "windows"
+    )))]
     {
         let _ = (id, launch);
         false
@@ -250,7 +280,12 @@ fn forward(id: &str, launch: &Launch) -> bool {
 /// Write `launch` to `stream` and read the answer, on a thread, so that an
 /// owner that hangs doesn't hang the second launch too.
 #[cfg_attr(
-    not(any(target_os = "linux", target_os = "macos", target_os = "windows")),
+    not(any(
+        target_os = "linux",
+        target_os = "fullrust",
+        target_os = "macos",
+        target_os = "windows"
+    )),
     allow(dead_code)
 )]
 fn exchange(mut stream: impl Read + Write + Send + 'static, launch: &Launch) -> bool {
@@ -271,7 +306,12 @@ fn exchange(mut stream: impl Read + Write + Send + 'static, launch: &Launch) -> 
 
 /// Serve one connection: read a launch, hand it to `sink`, answer `ok`.
 #[cfg_attr(
-    not(any(target_os = "linux", target_os = "macos", target_os = "windows")),
+    not(any(
+        target_os = "linux",
+        target_os = "fullrust",
+        target_os = "macos",
+        target_os = "windows"
+    )),
     allow(dead_code)
 )]
 fn serve(mut stream: impl Read + Write, sink: &(dyn Fn(Launch) + Send + Sync)) {
@@ -291,7 +331,12 @@ fn serve(mut stream: impl Read + Write, sink: &(dyn Fn(Launch) + Send + Sync)) {
 /// [`App::on_open_url`](crate::App::on_open_url) (a protocol handler starts
 /// the app again with one, an OAuth redirect say), then the launch itself.
 #[cfg_attr(
-    not(any(target_os = "linux", target_os = "macos", target_os = "windows")),
+    not(any(
+        target_os = "linux",
+        target_os = "fullrust",
+        target_os = "macos",
+        target_os = "windows"
+    )),
     allow(dead_code)
 )]
 fn deliver(launch: Launch) {
@@ -384,7 +429,13 @@ pub(crate) fn decode(r: &mut impl Read) -> io::Result<Launch> {
 /// rest `_`; a long id shortened to its start and a hash of the whole (a
 /// Unix socket's path is short: 104 bytes on macOS).
 #[cfg_attr(
-    not(any(target_os = "linux", target_os = "macos", target_os = "windows", test)),
+    not(any(
+        target_os = "linux",
+        target_os = "fullrust",
+        target_os = "macos",
+        target_os = "windows",
+        test
+    )),
     allow(dead_code)
 )]
 pub(crate) fn file_name(id: &str) -> String {

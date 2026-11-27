@@ -523,7 +523,10 @@ mod tests {
         assert_eq!(idx.resolve("Arial").unwrap().0, "Liberation Sans");
         // Without aliases, the built-in generic list applies.
         let bare = Index::new(index().faces, HashMap::new());
-        if cfg!(all(target_os = "linux", not(target_os = "android"))) {
+        if cfg!(all(
+            any(target_os = "linux", target_os = "fullrust"),
+            not(target_os = "android")
+        )) {
             assert_eq!(bare.resolve("monospace").unwrap().0, "DejaVu Sans Mono");
             assert_eq!(bare.resolve("sans-serif").unwrap().0, "Liberation Sans");
         }

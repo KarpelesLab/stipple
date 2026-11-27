@@ -64,7 +64,13 @@ pub(crate) fn deliver_opened(url: String) {
 /// `com.example.app:/oauth`, but not `key:value` or `C:\path` (a drive
 /// letter), nor `file:` URLs, which name files rather than open the app.
 #[cfg_attr(
-    not(any(target_os = "linux", target_os = "windows", target_os = "macos", test)),
+    not(any(
+        target_os = "linux",
+        target_os = "fullrust",
+        target_os = "windows",
+        target_os = "macos",
+        test
+    )),
     allow(dead_code)
 )]
 pub(crate) fn launch_urls(args: impl IntoIterator<Item = String>) -> Vec<String> {
@@ -86,7 +92,7 @@ pub(crate) fn launch_urls(args: impl IntoIterator<Item = String>) -> Vec<String>
 /// On Windows and Linux, deliver the URLs the app was started with (a
 /// registered protocol handler's `"%1"`, or a `.desktop` file's `%u`, passes
 /// the URL as an argument). Once per process, as the event loop starts.
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "fullrust", target_os = "windows"))]
 pub(crate) fn post_launch_args() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {

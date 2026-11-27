@@ -10,9 +10,12 @@ pub(crate) mod android;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 #[allow(unsafe_code)]
 mod apple;
-#[cfg(any(target_os = "linux", test))]
-#[cfg_attr(target_os = "linux", allow(unsafe_code))]
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg(any(target_os = "linux", target_os = "fullrust", test))]
+#[cfg_attr(any(target_os = "linux", target_os = "fullrust"), allow(unsafe_code))]
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "fullrust")),
+    allow(dead_code)
+)]
 mod evdev;
 #[cfg(any(target_arch = "wasm32", test))]
 #[cfg_attr(target_arch = "wasm32", allow(unsafe_code))]
@@ -459,7 +462,7 @@ pub fn set_rumble(id: GamepadId, low: f32, high: f32, duration: Duration) -> boo
 #[cfg(target_os = "windows")]
 use xinput as os;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "fullrust"))]
 use evdev as os;
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -474,6 +477,7 @@ use android as os;
 #[cfg(not(any(
     target_os = "windows",
     target_os = "linux",
+    target_os = "fullrust",
     target_os = "macos",
     target_os = "ios",
     target_os = "android",

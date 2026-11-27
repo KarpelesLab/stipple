@@ -3,7 +3,12 @@
 Four workflows run on every push and pull request:
 
 - **CI**: `cargo fmt --check`, `cargo clippy -D warnings` and `cargo test`;
-  the 1.95 minimum Rust version; and cross-compiling for Android and iOS.
+  the 1.95 minimum Rust version; cross-compiling for Android and iOS; and
+  static builds (not blocking yet): the examples for
+  [fullrust](platforms/linux.md#static-builds) (no C library), running
+  `audiodemo --selftest` through the system's libasound and ALSA's dummy
+  driver, the todo selftest and the window example under Xvfb, and the same
+  checks on a static musl build (null audio).
 - **Visual**: builds the examples on each platform, runs them in real windows,
   screenshots them, and checks what it can see: that a click changed the
   screen, that text was typed, that the web demo's scripted selftest passes in

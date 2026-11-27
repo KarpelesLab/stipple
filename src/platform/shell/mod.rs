@@ -17,12 +17,12 @@ use crate::platform::PlatformError;
 use crate::platform::event::Event;
 use std::path::Path;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "fullrust"))]
 pub(crate) mod launcher;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "fullrust"))]
 #[allow(unsafe_code)]
 pub(crate) mod linux;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "fullrust"))]
 #[allow(unsafe_code)]
 pub(crate) mod sni;
 
@@ -210,7 +210,7 @@ pub(crate) fn file_url(path: &Path) -> String {
 
 // ---- Per-platform dispatch ---------------------------------------------------
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "fullrust"))]
 use linux::{notify as os_notify, open_url as os_open_url};
 
 #[cfg(target_os = "macos")]
@@ -245,6 +245,7 @@ fn os_notify(n: &Notification) -> Result<(), PlatformError> {
 
 #[cfg(not(any(
     target_os = "linux",
+    target_os = "fullrust",
     target_os = "macos",
     target_os = "windows",
     target_os = "ios",
@@ -260,6 +261,7 @@ use crate::platform::backend::android::notify as os_notify;
 
 #[cfg(not(any(
     target_os = "linux",
+    target_os = "fullrust",
     target_os = "macos",
     target_os = "windows",
     target_os = "ios",

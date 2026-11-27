@@ -27,7 +27,7 @@ mod apple;
 #[allow(unsafe_code)]
 mod windows;
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "fullrust", target_os = "macos"))]
 #[allow(unsafe_code)]
 mod unix {
     unsafe extern "C" {
@@ -138,7 +138,10 @@ pub fn set_app_info(info: AppInfo) {
 }
 
 /// The identifier the app gave through [`set_app_info`], if any.
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "fullrust")),
+    allow(dead_code)
+)]
 pub(crate) fn given_id() -> Option<String> {
     GIVEN
         .lock()
@@ -250,7 +253,7 @@ fn create(dir: &Path) -> Result<(), PlatformError> {
 /// Create `dir` for the user alone. Under a shared parent (`/tmp`), it must
 /// be a directory of the user's, not a link someone else left there.
 fn create_private(dir: &Path) -> Result<(), PlatformError> {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(any(target_os = "linux", target_os = "fullrust", target_os = "macos"))]
     {
         use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
         if let Some(parent) = dir.parent() {
@@ -277,7 +280,7 @@ fn create_private(dir: &Path) -> Result<(), PlatformError> {
         }
         Ok(())
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(not(any(target_os = "linux", target_os = "fullrust", target_os = "macos")))]
     create(dir)
 }
 
@@ -300,7 +303,12 @@ fn dir_name(id: &str) -> String {
 
 /// The app's directory name on the desktop.
 #[cfg_attr(
-    not(any(target_os = "macos", target_os = "windows", target_os = "linux")),
+    not(any(
+        target_os = "macos",
+        target_os = "windows",
+        target_os = "linux",
+        target_os = "fullrust"
+    )),
     allow(dead_code)
 )]
 fn desktop_id() -> String {
@@ -311,7 +319,10 @@ fn desktop_id() -> String {
 /// (`$XDG_DATA_HOME`, `$XDG_CONFIG_HOME`, `$XDG_CACHE_HOME`,
 /// `$XDG_RUNTIME_DIR`, `$HOME`, `$TMPDIR`), with the spec's defaults. A
 /// relative path in an `XDG_*` variable is ignored, as the spec says.
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "fullrust")),
+    allow(dead_code)
+)]
 fn xdg_dirs(
     id: &str,
     uid: u32,
@@ -364,12 +375,12 @@ fn os_dirs() -> Result<AppDirs, PlatformError> {
     ))
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "fullrust"))]
 fn os_info() -> OsInfo {
     OsInfo::default()
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "fullrust"))]
 fn os_dirs() -> Result<AppDirs, PlatformError> {
     xdg_dirs(&desktop_id(), unix::uid(), |v| std::env::var(v).ok())
 }
@@ -379,7 +390,8 @@ fn os_dirs() -> Result<AppDirs, PlatformError> {
     target_os = "ios",
     target_os = "windows",
     target_os = "android",
-    target_os = "linux"
+    target_os = "linux",
+    target_os = "fullrust"
 )))]
 fn os_info() -> OsInfo {
     OsInfo::default()
@@ -390,7 +402,8 @@ fn os_info() -> OsInfo {
     target_os = "ios",
     target_os = "windows",
     target_os = "android",
-    target_os = "linux"
+    target_os = "linux",
+    target_os = "fullrust"
 )))]
 fn os_dirs() -> Result<AppDirs, PlatformError> {
     Err(PlatformError::NoBackend("app directories"))
@@ -469,7 +482,7 @@ mod tests {
         assert!(xdg_dirs("org.x", 0, env(&[])).is_err());
     }
 
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(any(target_os = "linux", target_os = "fullrust", target_os = "macos"))]
     #[test]
     fn the_temp_directory_is_private() {
         let base = std::env::temp_dir().join(format!("stipple-dirs-test-{}", std::process::id()));

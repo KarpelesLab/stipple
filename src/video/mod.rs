@@ -60,6 +60,8 @@ mod mediacodec;
 #[allow(unsafe_code)]
 mod mf;
 #[cfg(all(feature = "video", not(target_arch = "wasm32")))]
+// For the hardware decoders, which static fullrust builds have none of.
+#[cfg_attr(target_os = "fullrust", allow(dead_code))]
 mod nal;
 #[cfg(all(feature = "video", not(target_arch = "wasm32")))]
 mod nv12;

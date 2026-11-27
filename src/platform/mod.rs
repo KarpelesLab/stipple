@@ -22,7 +22,7 @@
 /// Hand-written D-Bus / AT-SPI accessibility bridge (Linux).
 // Public only for the repository's `a11ydemo` and `filedialog` harness
 // examples, which drive the D-Bus client and the mock file portal directly.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "fullrust"))]
 #[doc(hidden)]
 pub mod a11y;
 /// Platform-neutral accessibility tree handed to each backend's OS bridge.
@@ -36,7 +36,7 @@ pub mod android;
 /// resources, a directory next to the executable, the web server's.
 mod assets;
 /// The AT-SPI bridge X11 and Wayland windows serve their trees through.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "fullrust"))]
 pub(crate) mod atspi;
 /// Keeping the screen awake on desktops.
 pub(crate) mod awake;
@@ -53,15 +53,21 @@ mod bundle;
 pub mod clipboard;
 /// Dead keys and compose sequences from the libX11 Compose file (X11 and
 /// Wayland, where composing is the client's job).
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "fullrust")),
+    allow(dead_code)
+)]
 pub(crate) mod compose;
 /// A writer for the Dalvik executables the Android backend loads at run time
 /// (and the one an APK carries, from [`android_receiver_dex`] on any host).
 #[cfg_attr(not(any(target_os = "android", test)), allow(dead_code))]
 pub(crate) mod dex;
 /// GPU frames handed to the compositor as `dma-buf`s (Wayland).
-#[cfg(target_os = "linux")]
-#[cfg_attr(not(any(feature = "gl", feature = "vk")), allow(dead_code))]
+#[cfg(any(target_os = "linux", target_os = "fullrust"))]
+#[cfg_attr(
+    any(target_os = "fullrust", not(any(feature = "gl", feature = "vk"))),
+    allow(dead_code)
+)]
 pub(crate) mod dmabuf;
 /// The edit menu over a text field's selection on a touch screen.
 mod edit_menu;
@@ -92,6 +98,11 @@ mod event;
 pub(crate) mod external;
 /// The display-driven frame clock that paces animations.
 pub mod frame;
+// Static, libc-free Linux (`x86_64-unknown-linux-fullrust`): the few C
+// library functions the Linux backends declare, as raw system calls.
+#[cfg(target_os = "fullrust")]
+#[allow(unsafe_code)]
+mod fullrust;
 /// Gamepads: connection, buttons and axes on a standard layout, rumble.
 pub(crate) mod gamepad;
 /// URLs that open the app (custom schemes, universal links, App Links), for
@@ -109,7 +120,10 @@ pub(crate) mod instance;
 /// Raw key events: physical keys, key text, left/right modifiers, repeat.
 mod key;
 /// X11 keysym names and their Unicode characters (generated table).
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "fullrust")),
+    allow(dead_code)
+)]
 mod keysyms;
 /// The user's preferred languages and formatting settings.
 pub(crate) mod locale;
@@ -129,7 +143,7 @@ mod pointer;
 /// seccomp-BPF syscall sandbox for the content process (the hardening layer of
 /// the Stipple-as-compositor content path).
 // Public only for the repository's `contentproc` harness example.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "fullrust"))]
 #[doc(hidden)]
 pub mod sandbox;
 /// The app's state, kept across process death (Android's saved instance state).
@@ -137,7 +151,7 @@ mod saved_state;
 /// File-descriptor passing over a Unix socket (`SCM_RIGHTS`) — the transport for
 /// DRI3/Present GPU buffers and the browser content-process IPC.
 // Public only for the repository's `contentproc` harness example.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "fullrust"))]
 #[doc(hidden)]
 pub mod scm;
 mod screen;
@@ -152,7 +166,7 @@ pub(crate) mod shell;
 /// `memfd`-backed shared-memory buffers — the CPU side of the content path (a
 /// content process's pixels shared with the UI process, the dual of GPU dma-buf).
 // Public only for the repository's `contentproc` harness example.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "fullrust"))]
 #[doc(hidden)]
 pub mod shm;
 /// In-app purchases: StoreKit, Google Play Billing, a mock.

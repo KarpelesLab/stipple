@@ -104,7 +104,7 @@ mod imp {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "fullrust"))]
 mod imp {
     use crate::platform::a11y::{DBus, read_string, read_u32};
     use crate::platform::shell::linux::{W, app_name, debug};
@@ -228,7 +228,12 @@ mod imp {
     }
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+#[cfg(not(any(
+    target_os = "macos",
+    target_os = "windows",
+    target_os = "linux",
+    target_os = "fullrust"
+)))]
 mod imp {
     pub(super) fn set(_on: bool) {}
 }

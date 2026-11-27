@@ -203,7 +203,10 @@ pub(crate) enum ClipboardRead {
     /// The owner has been asked; the content arrives later as
     /// [`Event::Clipboard`](crate::platform::Event::Clipboard). X11 answers
     /// this way when another client owns the selection.
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))] // only X11 answers later
+    #[cfg_attr(
+        not(any(target_os = "linux", target_os = "fullrust")),
+        allow(dead_code)
+    )] // only X11 answers later
     Pending,
 }
 
