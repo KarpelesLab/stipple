@@ -166,19 +166,14 @@ fn vm() -> Option<*mut c_void> {
 /// don't find it).
 fn created_vm() -> Option<*mut c_void> {
     type GetCreated = unsafe extern "C" fn(*mut *mut c_void, i32, *mut i32) -> i32;
-    unsafe {
-        let lib = super::dlopen(c"libnativehelper.so".as_ptr(), super::RTLD_NOW);
-        if lib.is_null() {
-            return None;
-        }
-        let sym = super::dlsym(lib, c"JNI_GetCreatedJavaVMs".as_ptr());
-        if sym.is_null() {
-            return None;
-        }
-        let f: GetCreated = std::mem::transmute(sym);
-        let (mut vm, mut count) = (std::ptr::null_mut(), 0);
-        (f(&mut vm, 1, &mut count) == 0 && count > 0 && !vm.is_null()).then_some(vm)
-    }
+    // SAFETY: a system library (already loaded by the runtime), and the
+    // symbol's signature from jni.h.
+    let lib = unsafe { dlsym::Library::open("libnativehelper.so") }.ok()?;
+    let f = unsafe { lib.get::<GetCreated>(c"JNI_GetCreatedJavaVMs") }.ok()?;
+    let (mut vm, mut count) = (std::ptr::null_mut(), 0);
+    // SAFETY: room for one VM, as the count says.
+    let ok = unsafe { f.call((&mut vm, 1, &mut count)) } == 0;
+    (ok && count > 0 && !vm.is_null()).then_some(vm)
 }
 
 /// The current activity (the app's `NativeActivity`), as a **new global

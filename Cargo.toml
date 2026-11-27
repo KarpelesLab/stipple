@@ -91,6 +91,15 @@ oxideav-mp3 = { version = "0.1.3", optional = true }
 oxideav-flac = { version = "0.0.13", optional = true }
 oxideav-opus = { version = "0.0.15", optional = true }
 
+# Run-time loading of the system libraries the backends use without linking
+# them (libasound, libvulkan, libxcb, Android's NDK libraries, MoltenVK...):
+# `dlopen`/`dlsym` behind symbols that can't outlive their library, and the
+# one loader that also works in a static, libc-free fullrust build (where it
+# boots the system's ld.so; see docs/platforms/linux.md). Not on Windows
+# (LoadLibrary sites stay hand-written) or the web (nothing to load).
+[target.'cfg(any(unix, target_os = "fullrust"))'.dependencies]
+dlsym = "0.1"
+
 [target.'cfg(target_os = "linux")'.dependencies]
 # VA-API H.264 decode (the `video` feature): only its H.264 front end and the
 # run-time libva loader, not its codec-registry glue.
@@ -109,6 +118,9 @@ oxideav-mpeg12video = { version = "0.0.14", optional = true }
 [lints.rust]
 unsafe_op_in_unsafe_fn = "warn"
 missing_debug_implementations = "warn"
+# `x86_64-unknown-linux-fullrust` (static, libc-free Linux) isn't a target
+# stock rustc knows.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("fullrust"))'] }
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }

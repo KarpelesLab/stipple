@@ -6,7 +6,7 @@
 //! on another thread, as AAudio asks, at the same rate.
 
 use super::{Device, Render};
-use std::ffi::{c_char, c_int, c_void};
+use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -21,70 +21,53 @@ const AAUDIO_SHARING_MODE_SHARED: i32 = 1;
 const AAUDIO_USAGE_GAME: i32 = 14;
 const AAUDIO_CALLBACK_RESULT_CONTINUE: i32 = 0;
 const AAUDIO_ERROR_DISCONNECTED: i32 = -899;
-const RTLD_NOW: c_int = 2;
-
-#[link(name = "dl")]
-unsafe extern "C" {
-    fn dlopen(name: *const c_char, flags: c_int) -> *mut c_void;
-    fn dlsym(handle: *mut c_void, name: *const c_char) -> *mut c_void;
+dlsym::library! {
+    struct Lib {
+        unsafe extern "C" {
+            #[link_name = "AAudio_createStreamBuilder"]
+            fn create_builder(b: *mut Builder) -> i32;
+            #[link_name = "AAudioStreamBuilder_setFormat"]
+            fn set_format(b: Builder, format: i32);
+            #[link_name = "AAudioStreamBuilder_setChannelCount"]
+            fn set_channel_count(b: Builder, count: i32);
+            #[link_name = "AAudioStreamBuilder_setSampleRate"]
+            fn set_sample_rate(b: Builder, rate: i32);
+            #[link_name = "AAudioStreamBuilder_setPerformanceMode"]
+            fn set_performance_mode(b: Builder, mode: i32);
+            #[link_name = "AAudioStreamBuilder_setSharingMode"]
+            fn set_sharing_mode(b: Builder, mode: i32);
+            /// API 28 and later.
+            #[optional]
+            #[link_name = "AAudioStreamBuilder_setUsage"]
+            fn set_usage(b: Builder, usage: i32);
+            #[link_name = "AAudioStreamBuilder_setDataCallback"]
+            fn set_data_callback(b: Builder, cb: DataCallback, user: *mut c_void);
+            #[link_name = "AAudioStreamBuilder_setErrorCallback"]
+            fn set_error_callback(b: Builder, cb: ErrorCallback, user: *mut c_void);
+            #[link_name = "AAudioStreamBuilder_openStream"]
+            fn open_stream(b: Builder, s: *mut Stream) -> i32;
+            #[link_name = "AAudioStreamBuilder_delete"]
+            fn delete_builder(b: Builder) -> i32;
+            #[link_name = "AAudioStream_getSampleRate"]
+            fn get_sample_rate(s: Stream) -> i32;
+            #[link_name = "AAudioStream_requestStart"]
+            fn request_start(s: Stream) -> i32;
+            #[link_name = "AAudioStream_requestPause"]
+            fn request_pause(s: Stream) -> i32;
+            #[link_name = "AAudioStream_requestStop"]
+            fn request_stop(s: Stream) -> i32;
+            #[link_name = "AAudioStream_close"]
+            fn close(s: Stream) -> i32;
+        }
+    }
 }
 
-struct Lib {
-    create_builder: unsafe extern "C" fn(*mut Builder) -> i32,
-    set_format: unsafe extern "C" fn(Builder, i32),
-    set_channel_count: unsafe extern "C" fn(Builder, i32),
-    set_sample_rate: unsafe extern "C" fn(Builder, i32),
-    set_performance_mode: unsafe extern "C" fn(Builder, i32),
-    set_sharing_mode: unsafe extern "C" fn(Builder, i32),
-    /// API 28 and later.
-    set_usage: Option<unsafe extern "C" fn(Builder, i32)>,
-    set_data_callback: unsafe extern "C" fn(Builder, DataCallback, *mut c_void),
-    set_error_callback: unsafe extern "C" fn(Builder, ErrorCallback, *mut c_void),
-    open_stream: unsafe extern "C" fn(Builder, *mut Stream) -> i32,
-    delete_builder: unsafe extern "C" fn(Builder) -> i32,
-    get_sample_rate: unsafe extern "C" fn(Stream) -> i32,
-    request_start: unsafe extern "C" fn(Stream) -> i32,
-    request_pause: unsafe extern "C" fn(Stream) -> i32,
-    request_stop: unsafe extern "C" fn(Stream) -> i32,
-    close: unsafe extern "C" fn(Stream) -> i32,
-}
-
-/// The function `name` in library `h`, as the function pointer type `F`.
-///
-/// # Safety
-/// `F` must be a function pointer type matching the symbol's signature.
-unsafe fn sym<F: Copy>(h: *mut c_void, name: &std::ffi::CStr) -> Option<F> {
-    assert_eq!(std::mem::size_of::<F>(), std::mem::size_of::<*mut c_void>());
-    let p = unsafe { dlsym(h, name.as_ptr()) };
-    // SAFETY: a non-null symbol address, as the caller's function type.
-    (!p.is_null()).then(|| unsafe { std::mem::transmute_copy::<*mut c_void, F>(&p) })
-}
-
+/// libaaudio, or `None` before Android 8 (no such library).
 fn lib() -> Option<&'static Lib> {
     static LIB: std::sync::OnceLock<Option<Lib>> = std::sync::OnceLock::new();
-    LIB.get_or_init(|| unsafe {
-        let h = dlopen(c"libaaudio.so".as_ptr(), RTLD_NOW);
-        if h.is_null() {
-            return None;
-        }
-        Some(Lib {
-            create_builder: sym(h, c"AAudio_createStreamBuilder")?,
-            set_format: sym(h, c"AAudioStreamBuilder_setFormat")?,
-            set_channel_count: sym(h, c"AAudioStreamBuilder_setChannelCount")?,
-            set_sample_rate: sym(h, c"AAudioStreamBuilder_setSampleRate")?,
-            set_performance_mode: sym(h, c"AAudioStreamBuilder_setPerformanceMode")?,
-            set_sharing_mode: sym(h, c"AAudioStreamBuilder_setSharingMode")?,
-            set_usage: sym(h, c"AAudioStreamBuilder_setUsage"),
-            set_data_callback: sym(h, c"AAudioStreamBuilder_setDataCallback")?,
-            set_error_callback: sym(h, c"AAudioStreamBuilder_setErrorCallback")?,
-            open_stream: sym(h, c"AAudioStreamBuilder_openStream")?,
-            delete_builder: sym(h, c"AAudioStreamBuilder_delete")?,
-            get_sample_rate: sym(h, c"AAudioStream_getSampleRate")?,
-            request_start: sym(h, c"AAudioStream_requestStart")?,
-            request_pause: sym(h, c"AAudioStream_requestPause")?,
-            request_stop: sym(h, c"AAudioStream_requestStop")?,
-            close: sym(h, c"AAudioStream_close")?,
-        })
+    LIB.get_or_init(|| {
+        // SAFETY: a system library, trusted like the rest of the platform.
+        unsafe { <Lib as dlsym::Bindings>::open("libaaudio.so") }.ok()
     })
     .as_ref()
 }
@@ -142,24 +125,23 @@ unsafe extern "C" fn error_cb(_s: Stream, user: *mut c_void, error: i32) {
 fn open_stream(lib: &Lib, rate: u32, user: *mut c_void) -> Option<Stream> {
     unsafe {
         let mut b: Builder = std::ptr::null_mut();
-        if (lib.create_builder)(&mut b) != 0 || b.is_null() {
+        if lib.create_builder(&mut b) != 0 || b.is_null() {
             return None;
         }
-        (lib.set_format)(b, AAUDIO_FORMAT_PCM_FLOAT);
-        (lib.set_channel_count)(b, 2);
+        lib.set_format(b, AAUDIO_FORMAT_PCM_FLOAT);
+        lib.set_channel_count(b, 2);
         if rate > 0 {
-            (lib.set_sample_rate)(b, rate as i32);
+            lib.set_sample_rate(b, rate as i32);
         }
-        (lib.set_performance_mode)(b, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
-        (lib.set_sharing_mode)(b, AAUDIO_SHARING_MODE_SHARED);
-        if let Some(set_usage) = lib.set_usage {
-            set_usage(b, AAUDIO_USAGE_GAME);
-        }
-        (lib.set_data_callback)(b, data_cb, user);
-        (lib.set_error_callback)(b, error_cb, user);
+        lib.set_performance_mode(b, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
+        lib.set_sharing_mode(b, AAUDIO_SHARING_MODE_SHARED);
+        // `None` before API 28, where streams keep the default usage.
+        let _ = lib.set_usage(b, AAUDIO_USAGE_GAME);
+        lib.set_data_callback(b, data_cb, user);
+        lib.set_error_callback(b, error_cb, user);
         let mut s: Stream = std::ptr::null_mut();
-        let r = (lib.open_stream)(b, &mut s);
-        (lib.delete_builder)(b);
+        let r = lib.open_stream(b, &mut s);
+        lib.delete_builder(b);
         (r == 0 && !s.is_null()).then_some(s)
     }
 }
@@ -172,15 +154,15 @@ fn reopen(state: &State) {
     }
     unsafe {
         if !stream.0.is_null() {
-            (lib.request_stop)(stream.0);
-            (lib.close)(stream.0);
+            lib.request_stop(stream.0);
+            lib.close(stream.0);
         }
     }
     stream.0 = std::ptr::null_mut();
     let user = (state as *const State).cast_mut().cast();
     if let Some(s) = open_stream(lib, state.rate, user) {
         if !state.paused.load(Ordering::Relaxed) {
-            unsafe { (lib.request_start)(s) };
+            unsafe { lib.request_start(s) };
         }
         stream.0 = s;
     }
@@ -195,8 +177,8 @@ pub(super) fn open(make: &mut dyn FnMut(u32) -> Render) -> Option<Box<dyn Device
     // Open once to learn the device's rate, then for real with the render
     // function in place.
     let probe = open_stream(lib, 0, std::ptr::null_mut())?;
-    let rate = unsafe { (lib.get_sample_rate)(probe) };
-    unsafe { (lib.close)(probe) };
+    let rate = unsafe { lib.get_sample_rate(probe) };
+    unsafe { lib.close(probe) };
     let rate = if rate >= 8000 { rate as u32 } else { 48_000 };
     let state = Arc::new(State {
         render: Mutex::new(make(rate)),
@@ -207,8 +189,8 @@ pub(super) fn open(make: &mut dyn FnMut(u32) -> Render) -> Option<Box<dyn Device
     });
     let user = Arc::as_ptr(&state).cast_mut().cast();
     let s = open_stream(lib, rate, user)?;
-    if unsafe { (lib.request_start)(s) } != 0 {
-        unsafe { (lib.close)(s) };
+    if unsafe { lib.request_start(s) } != 0 {
+        unsafe { lib.close(s) };
         return None;
     }
     super::lock(&state.stream).0 = s;
@@ -227,9 +209,9 @@ impl Device for AAudio {
         if !stream.0.is_null() {
             unsafe {
                 if paused {
-                    (lib.request_pause)(stream.0);
+                    lib.request_pause(stream.0);
                 } else {
-                    (lib.request_start)(stream.0);
+                    lib.request_start(stream.0);
                 }
             }
         }
@@ -243,8 +225,8 @@ impl Drop for AAudio {
         self.state.closed.store(true, Ordering::Release);
         if !stream.0.is_null() {
             unsafe {
-                (lib.request_stop)(stream.0);
-                (lib.close)(stream.0);
+                lib.request_stop(stream.0);
+                lib.close(stream.0);
             }
             stream.0 = std::ptr::null_mut();
         }

@@ -173,27 +173,42 @@ pub fn once_block<A: 'static>(f: impl FnOnce(A) + Send + 'static) -> Id {
 
 // ---- Frameworks loaded on demand ----------------------------------------------
 
-unsafe extern "C" {
-    fn dlopen(path: *const std::ffi::c_char, mode: std::ffi::c_int) -> *mut c_void;
-    fn dlsym(handle: *mut c_void, name: *const std::ffi::c_char) -> *mut c_void;
+/// A system framework [`load_framework`] loaded (or didn't find): loaded
+/// for good, since the classes it registers outlive any handle.
+#[derive(Clone, Copy, Debug)]
+pub struct Framework(Option<&'static dlsym::Library>);
+
+impl Framework {
+    /// The framework isn't there.
+    pub fn is_null(self) -> bool {
+        self.0.is_none()
+    }
 }
 
 /// Load the system framework `name` (`"AVFoundation"`), so its classes are
-/// known to the runtime, and return its handle (null if it isn't there).
-/// Loading again is cheap: the loader keeps it.
-pub fn load_framework(name: &str) -> *mut c_void {
-    const RTLD_LAZY: std::ffi::c_int = 1;
+/// known to the runtime. Loading again is cheap: each framework is opened
+/// once and kept.
+pub fn load_framework(name: &str) -> Framework {
+    static LOADED: std::sync::Mutex<Vec<(String, Framework)>> = std::sync::Mutex::new(Vec::new());
+    let mut loaded = LOADED.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((_, f)) = loaded.iter().find(|(n, _)| n == name) {
+        return *f;
+    }
     let path = format!("/System/Library/Frameworks/{name}.framework/{name}");
-    let Ok(c) = CString::new(path) else {
-        return std::ptr::null_mut();
-    };
-    unsafe { dlopen(c.as_ptr(), RTLD_LAZY) }
+    // SAFETY: a system framework, trusted like the rest of the platform.
+    let lib = unsafe { dlsym::os::unix::OpenOptions::new().lazy(true).open(path) };
+    let f = Framework(lib.ok().map(dlsym::Library::leak));
+    loaded.push((name.to_owned(), f));
+    f
 }
 
-/// Symbol `name` of a library [`load_framework`] loaded; null if missing.
-pub fn symbol(handle: *mut c_void, name: &std::ffi::CStr) -> *mut c_void {
-    if handle.is_null() {
+/// The address of symbol `name` of a framework [`load_framework`] loaded;
+/// null if missing.
+pub fn symbol(framework: Framework, name: &std::ffi::CStr) -> *mut c_void {
+    let Some(lib) = framework.0 else {
         return std::ptr::null_mut();
-    }
-    unsafe { dlsym(handle, name.as_ptr()) }
+    };
+    // SAFETY: only the address is taken; the caller gives it its type. The
+    // framework stays loaded, so the address stays valid.
+    unsafe { lib.get::<*mut c_void>(name) }.map_or(std::ptr::null_mut(), |s| s.as_ptr())
 }

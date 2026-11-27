@@ -43,7 +43,7 @@ struct CgPoint {
 
 /// The C functions and constants used, resolved when first needed.
 struct Lib {
-    av: usize,
+    av: crate::platform::native::objc::Framework,
     image_buffer: unsafe extern "C" fn(*mut c_void) -> *mut c_void,
     timestamp: unsafe extern "C" fn(*mut c_void) -> CmTime,
     lock: unsafe extern "C" fn(*mut c_void, u64) -> i32,
@@ -89,7 +89,7 @@ fn lib() -> Option<&'static Lib> {
             return None;
         }
         Some(Lib {
-            av: av as usize,
+            av,
             image_buffer: f!(cm, c"CMSampleBufferGetImageBuffer"),
             timestamp: f!(cm, c"CMSampleBufferGetPresentationTimeStamp"),
             lock: f!(cv, c"CVPixelBufferLockBaseAddress"),
@@ -117,7 +117,7 @@ fn lib() -> Option<&'static Lib> {
 
 /// The AVFoundation string constant `name` (null where this OS lacks it).
 fn constant(lib: &Lib, name: &CStr) -> Id {
-    let p = symbol(lib.av as *mut c_void, name) as *const Id;
+    let p = symbol(lib.av, name) as *const Id;
     if p.is_null() {
         std::ptr::null_mut()
     } else {

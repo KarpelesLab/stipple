@@ -31,10 +31,6 @@ unsafe extern "C" {
     fn CFRunLoopTimerSetNextFireDate(timer: *mut c_void, date: f64);
 }
 
-unsafe extern "C" {
-    fn dlopen(path: *const std::ffi::c_char, mode: i32) -> *mut c_void;
-}
-
 const FAST: f64 = 1.0 / 60.0;
 const SLOW: f64 = 0.5;
 
@@ -43,9 +39,16 @@ struct Known(Vec<(usize, GamepadId)>);
 static KNOWN: Mutex<Known> = Mutex::new(Known(Vec::new()));
 
 pub(super) fn start() {
-    const RTLD_LAZY: i32 = 1;
-    let path = c"/System/Library/Frameworks/GameController.framework/GameController";
-    if unsafe { dlopen(path.as_ptr(), RTLD_LAZY) }.is_null() || class("GCController").is_null() {
+    let path = "/System/Library/Frameworks/GameController.framework/GameController";
+    // Loaded for its Objective-C classes, which stay registered: kept for
+    // the life of the process.
+    // SAFETY: a system framework, trusted like the rest of the platform.
+    let Ok(framework) = (unsafe { dlsym::os::unix::OpenOptions::new().lazy(true).open(path) })
+    else {
+        return;
+    };
+    framework.leak();
+    if class("GCController").is_null() {
         return;
     }
     if on_main_thread() {

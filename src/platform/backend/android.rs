@@ -268,12 +268,6 @@ unsafe extern "C" {
     fn __android_log_write(prio: c_int, tag: *const c_char, text: *const c_char) -> c_int;
 }
 
-#[link(name = "dl")]
-unsafe extern "C" {
-    fn dlopen(name: *const c_char, flags: c_int) -> *mut c_void;
-    fn dlsym(handle: *mut c_void, name: *const c_char) -> *mut c_void;
-}
-
 unsafe extern "C" {
     fn pipe2(fds: *mut c_int, flags: c_int) -> c_int;
     fn dup2(old: c_int, new: c_int) -> c_int;
@@ -285,7 +279,6 @@ unsafe extern "C" {
 
 const O_NONBLOCK: c_int = 0o4000;
 const O_CLOEXEC: c_int = 0o2_000_000;
-const RTLD_NOW: c_int = 2;
 
 /// `ANativeActivityCallbacks` — the lifecycle/window function-pointer table a
 /// `NativeActivity` invokes. Only the fields a backend wires up need non-null
@@ -1206,7 +1199,7 @@ pub(crate) fn app_dirs() -> Option<crate::platform::AppDirs> {
 /// in API 24 and its 64-bit callback in API 29, above the API 21 the NDK
 /// links against.
 mod choreographer {
-    use super::{RTLD_NOW, c_long, c_void, dlopen, dlsym};
+    use super::{c_long, c_void};
     use std::sync::Arc;
     use std::sync::OnceLock;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -1214,43 +1207,28 @@ mod choreographer {
     type Callback64 = unsafe extern "C" fn(i64, *mut c_void);
     type Callback = unsafe extern "C" fn(c_long, *mut c_void);
 
-    struct Api {
-        get_instance: unsafe extern "C" fn() -> *mut c_void,
-        post64: Option<unsafe extern "C" fn(*mut c_void, Callback64, *mut c_void)>,
-        post: Option<unsafe extern "C" fn(*mut c_void, Callback, *mut c_void)>,
+    dlsym::library! {
+        struct Api {
+            unsafe extern "C" {
+                #[link_name = "AChoreographer_getInstance"]
+                fn get_instance() -> *mut c_void;
+                /// API 29.
+                #[optional]
+                #[link_name = "AChoreographer_postFrameCallback64"]
+                fn post64(ch: *mut c_void, cb: Callback64, data: *mut c_void);
+                /// API 24 (deprecated in 29).
+                #[optional]
+                #[link_name = "AChoreographer_postFrameCallback"]
+                fn post(ch: *mut c_void, cb: Callback, data: *mut c_void);
+            }
+        }
     }
 
     fn api() -> Option<&'static Api> {
         static API: OnceLock<Option<Api>> = OnceLock::new();
-        API.get_or_init(|| unsafe {
-            let lib = dlopen(c"libandroid.so".as_ptr(), RTLD_NOW);
-            if lib.is_null() {
-                return None;
-            }
-            let get_instance = dlsym(lib, c"AChoreographer_getInstance".as_ptr());
-            if get_instance.is_null() {
-                return None;
-            }
-            let post64 = dlsym(lib, c"AChoreographer_postFrameCallback64".as_ptr());
-            let post = dlsym(lib, c"AChoreographer_postFrameCallback".as_ptr());
-            Some(Api {
-                get_instance: std::mem::transmute::<
-                    *mut c_void,
-                    unsafe extern "C" fn() -> *mut c_void,
-                >(get_instance),
-                post64: (!post64.is_null()).then(|| {
-                    std::mem::transmute::<
-                        *mut c_void,
-                        unsafe extern "C" fn(*mut c_void, Callback64, *mut c_void),
-                    >(post64)
-                }),
-                post: (!post.is_null()).then(|| {
-                    std::mem::transmute::<
-                        *mut c_void,
-                        unsafe extern "C" fn(*mut c_void, Callback, *mut c_void),
-                    >(post)
-                }),
-            })
+        API.get_or_init(|| {
+            // SAFETY: a system library, trusted like the rest of the platform.
+            unsafe { <Api as dlsym::Bindings>::open("libandroid.so") }.ok()
         })
         .as_ref()
     }
@@ -1278,7 +1256,7 @@ mod choreographer {
         let Some(api) = api() else {
             return;
         };
-        let choreographer = unsafe { (api.get_instance)() };
+        let choreographer = unsafe { api.get_instance() };
         if choreographer.is_null() {
             return;
         }
@@ -1294,10 +1272,8 @@ mod choreographer {
                 unsafe {
                     // The 32-bit build's `long` callback overflows its
                     // nanoseconds, which only matters if they're read.
-                    if let Some(post64) = api.post64 {
-                        post64(ch, on_frame64, std::ptr::null_mut());
-                    } else if let Some(post) = api.post {
-                        post(ch, on_frame, std::ptr::null_mut());
+                    if api.post64(ch, on_frame64, std::ptr::null_mut()).is_none() {
+                        let _ = api.post(ch, on_frame, std::ptr::null_mut());
                     }
                 }
             }),

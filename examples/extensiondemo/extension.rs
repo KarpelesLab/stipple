@@ -62,10 +62,6 @@ mod ios {
         fn objc_msgSend();
     }
 
-    unsafe extern "C" {
-        fn dlopen(path: *const c_char, mode: i32) -> *mut c_void;
-    }
-
     /// The class `NSExtensionPrincipalClass` names in package.toml.
     const PRINCIPAL: &CStr = c"ExtensionDemoService";
 
@@ -167,13 +163,17 @@ mod ios {
         if !existing.is_null() {
             return existing;
         }
+        // Its classes are known once the framework is loaded (and stay
+        // registered, so it stays loaded).
+        let framework = "/System/Library/Frameworks/UserNotifications.framework/UserNotifications";
+        if let Ok(lib) = unsafe {
+            dlsym::os::unix::OpenOptions::new()
+                .lazy(true)
+                .open(framework)
+        } {
+            lib.leak();
+        }
         unsafe {
-            // Its classes are known once the framework is loaded.
-            dlopen(
-                c"/System/Library/Frameworks/UserNotifications.framework/UserNotifications"
-                    .as_ptr(),
-                1,
-            );
             let base = class(c"UNNotificationServiceExtension");
             if base.is_null() {
                 return std::ptr::null_mut();

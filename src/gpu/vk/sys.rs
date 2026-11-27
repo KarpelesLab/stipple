@@ -10,7 +10,7 @@
 
 #![allow(non_snake_case, non_camel_case_types, dead_code)]
 
-use std::ffi::{CStr, c_char, c_int, c_void};
+use std::ffi::{CStr, c_char, c_void};
 
 pub(crate) type VkInstance = *mut c_void;
 pub(crate) type VkPhysicalDevice = *mut c_void;
@@ -1055,43 +1055,79 @@ pub(crate) type PFN_vkVoidFunction = *const c_void;
 type GetInstanceProcAddr =
     unsafe extern "system" fn(VkInstance, *const c_char) -> PFN_vkVoidFunction;
 
-unsafe extern "C" {
-    fn dlopen(name: *const c_char, flags: c_int) -> *mut c_void;
-    fn dlsym(handle: *mut c_void, name: *const c_char) -> *mut c_void;
-}
-const RTLD_NOW: c_int = 2;
+// Unix-like systems: the Vulkan loader through dlsym. (Not Windows, where
+// `vulkan-1.dll` isn't loaded yet, nor static fullrust builds, where every
+// pointer vkGetInstanceProcAddr returns would need a trampoline switching
+// the C library's thread pointer, which dlsym 0.1 doesn't offer.)
+#[cfg(unix)]
+mod system {
+    use super::{GetInstanceProcAddr, PFN_vkVoidFunction, VkInstance};
+    use std::ffi::c_char;
 
-/// `vkGetInstanceProcAddr` from the system's Vulkan loader, loaded once.
-pub(crate) fn loader() -> Result<GetInstanceProcAddr, String> {
-    static GIPA: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    let p = *GIPA.get_or_init(|| unsafe {
-        let names: &[&CStr] = if cfg!(target_os = "android") {
-            &[c"libvulkan.so"]
-        } else if cfg!(target_os = "macos") {
-            // The Vulkan loader over MoltenVK (the SDK's, or Homebrew's).
-            &[
-                c"libvulkan.1.dylib",
-                c"/usr/local/lib/libvulkan.1.dylib",
-                c"/opt/homebrew/lib/libvulkan.1.dylib",
-            ]
-        } else {
-            &[c"libvulkan.so.1", c"libvulkan.so"]
-        };
-        for name in names {
-            let lib = dlopen(name.as_ptr(), RTLD_NOW);
-            if !lib.is_null() {
-                let f = dlsym(lib, c"vkGetInstanceProcAddr".as_ptr());
-                if !f.is_null() {
-                    return f as usize;
-                }
+    dlsym::library! {
+        /// The system's Vulkan loader: everything else comes through
+        /// `vkGetInstanceProcAddr`.
+        struct Loader {
+            unsafe extern "system" {
+                fn vkGetInstanceProcAddr(instance: VkInstance, name: *const c_char) -> PFN_vkVoidFunction;
             }
         }
-        0
-    });
-    if p == 0 {
-        return Err("no Vulkan loader (libvulkan)".into());
     }
-    Ok(unsafe { std::mem::transmute::<usize, GetInstanceProcAddr>(p) })
+
+    /// The Vulkan loader, opened once and kept for the life of the process.
+    fn vulkan() -> Option<&'static Loader> {
+        static LOADER: std::sync::OnceLock<Option<Loader>> = std::sync::OnceLock::new();
+        LOADER
+            .get_or_init(|| {
+                let names: &[&str] = if cfg!(target_os = "android") {
+                    &["libvulkan.so"]
+                } else if cfg!(target_os = "macos") {
+                    // The Vulkan loader over MoltenVK (the SDK's, or Homebrew's).
+                    &[
+                        "libvulkan.1.dylib",
+                        "/usr/local/lib/libvulkan.1.dylib",
+                        "/opt/homebrew/lib/libvulkan.1.dylib",
+                    ]
+                } else {
+                    &["libvulkan.so.1", "libvulkan.so"]
+                };
+                // SAFETY: the system's Vulkan loader, trusted like the rest of the
+                // platform.
+                unsafe { <Loader as dlsym::Bindings>::open_first(names) }.ok()
+            })
+            .as_ref()
+    }
+
+    /// `vkGetInstanceProcAddr`, forwarded to the loader `vulkan()` keeps open.
+    unsafe extern "system" fn get_instance_proc_addr(
+        instance: VkInstance,
+        name: *const c_char,
+    ) -> PFN_vkVoidFunction {
+        match vulkan() {
+            // SAFETY: the caller's arguments, as Vulkan specifies them.
+            Some(vk) => unsafe { vk.vkGetInstanceProcAddr(instance, name) },
+            None => std::ptr::null(),
+        }
+    }
+
+    pub(super) fn loader() -> Result<GetInstanceProcAddr, String> {
+        match vulkan() {
+            Some(_) => Ok(get_instance_proc_addr),
+            None => Err("no Vulkan loader (libvulkan)".into()),
+        }
+    }
+}
+
+/// `vkGetInstanceProcAddr` from the system's Vulkan loader, loaded once.
+#[cfg(unix)]
+pub(crate) fn loader() -> Result<GetInstanceProcAddr, String> {
+    system::loader()
+}
+
+/// No Vulkan loader on this platform.
+#[cfg(not(unix))]
+pub(crate) fn loader() -> Result<GetInstanceProcAddr, String> {
+    Err("no Vulkan loader on this platform".into())
 }
 
 /// The entry points, as `unsafe extern "system" fn` pointers: the required

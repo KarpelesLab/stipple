@@ -33,12 +33,6 @@ mod hwbuf;
 /// Whether Stipple captures from cameras here.
 pub(super) const SUPPORTED: bool = true;
 
-#[link(name = "dl")]
-unsafe extern "C" {
-    fn dlopen(name: *const c_char, flags: c_int) -> *mut c_void;
-    fn dlsym(handle: *mut c_void, name: *const c_char) -> *mut c_void;
-}
-
 // ---- Metadata tags (NdkCameraMetadataTags.h: section << 16 | index) ----------
 
 const CONTROL: u32 = 1 << 16;
@@ -105,106 +99,112 @@ struct ImageListener {
 
 type P = *mut c_void;
 
-/// The NDK functions used.
-struct Lib {
-    manager_create: unsafe extern "C" fn() -> P,
-    manager_delete: unsafe extern "C" fn(P),
-    id_list: unsafe extern "C" fn(P, *mut *mut IdList) -> i32,
-    delete_id_list: unsafe extern "C" fn(*mut IdList),
-    characteristics: unsafe extern "C" fn(P, *const c_char, *mut P) -> i32,
-    const_entry: unsafe extern "C" fn(P, u32, *mut ConstEntry) -> i32,
-    metadata_free: unsafe extern "C" fn(P),
-    open_camera: unsafe extern "C" fn(P, *const c_char, *mut DeviceCallbacks, *mut P) -> i32,
-    device_close: unsafe extern "C" fn(P) -> i32,
-    create_request: unsafe extern "C" fn(P, c_int, *mut P) -> i32,
-    request_free: unsafe extern "C" fn(P),
-    request_add_target: unsafe extern "C" fn(P, P) -> i32,
-    set_u8: unsafe extern "C" fn(P, u32, u32, *const u8) -> i32,
-    set_i32: unsafe extern "C" fn(P, u32, u32, *const i32) -> i32,
-    target_create: unsafe extern "C" fn(P, *mut P) -> i32,
-    target_free: unsafe extern "C" fn(P),
-    container_create: unsafe extern "C" fn(*mut P) -> i32,
-    container_free: unsafe extern "C" fn(P),
-    container_add: unsafe extern "C" fn(P, P) -> i32,
-    output_create: unsafe extern "C" fn(P, *mut P) -> i32,
-    output_free: unsafe extern "C" fn(P),
-    create_session: unsafe extern "C" fn(P, P, *const SessionCallbacks, *mut P) -> i32,
-    session_close: unsafe extern "C" fn(P),
-    set_repeating: unsafe extern "C" fn(P, P, c_int, *mut P, *mut c_int) -> i32,
-    stop_repeating: unsafe extern "C" fn(P) -> i32,
-    reader_new: unsafe extern "C" fn(i32, i32, i32, i32, *mut P) -> i32,
-    reader_delete: unsafe extern "C" fn(P),
-    reader_window: unsafe extern "C" fn(P, *mut P) -> i32,
-    reader_listener: unsafe extern "C" fn(P, *mut ImageListener) -> i32,
-    acquire_latest: unsafe extern "C" fn(P, *mut P) -> i32,
-    image_delete: unsafe extern "C" fn(P),
-    image_width: unsafe extern "C" fn(P, *mut i32) -> i32,
-    image_height: unsafe extern "C" fn(P, *mut i32) -> i32,
-    image_timestamp: unsafe extern "C" fn(P, *mut i64) -> i32,
-    plane_row_stride: unsafe extern "C" fn(P, c_int, *mut i32) -> i32,
-    plane_pixel_stride: unsafe extern "C" fn(P, c_int, *mut i32) -> i32,
-    plane_data: unsafe extern "C" fn(P, c_int, *mut *mut u8, *mut c_int) -> i32,
+dlsym::library! {
+    /// The camera NDK's functions used (`libcamera2ndk.so`, Android 7).
+    struct Cam {
+        unsafe extern "C" {
+            #[link_name = "ACameraManager_create"]
+            fn manager_create() -> P;
+            #[link_name = "ACameraManager_delete"]
+            fn manager_delete(a: P);
+            #[link_name = "ACameraManager_getCameraIdList"]
+            fn id_list(a: P, b: *mut *mut IdList) -> i32;
+            #[link_name = "ACameraManager_deleteCameraIdList"]
+            fn delete_id_list(a: *mut IdList);
+            #[link_name = "ACameraManager_getCameraCharacteristics"]
+            fn characteristics(a: P, b: *const c_char, c: *mut P) -> i32;
+            #[link_name = "ACameraMetadata_getConstEntry"]
+            fn const_entry(a: P, b: u32, c: *mut ConstEntry) -> i32;
+            #[link_name = "ACameraMetadata_free"]
+            fn metadata_free(a: P);
+            #[link_name = "ACameraManager_openCamera"]
+            fn open_camera(a: P, b: *const c_char, c: *mut DeviceCallbacks, d: *mut P) -> i32;
+            #[link_name = "ACameraDevice_close"]
+            fn device_close(a: P) -> i32;
+            #[link_name = "ACameraDevice_createCaptureRequest"]
+            fn create_request(a: P, b: c_int, c: *mut P) -> i32;
+            #[link_name = "ACaptureRequest_free"]
+            fn request_free(a: P);
+            #[link_name = "ACaptureRequest_addTarget"]
+            fn request_add_target(a: P, b: P) -> i32;
+            #[link_name = "ACaptureRequest_setEntry_u8"]
+            fn set_u8(a: P, b: u32, c: u32, d: *const u8) -> i32;
+            #[link_name = "ACaptureRequest_setEntry_i32"]
+            fn set_i32(a: P, b: u32, c: u32, d: *const i32) -> i32;
+            #[link_name = "ACameraOutputTarget_create"]
+            fn target_create(a: P, b: *mut P) -> i32;
+            #[link_name = "ACameraOutputTarget_free"]
+            fn target_free(a: P);
+            #[link_name = "ACaptureSessionOutputContainer_create"]
+            fn container_create(a: *mut P) -> i32;
+            #[link_name = "ACaptureSessionOutputContainer_free"]
+            fn container_free(a: P);
+            #[link_name = "ACaptureSessionOutputContainer_add"]
+            fn container_add(a: P, b: P) -> i32;
+            #[link_name = "ACaptureSessionOutput_create"]
+            fn output_create(a: P, b: *mut P) -> i32;
+            #[link_name = "ACaptureSessionOutput_free"]
+            fn output_free(a: P);
+            #[link_name = "ACameraDevice_createCaptureSession"]
+            fn create_session(a: P, b: P, c: *const SessionCallbacks, d: *mut P) -> i32;
+            #[link_name = "ACameraCaptureSession_close"]
+            fn session_close(a: P);
+            #[link_name = "ACameraCaptureSession_setRepeatingRequest"]
+            fn set_repeating(a: P, b: P, c: c_int, d: *mut P, e: *mut c_int) -> i32;
+            #[link_name = "ACameraCaptureSession_stopRepeating"]
+            fn stop_repeating(a: P) -> i32;
+        }
+    }
 }
 
-// The types come from the fields each pointer goes into.
-#[allow(clippy::missing_transmute_annotations)]
+dlsym::library! {
+    /// The media NDK's image reader functions used (`libmediandk.so`).
+    struct Media {
+        unsafe extern "C" {
+            #[link_name = "AImageReader_new"]
+            fn reader_new(a: i32, b: i32, c: i32, d: i32, e: *mut P) -> i32;
+            #[link_name = "AImageReader_delete"]
+            fn reader_delete(a: P);
+            #[link_name = "AImageReader_getWindow"]
+            fn reader_window(a: P, b: *mut P) -> i32;
+            #[link_name = "AImageReader_setImageListener"]
+            fn reader_listener(a: P, b: *mut ImageListener) -> i32;
+            #[link_name = "AImageReader_acquireLatestImage"]
+            fn acquire_latest(a: P, b: *mut P) -> i32;
+            #[link_name = "AImage_delete"]
+            fn image_delete(a: P);
+            #[link_name = "AImage_getWidth"]
+            fn image_width(a: P, b: *mut i32) -> i32;
+            #[link_name = "AImage_getHeight"]
+            fn image_height(a: P, b: *mut i32) -> i32;
+            #[link_name = "AImage_getTimestamp"]
+            fn image_timestamp(a: P, b: *mut i64) -> i32;
+            #[link_name = "AImage_getPlaneRowStride"]
+            fn plane_row_stride(a: P, b: c_int, c: *mut i32) -> i32;
+            #[link_name = "AImage_getPlanePixelStride"]
+            fn plane_pixel_stride(a: P, b: c_int, c: *mut i32) -> i32;
+            #[link_name = "AImage_getPlaneData"]
+            fn plane_data(a: P, b: c_int, c: *mut *mut u8, d: *mut c_int) -> i32;
+        }
+    }
+}
+
+/// The NDK functions used.
+struct Lib {
+    cam: Cam,
+    media: Media,
+}
+
 fn lib() -> Option<&'static Lib> {
     static LIB: OnceLock<Option<Lib>> = OnceLock::new();
-    LIB.get_or_init(|| unsafe {
-        const RTLD_NOW: c_int = 2;
-        let cam = dlopen(c"libcamera2ndk.so".as_ptr(), RTLD_NOW);
-        let media = dlopen(c"libmediandk.so".as_ptr(), RTLD_NOW);
-        if cam.is_null() || media.is_null() {
-            return None;
+    LIB.get_or_init(|| {
+        // SAFETY: system libraries, trusted like the rest of the platform.
+        unsafe {
+            Some(Lib {
+                cam: <Cam as dlsym::Bindings>::open("libcamera2ndk.so").ok()?,
+                media: <Media as dlsym::Bindings>::open("libmediandk.so").ok()?,
+            })
         }
-        macro_rules! f {
-            ($h:expr, $name:literal) => {{
-                let p = dlsym($h, $name.as_ptr());
-                if p.is_null() {
-                    return None;
-                }
-                std::mem::transmute::<*mut c_void, _>(p)
-            }};
-        }
-        Some(Lib {
-            manager_create: f!(cam, c"ACameraManager_create"),
-            manager_delete: f!(cam, c"ACameraManager_delete"),
-            id_list: f!(cam, c"ACameraManager_getCameraIdList"),
-            delete_id_list: f!(cam, c"ACameraManager_deleteCameraIdList"),
-            characteristics: f!(cam, c"ACameraManager_getCameraCharacteristics"),
-            const_entry: f!(cam, c"ACameraMetadata_getConstEntry"),
-            metadata_free: f!(cam, c"ACameraMetadata_free"),
-            open_camera: f!(cam, c"ACameraManager_openCamera"),
-            device_close: f!(cam, c"ACameraDevice_close"),
-            create_request: f!(cam, c"ACameraDevice_createCaptureRequest"),
-            request_free: f!(cam, c"ACaptureRequest_free"),
-            request_add_target: f!(cam, c"ACaptureRequest_addTarget"),
-            set_u8: f!(cam, c"ACaptureRequest_setEntry_u8"),
-            set_i32: f!(cam, c"ACaptureRequest_setEntry_i32"),
-            target_create: f!(cam, c"ACameraOutputTarget_create"),
-            target_free: f!(cam, c"ACameraOutputTarget_free"),
-            container_create: f!(cam, c"ACaptureSessionOutputContainer_create"),
-            container_free: f!(cam, c"ACaptureSessionOutputContainer_free"),
-            container_add: f!(cam, c"ACaptureSessionOutputContainer_add"),
-            output_create: f!(cam, c"ACaptureSessionOutput_create"),
-            output_free: f!(cam, c"ACaptureSessionOutput_free"),
-            create_session: f!(cam, c"ACameraDevice_createCaptureSession"),
-            session_close: f!(cam, c"ACameraCaptureSession_close"),
-            set_repeating: f!(cam, c"ACameraCaptureSession_setRepeatingRequest"),
-            stop_repeating: f!(cam, c"ACameraCaptureSession_stopRepeating"),
-            reader_new: f!(media, c"AImageReader_new"),
-            reader_delete: f!(media, c"AImageReader_delete"),
-            reader_window: f!(media, c"AImageReader_getWindow"),
-            reader_listener: f!(media, c"AImageReader_setImageListener"),
-            acquire_latest: f!(media, c"AImageReader_acquireLatestImage"),
-            image_delete: f!(media, c"AImage_delete"),
-            image_width: f!(media, c"AImage_getWidth"),
-            image_height: f!(media, c"AImage_getHeight"),
-            image_timestamp: f!(media, c"AImage_getTimestamp"),
-            plane_row_stride: f!(media, c"AImage_getPlaneRowStride"),
-            plane_pixel_stride: f!(media, c"AImage_getPlanePixelStride"),
-            plane_data: f!(media, c"AImage_getPlaneData"),
-        })
     })
     .as_ref()
 }
@@ -233,7 +233,7 @@ unsafe fn entry(lib: &Lib, meta: P, tag: u32) -> Option<ConstEntry> {
         count: 0,
         data: std::ptr::null(),
     };
-    let ok = unsafe { (lib.const_entry)(meta, tag, &mut e) } == ACAMERA_OK;
+    let ok = unsafe { lib.cam.const_entry(meta, tag, &mut e) } == ACAMERA_OK;
     (ok && !e.data.is_null() && e.count > 0).then_some(e)
 }
 
@@ -257,16 +257,16 @@ unsafe fn u8s(lib: &Lib, meta: P, tag: u32) -> Vec<u8> {
 fn cameras(lib: &Lib) -> Vec<Info> {
     let mut out = Vec::new();
     unsafe {
-        let manager = (lib.manager_create)();
+        let manager = lib.cam.manager_create();
         if manager.is_null() {
             return out;
         }
         let mut list: *mut IdList = std::ptr::null_mut();
-        if (lib.id_list)(manager, &mut list) == ACAMERA_OK && !list.is_null() {
+        if lib.cam.id_list(manager, &mut list) == ACAMERA_OK && !list.is_null() {
             let ids = std::slice::from_raw_parts((*list).ids, (*list).count.max(0) as usize);
             for &id in ids {
                 let mut meta: P = std::ptr::null_mut();
-                if id.is_null() || (lib.characteristics)(manager, id, &mut meta) != ACAMERA_OK {
+                if id.is_null() || lib.cam.characteristics(manager, id, &mut meta) != ACAMERA_OK {
                     continue;
                 }
                 let lens = match u8s(lib, meta, LENS_FACING).first() {
@@ -307,11 +307,11 @@ fn cameras(lib: &Lib) -> Vec<Info> {
                         .contains(&AF_MODE_CONTINUOUS_PICTURE),
                     sizes,
                 });
-                (lib.metadata_free)(meta);
+                lib.cam.metadata_free(meta);
             }
-            (lib.delete_id_list)(list);
+            lib.cam.delete_id_list(list);
         }
-        (lib.manager_delete)(manager);
+        lib.cam.manager_delete(manager);
     }
     out
 }
@@ -401,7 +401,7 @@ unsafe extern "C" fn on_image(ctx: *mut c_void, reader: *mut c_void) {
         return;
     }
     let mut image: P = std::ptr::null_mut();
-    if unsafe { (lib.acquire_latest)(reader, &mut image) } != 0 || image.is_null() {
+    if unsafe { lib.media.acquire_latest(reader, &mut image) } != 0 || image.is_null() {
         return;
     }
     let kept = std::cell::Cell::new(false);
@@ -410,16 +410,16 @@ unsafe extern "C" fn on_image(ctx: *mut c_void, reader: *mut c_void) {
             return;
         };
         let (mut w, mut h, mut t) = (0i32, 0i32, 0i64);
-        (lib.image_width)(image, &mut w);
-        (lib.image_height)(image, &mut h);
-        (lib.image_timestamp)(image, &mut t);
+        lib.media.image_width(image, &mut w);
+        lib.media.image_height(image, &mut h);
+        lib.media.image_timestamp(image, &mut t);
         let mut planes = [Plane::new(&[], 0, 1); 3];
         for (i, plane) in planes.iter_mut().enumerate() {
             let (mut data, mut len, mut row, mut pixel) = (std::ptr::null_mut(), 0, 0, 0);
             let i = i as c_int;
-            if (lib.plane_data)(image, i, &mut data, &mut len) != 0
-                || (lib.plane_row_stride)(image, i, &mut row) != 0
-                || (lib.plane_pixel_stride)(image, i, &mut pixel) != 0
+            if lib.media.plane_data(image, i, &mut data, &mut len) != 0
+                || lib.media.plane_row_stride(image, i, &mut row) != 0
+                || lib.media.plane_pixel_stride(image, i, &mut pixel) != 0
                 || data.is_null()
             {
                 return;
@@ -447,7 +447,7 @@ unsafe extern "C" fn on_image(ctx: *mut c_void, reader: *mut c_void) {
         );
     }));
     if !kept.get() {
-        unsafe { (lib.image_delete)(image) };
+        unsafe { lib.media.image_delete(image) };
     }
     if delivered.is_err() {
         eprintln!("stipple: the camera's frame callback panicked");
@@ -498,7 +498,7 @@ impl NdkSession {
         unsafe {
             let ctx = self.ctx as *const Ctx as *mut c_void;
             let mut o = Open {
-                manager: (lib.manager_create)(),
+                manager: lib.cam.manager_create(),
                 device: std::ptr::null_mut(),
                 reader: std::ptr::null_mut(),
                 output: std::ptr::null_mut(),
@@ -523,7 +523,9 @@ impl NdkSession {
                 return Err(CameraError::NoCamera);
             }
             let callbacks: *mut DeviceCallbacks = &mut *o._device_callbacks;
-            let r = (lib.open_camera)(o.manager, self.info.id.as_ptr(), callbacks, &mut o.device);
+            let r = lib
+                .cam
+                .open_camera(o.manager, self.info.id.as_ptr(), callbacks, &mut o.device);
             if r != ACAMERA_OK || o.device.is_null() {
                 close(lib, self.ctx, o);
                 return Err(if r == -10013 {
@@ -544,26 +546,28 @@ impl NdkSession {
                 on_image_available: Some(on_image),
             };
             *self.ctx.reader.lock().unwrap_or_else(|e| e.into_inner()) = o.reader as usize;
-            (lib.reader_listener)(o.reader, &mut listener);
+            lib.media.reader_listener(o.reader, &mut listener);
             let mut window: P = std::ptr::null_mut();
-            (lib.reader_window)(o.reader, &mut window);
+            lib.media.reader_window(o.reader, &mut window);
             let steps = [
-                (lib.output_create)(window, &mut o.output),
-                (lib.container_create)(&mut o.container),
+                lib.cam.output_create(window, &mut o.output),
+                lib.cam.container_create(&mut o.container),
             ];
             if steps.iter().any(|&r| r != ACAMERA_OK) {
                 close(lib, self.ctx, o);
                 return Err(os("making the session's output", steps[0].min(steps[1])));
             }
-            (lib.container_add)(o.container, o.output);
-            (lib.target_create)(window, &mut o.target);
-            let r = (lib.create_request)(o.device, TEMPLATE_PREVIEW, &mut o.request);
+            lib.cam.container_add(o.container, o.output);
+            lib.cam.target_create(window, &mut o.target);
+            let r = lib
+                .cam
+                .create_request(o.device, TEMPLATE_PREVIEW, &mut o.request);
             if r != ACAMERA_OK || o.request.is_null() {
                 close(lib, self.ctx, o);
                 return Err(os("making the capture request", r));
             }
-            (lib.request_add_target)(o.request, o.target);
-            let r = (lib.create_session)(
+            lib.cam.request_add_target(o.request, o.target);
+            let r = lib.cam.create_session(
                 o.device,
                 o.container,
                 &*o._session_callbacks,
@@ -586,7 +590,7 @@ impl NdkSession {
             return;
         };
         unsafe {
-            let set_u8 = |tag, v: u8| (lib.set_u8)(o.request, tag, 1, &v);
+            let set_u8 = |tag, v: u8| lib.cam.set_u8(o.request, tag, 1, &v);
             set_u8(CONTROL_AE_MODE, AE_MODE_ON);
             if self.info.continuous_af {
                 set_u8(CONTROL_AF_MODE, AF_MODE_CONTINUOUS_PICTURE);
@@ -602,18 +606,21 @@ impl NdkSession {
                 );
             }
             if self.crop[2] > 0 && self.crop[3] > 0 {
-                (lib.set_i32)(o.request, SCALER_CROP_REGION, 4, self.crop.as_ptr());
+                lib.cam
+                    .set_i32(o.request, SCALER_CROP_REGION, 4, self.crop.as_ptr());
             }
             if let Some(region) = self.region {
                 if self.info.af_regions {
-                    (lib.set_i32)(o.request, CONTROL_AF_REGIONS, 5, region.as_ptr());
+                    lib.cam
+                        .set_i32(o.request, CONTROL_AF_REGIONS, 5, region.as_ptr());
                 }
                 if self.info.ae_regions {
-                    (lib.set_i32)(o.request, CONTROL_AE_REGIONS, 5, region.as_ptr());
+                    lib.cam
+                        .set_i32(o.request, CONTROL_AE_REGIONS, 5, region.as_ptr());
                 }
             }
             let mut request = o.request;
-            let r = (lib.set_repeating)(
+            let r = lib.cam.set_repeating(
                 o.session,
                 std::ptr::null_mut(),
                 1,
@@ -634,36 +641,36 @@ impl NdkSession {
 fn close(lib: &Lib, ctx: &Ctx, o: Open) {
     unsafe {
         if !o.session.is_null() {
-            (lib.stop_repeating)(o.session);
-            (lib.session_close)(o.session);
+            lib.cam.stop_repeating(o.session);
+            lib.cam.session_close(o.session);
         }
         if !o.request.is_null() {
-            (lib.request_free)(o.request);
+            lib.cam.request_free(o.request);
         }
         if !o.target.is_null() {
-            (lib.target_free)(o.target);
+            lib.cam.target_free(o.target);
         }
         if !o.container.is_null() {
-            (lib.container_free)(o.container);
+            lib.cam.container_free(o.container);
         }
         if !o.output.is_null() {
-            (lib.output_free)(o.output);
+            lib.cam.output_free(o.output);
         }
         if !o.device.is_null() {
-            (lib.device_close)(o.device);
+            lib.cam.device_close(o.device);
         }
         if !o.reader.is_null() {
             let mut none = ImageListener {
                 context: std::ptr::null_mut(),
                 on_image_available: None,
             };
-            (lib.reader_listener)(o.reader, &mut none);
+            lib.media.reader_listener(o.reader, &mut none);
             // Wait for a callback in flight, and turn away those queued.
             *ctx.reader.lock().unwrap_or_else(|e| e.into_inner()) = 0;
             hwbuf::delete_reader(lib, o.reader);
         }
         if !o.manager.is_null() {
-            (lib.manager_delete)(o.manager);
+            lib.cam.manager_delete(o.manager);
         }
     }
 }

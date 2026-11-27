@@ -7,6 +7,7 @@
 //! | iOS | AudioToolbox: the RemoteIO `AudioUnit`, in an ambient `AVAudioSession` |
 //! | Windows | WASAPI, shared mode, event-driven |
 //! | Linux | ALSA's `default` device (`libasound.so.2`, loaded at run time) |
+//! | Linux, static (fullrust) | the same, loaded through the system's `ld.so` |
 //! | Android | AAudio (`libaaudio.so`, loaded at run time; Android 8+) |
 //! | Web | Web Audio, pulled by `web/stipple.js` |
 //!
@@ -28,7 +29,7 @@ pub(crate) trait Device: Send {
 #[cfg(target_os = "android")]
 #[allow(unsafe_code)]
 mod aaudio;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "fullrust"))]
 #[allow(unsafe_code)]
 mod alsa;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -50,7 +51,7 @@ fn open_platform(make: &mut dyn FnMut(u32) -> Render) -> Option<Box<dyn Device>>
     return coreaudio::open(make);
     #[cfg(target_os = "windows")]
     return wasapi::open(make);
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "fullrust"))]
     return alsa::open(make);
     #[cfg(target_os = "android")]
     return aaudio::open(make);

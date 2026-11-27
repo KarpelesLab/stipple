@@ -548,7 +548,7 @@ impl ExternalImage {
         })?;
         unsafe {
             let mut d = ahb::Desc::default();
-            (lib.describe)(buffer, &mut d);
+            lib.describe(buffer, &mut d);
             let format = match d.format {
                 ahb::FORMAT_R8G8B8A8 => ExternalFormat::Rgba8,
                 ahb::FORMAT_R8G8B8X8 => ExternalFormat::Rgbx8,
@@ -558,7 +558,7 @@ impl ExternalImage {
             if d.width == 0 || d.height == 0 {
                 return Err(ExternalError::Invalid("an empty AHardwareBuffer".into()));
             }
-            (lib.acquire)(buffer);
+            lib.acquire(buffer);
             Ok(Self::with_handle(
                 Handle::HardwareBuffer(buffer),
                 PhysicalSize::new(d.width, d.height),
@@ -725,7 +725,7 @@ impl Drop for ExternalImage {
             #[cfg(target_os = "android")]
             Handle::HardwareBuffer(b) => {
                 if let Some(lib) = ahb::lib() {
-                    unsafe { (lib.release)(*b) };
+                    unsafe { lib.release(*b) };
                 }
             }
             #[cfg(target_arch = "wasm32")]
@@ -1258,7 +1258,7 @@ mod win {
 #[cfg(target_os = "android")]
 pub(crate) mod ahb {
     use super::*;
-    use std::ffi::{c_char, c_int, c_void};
+    use std::ffi::{c_int, c_void};
 
     pub const FORMAT_R8G8B8A8: u32 = 1;
     pub const FORMAT_R8G8B8X8: u32 = 2;
@@ -1296,45 +1296,45 @@ pub(crate) mod ahb {
         pub rfu1: u64,
     }
 
-    pub struct Lib {
-        pub acquire: unsafe extern "C" fn(*mut c_void),
-        pub release: unsafe extern "C" fn(*mut c_void),
-        pub describe: unsafe extern "C" fn(*const c_void, *mut Desc),
-        lock: unsafe extern "C" fn(*mut c_void, u64, i32, *const c_void, *mut *mut c_void) -> c_int,
-        unlock: unsafe extern "C" fn(*mut c_void, *mut i32) -> c_int,
-        /// `AHardwareBuffer_lockPlanes` (Android 10), for YUV.
-        lock_planes: Option<
-            unsafe extern "C" fn(*mut c_void, u64, i32, *const c_void, *mut Planes) -> c_int,
-        >,
-    }
-
-    #[link(name = "dl")]
-    unsafe extern "C" {
-        fn dlopen(name: *const c_char, flags: c_int) -> *mut c_void;
-        fn dlsym(handle: *mut c_void, name: *const c_char) -> *mut c_void;
+    dlsym::library! {
+        pub struct Lib {
+            unsafe extern "C" {
+                #[link_name = "AHardwareBuffer_acquire"]
+                pub fn acquire(b: *mut c_void);
+                #[link_name = "AHardwareBuffer_release"]
+                pub fn release(b: *mut c_void);
+                #[link_name = "AHardwareBuffer_describe"]
+                pub fn describe(b: *const c_void, desc: *mut Desc);
+                #[link_name = "AHardwareBuffer_lock"]
+                fn lock(
+                    b: *mut c_void,
+                    usage: u64,
+                    fence: i32,
+                    rect: *const c_void,
+                    out: *mut *mut c_void,
+                ) -> c_int;
+                #[link_name = "AHardwareBuffer_unlock"]
+                fn unlock(b: *mut c_void, fence: *mut i32) -> c_int;
+                /// Android 10, for YUV.
+                #[optional]
+                #[link_name = "AHardwareBuffer_lockPlanes"]
+                fn lock_planes(
+                    b: *mut c_void,
+                    usage: u64,
+                    fence: i32,
+                    rect: *const c_void,
+                    out: *mut Planes,
+                ) -> c_int;
+            }
+        }
     }
 
     /// libnativewindow's `AHardwareBuffer_*`, where the system has them.
-    #[allow(clippy::missing_transmute_annotations)] // each symbol's type is its field's
     pub fn lib() -> Option<&'static Lib> {
         static LIB: OnceLock<Option<Lib>> = OnceLock::new();
-        LIB.get_or_init(|| unsafe {
-            let h = dlopen(c"libnativewindow.so".as_ptr(), 2);
-            if h.is_null() {
-                return None;
-            }
-            let f = |name: &std::ffi::CStr| {
-                let p = dlsym(h, name.as_ptr());
-                (!p.is_null()).then_some(p)
-            };
-            Some(Lib {
-                acquire: std::mem::transmute(f(c"AHardwareBuffer_acquire")?),
-                release: std::mem::transmute(f(c"AHardwareBuffer_release")?),
-                describe: std::mem::transmute(f(c"AHardwareBuffer_describe")?),
-                lock: std::mem::transmute(f(c"AHardwareBuffer_lock")?),
-                unlock: std::mem::transmute(f(c"AHardwareBuffer_unlock")?),
-                lock_planes: f(c"AHardwareBuffer_lockPlanes").map(|p| std::mem::transmute(p)),
-            })
+        LIB.get_or_init(|| {
+            // SAFETY: a system library, trusted like the rest of the platform.
+            unsafe { <Lib as dlsym::Bindings>::open("libnativewindow.so") }.ok()
         })
         .as_ref()
     }
@@ -1351,9 +1351,9 @@ pub(crate) mod ahb {
         }
         unsafe {
             let mut d = Desc::default();
-            (lib.describe)(b, &mut d);
+            lib.describe(b, &mut d);
             let mut ptr = std::ptr::null_mut();
-            if (lib.lock)(b, USAGE_CPU_READ_OFTEN, -1, std::ptr::null(), &mut ptr) != 0
+            if lib.lock(b, USAGE_CPU_READ_OFTEN, -1, std::ptr::null(), &mut ptr) != 0
                 || ptr.is_null()
             {
                 return None;
@@ -1361,7 +1361,7 @@ pub(crate) mod ahb {
             let stride = d.stride as usize * 4;
             let bytes = std::slice::from_raw_parts(ptr as *const u8, stride * size.height as usize);
             let out = to_rgba(format, size, &[(bytes, stride)], YuvColorSpace::default());
-            (lib.unlock)(b, std::ptr::null_mut());
+            lib.unlock(b, std::ptr::null_mut());
             out
         }
     }
@@ -1369,7 +1369,6 @@ pub(crate) mod ahb {
     /// Lock a YUV buffer's planes for reading and convert them (as the
     /// camera converts its frames: full range BT.601).
     unsafe fn read_yuv(lib: &Lib, b: *mut c_void, size: PhysicalSize) -> Option<Pixmap> {
-        let lock_planes = lib.lock_planes?;
         unsafe {
             let mut p = Planes {
                 count: 0,
@@ -1379,7 +1378,8 @@ pub(crate) mod ahb {
                     row_stride: 0,
                 }; 4],
             };
-            if lock_planes(b, USAGE_CPU_READ_OFTEN, -1, std::ptr::null(), &mut p) != 0 {
+            // `None` before Android 10.
+            if lib.lock_planes(b, USAGE_CPU_READ_OFTEN, -1, std::ptr::null(), &mut p)? != 0 {
                 return None;
             }
             let (w, h) = (size.width as usize, size.height as usize);
@@ -1404,7 +1404,7 @@ pub(crate) mod ahb {
                     ];
                     crate::camera::Frame::yuv(size, &planes).to_pixmap()
                 });
-            (lib.unlock)(b, std::ptr::null_mut());
+            lib.unlock(b, std::ptr::null_mut());
             out
         }
     }

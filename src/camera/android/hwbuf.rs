@@ -10,14 +10,7 @@ use super::{Lib, P};
 use crate::render::ExternalImage;
 use std::cell::Cell;
 use std::collections::HashSet;
-use std::ffi::{c_char, c_int, c_void};
 use std::sync::{Mutex, OnceLock};
-
-#[link(name = "dl")]
-unsafe extern "C" {
-    fn dlopen(name: *const c_char, flags: c_int) -> *mut c_void;
-    fn dlsym(handle: *mut c_void, name: *const c_char) -> *mut c_void;
-}
 
 /// `AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN`.
 const USAGE_CPU_READ_OFTEN: u64 = 3;
@@ -28,26 +21,23 @@ const USAGE_GPU_SAMPLED_IMAGE: u64 = 1 << 8;
 /// reader to acquire the newest past them.
 pub(super) const MAX_IMAGES: i32 = 6;
 
-/// The functions for it (Android 8), where the system has them.
-struct Fns {
-    new_with_usage: unsafe extern "C" fn(i32, i32, i32, u64, i32, *mut P) -> i32,
-    hardware_buffer: unsafe extern "C" fn(P, *mut P) -> i32,
+dlsym::library! {
+    /// The functions for it (Android 8), where the system has them.
+    struct Fns {
+        unsafe extern "C" {
+            #[link_name = "AImageReader_newWithUsage"]
+            fn new_with_usage(w: i32, h: i32, format: i32, usage: u64, max: i32, out: *mut P) -> i32;
+            #[link_name = "AImage_getHardwareBuffer"]
+            fn hardware_buffer(image: P, out: *mut P) -> i32;
+        }
+    }
 }
 
-#[allow(clippy::missing_transmute_annotations)] // each symbol's type is its field's
 fn fns() -> Option<&'static Fns> {
     static FNS: OnceLock<Option<Fns>> = OnceLock::new();
-    FNS.get_or_init(|| unsafe {
-        let media = dlopen(c"libmediandk.so".as_ptr(), 2);
-        if media.is_null() {
-            return None;
-        }
-        let new = dlsym(media, c"AImageReader_newWithUsage".as_ptr());
-        let get = dlsym(media, c"AImage_getHardwareBuffer".as_ptr());
-        (!new.is_null() && !get.is_null()).then(|| Fns {
-            new_with_usage: std::mem::transmute(new),
-            hardware_buffer: std::mem::transmute(get),
-        })
+    FNS.get_or_init(|| {
+        // SAFETY: a system library, trusted like the rest of the platform.
+        unsafe { <Fns as dlsym::Bindings>::open("libmediandk.so") }.ok()
     })
     .as_ref()
 }
@@ -61,7 +51,7 @@ static LIVE: Mutex<Option<HashSet<usize>>> = Mutex::new(None);
 pub(super) unsafe fn new_reader(lib: &Lib, w: i32, h: i32, format: i32, out: *mut P) -> i32 {
     unsafe {
         let r = match fns() {
-            Some(f) => (f.new_with_usage)(
+            Some(f) => f.new_with_usage(
                 w,
                 h,
                 format,
@@ -69,7 +59,7 @@ pub(super) unsafe fn new_reader(lib: &Lib, w: i32, h: i32, format: i32, out: *mu
                 MAX_IMAGES,
                 out,
             ),
-            None => (lib.reader_new)(w, h, format, MAX_IMAGES, out),
+            None => lib.media.reader_new(w, h, format, MAX_IMAGES, out),
         };
         if r == 0 && !(*out).is_null() {
             LIVE.lock()
@@ -88,7 +78,7 @@ pub(super) unsafe fn delete_reader(lib: &Lib, reader: P) {
         set.remove(&(reader as usize));
     }
     // Under the lock: no image is being deleted meanwhile.
-    unsafe { (lib.reader_delete)(reader) };
+    unsafe { lib.media.reader_delete(reader) };
 }
 
 /// `image` (of `reader`) as an [`ExternalImage`] of its hardware buffer,
@@ -103,7 +93,7 @@ pub(super) unsafe fn external(
     let f = fns()?;
     unsafe {
         let mut buffer: P = std::ptr::null_mut();
-        if (f.hardware_buffer)(image, &mut buffer) != 0 || buffer.is_null() {
+        if f.hardware_buffer(image, &mut buffer) != 0 || buffer.is_null() {
             return None;
         }
         let external = ExternalImage::hardware_buffer(buffer).ok()?;
@@ -112,7 +102,7 @@ pub(super) unsafe fn external(
         Some(external.on_release(move || {
             let live = LIVE.lock().unwrap_or_else(|e| e.into_inner());
             if live.as_ref().is_some_and(|s| s.contains(&reader)) {
-                (lib.image_delete)(image as P);
+                lib.media.image_delete(image as P);
             }
         }))
     }

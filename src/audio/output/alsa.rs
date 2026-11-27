@@ -20,56 +20,46 @@ const LATENCY_US: c_uint = 40_000;
 const SND_PCM_STREAM_PLAYBACK: c_int = 0;
 const SND_PCM_FORMAT_FLOAT_LE: c_int = 14;
 const SND_PCM_ACCESS_RW_INTERLEAVED: c_int = 3;
-const RTLD_NOW: c_int = 2;
-
-#[cfg_attr(target_os = "android", link(name = "dl"))]
-unsafe extern "C" {
-    fn dlopen(name: *const c_char, flags: c_int) -> *mut c_void;
-    fn dlsym(handle: *mut c_void, name: *const c_char) -> *mut c_void;
-}
-
 type Pcm = *mut c_void;
 
-/// The few libasound entry points used.
-struct Lib {
-    open: unsafe extern "C" fn(*mut Pcm, *const c_char, c_int, c_int) -> c_int,
-    set_params: unsafe extern "C" fn(Pcm, c_int, c_int, c_uint, c_uint, c_int, c_uint) -> c_int,
-    get_params: unsafe extern "C" fn(Pcm, *mut c_ulong, *mut c_ulong) -> c_int,
-    writei: unsafe extern "C" fn(Pcm, *const c_void, c_ulong) -> c_long,
-    recover: unsafe extern "C" fn(Pcm, c_int, c_int) -> c_int,
-    drop: unsafe extern "C" fn(Pcm) -> c_int,
-    prepare: unsafe extern "C" fn(Pcm) -> c_int,
-    close: unsafe extern "C" fn(Pcm) -> c_int,
+dlsym::library! {
+    /// The few libasound entry points used.
+    struct Lib {
+        unsafe extern "C" {
+            #[link_name = "snd_pcm_open"]
+            fn open(pcm: *mut Pcm, name: *const c_char, stream: c_int, mode: c_int) -> c_int;
+            #[link_name = "snd_pcm_set_params"]
+            fn set_params(
+                pcm: Pcm,
+                format: c_int,
+                access: c_int,
+                channels: c_uint,
+                rate: c_uint,
+                resample: c_int,
+                latency_us: c_uint,
+            ) -> c_int;
+            #[link_name = "snd_pcm_get_params"]
+            fn get_params(pcm: Pcm, buffer: *mut c_ulong, period: *mut c_ulong) -> c_int;
+            #[link_name = "snd_pcm_writei"]
+            fn writei(pcm: Pcm, buf: *const c_void, frames: c_ulong) -> c_long;
+            #[link_name = "snd_pcm_recover"]
+            fn recover(pcm: Pcm, err: c_int, silent: c_int) -> c_int;
+            #[link_name = "snd_pcm_drop"]
+            fn drop(pcm: Pcm) -> c_int;
+            #[link_name = "snd_pcm_prepare"]
+            fn prepare(pcm: Pcm) -> c_int;
+            #[link_name = "snd_pcm_close"]
+            fn close(pcm: Pcm) -> c_int;
+        }
+    }
 }
 
-/// The function `name` in library `h`, as the function pointer type `F`.
-///
-/// # Safety
-/// `F` must be a function pointer type matching the symbol's signature.
-unsafe fn sym<F: Copy>(h: *mut c_void, name: &std::ffi::CStr) -> Option<F> {
-    assert_eq!(std::mem::size_of::<F>(), std::mem::size_of::<*mut c_void>());
-    let p = unsafe { dlsym(h, name.as_ptr()) };
-    // SAFETY: a non-null symbol address, as the caller's function type.
-    (!p.is_null()).then(|| unsafe { std::mem::transmute_copy::<*mut c_void, F>(&p) })
-}
-
+/// libasound, or `None` where it isn't installed (or lacks one of these).
 fn lib() -> Option<&'static Lib> {
     static LIB: std::sync::OnceLock<Option<Lib>> = std::sync::OnceLock::new();
-    LIB.get_or_init(|| unsafe {
-        let h = dlopen(c"libasound.so.2".as_ptr(), RTLD_NOW);
-        if h.is_null() {
-            return None;
-        }
-        Some(Lib {
-            open: sym(h, c"snd_pcm_open")?,
-            set_params: sym(h, c"snd_pcm_set_params")?,
-            get_params: sym(h, c"snd_pcm_get_params")?,
-            writei: sym(h, c"snd_pcm_writei")?,
-            recover: sym(h, c"snd_pcm_recover")?,
-            drop: sym(h, c"snd_pcm_drop")?,
-            prepare: sym(h, c"snd_pcm_prepare")?,
-            close: sym(h, c"snd_pcm_close")?,
-        })
+    LIB.get_or_init(|| {
+        // SAFETY: a system library, trusted like the rest of the platform.
+        unsafe { <Lib as dlsym::Bindings>::open("libasound.so.2") }.ok()
     })
     .as_ref()
 }
@@ -94,12 +84,11 @@ pub(super) fn open(make: &mut dyn FnMut(u32) -> Render) -> Option<Box<dyn Device
     let lib = lib()?;
     let mut pcm: Pcm = std::ptr::null_mut();
     unsafe {
-        if (lib.open)(&mut pcm, c"default".as_ptr(), SND_PCM_STREAM_PLAYBACK, 0) < 0
-            || pcm.is_null()
+        if lib.open(&mut pcm, c"default".as_ptr(), SND_PCM_STREAM_PLAYBACK, 0) < 0 || pcm.is_null()
         {
             return None;
         }
-        if (lib.set_params)(
+        if lib.set_params(
             pcm,
             SND_PCM_FORMAT_FLOAT_LE,
             SND_PCM_ACCESS_RW_INTERLEAVED,
@@ -109,13 +98,13 @@ pub(super) fn open(make: &mut dyn FnMut(u32) -> Render) -> Option<Box<dyn Device
             LATENCY_US,
         ) < 0
         {
-            (lib.close)(pcm);
+            lib.close(pcm);
             return None;
         }
     }
     let mut buffer: c_ulong = 0;
     let mut period: c_ulong = 0;
-    unsafe { (lib.get_params)(pcm, &mut buffer, &mut period) };
+    unsafe { lib.get_params(pcm, &mut buffer, &mut period) };
     let period = if period == 0 { 512 } else { period as usize }.clamp(64, 8192);
     let mut render = make(RATE);
     let ctl = Arc::new(Ctl {
@@ -144,21 +133,21 @@ pub(super) fn open(make: &mut dyn FnMut(u32) -> Render) -> Option<Box<dyn Device
                 }
                 if c.paused.load(Ordering::Relaxed) {
                     if !dropped {
-                        unsafe { (lib.drop)(pcm) };
+                        unsafe { lib.drop(pcm) };
                         dropped = true;
                     }
                     std::thread::sleep(std::time::Duration::from_millis(20));
                     continue;
                 }
                 if dropped {
-                    unsafe { (lib.prepare)(pcm) };
+                    unsafe { lib.prepare(pcm) };
                     dropped = false;
                 }
                 super::render_guarded(&mut render, &mut buf);
                 let mut done = 0usize;
                 while done < period && !lost && !c.stop.load(Ordering::Relaxed) {
                     let n = unsafe {
-                        (lib.writei)(
+                        lib.writei(
                             pcm,
                             buf[done * 2..].as_ptr().cast(),
                             (period - done) as c_ulong,
@@ -166,14 +155,14 @@ pub(super) fn open(make: &mut dyn FnMut(u32) -> Render) -> Option<Box<dyn Device
                     };
                     if n >= 0 {
                         done += n as usize;
-                    } else if unsafe { (lib.recover)(pcm, n as c_int, 1) } < 0 {
+                    } else if unsafe { lib.recover(pcm, n as c_int, 1) } < 0 {
                         lost = true;
                     }
                 }
             }
             unsafe {
-                (lib.drop)(pcm);
-                (lib.close)(pcm);
+                lib.drop(pcm);
+                lib.close(pcm);
             }
         })
         .ok()?;
